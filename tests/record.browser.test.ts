@@ -71,6 +71,58 @@ const INNER_SCROLL_FIXTURE_HTML =
   '</body></html>'
 const INNER_SCROLL_FIXTURE_URL = `data:text/html,${encodeURIComponent(INNER_SCROLL_FIXTURE_HTML)}`
 
+/** Static at settle time, jumps away 350ms later — mid-way through any
+ * realistic pointer travel — to prove arrival-time re-verification. */
+const MOVES_AFTER_SETTLE_FIXTURE_URL =
+  'data:text/html,' +
+  encodeURIComponent(
+    '<!doctype html><html><body style="margin:0">' +
+      '<button id="t" style="position:absolute;left:600px;top:300px;width:80px;height:30px;" ' +
+      'onclick="window.__moved=true">T</button>' +
+      "<script>setTimeout(function(){document.getElementById('t').style.top='650px'},350)</script>" +
+      '</body></html>',
+  )
+
+/** Replaced with a fresh DOM node (not just moved) 250ms after settling. */
+const RERENDER_FIXTURE_URL =
+  'data:text/html,' +
+  encodeURIComponent(
+    '<!doctype html><html><body style="margin:0">' +
+      '<button id="t" style="position:absolute;left:600px;top:300px;width:80px;height:30px;" ' +
+      'onclick="window.__rerendered=true">T</button>' +
+      "<script>setTimeout(function(){var o=document.getElementById('t');" +
+      "var n=o.cloneNode(true);n.style.top='500px';o.replaceWith(n)},250)</script>" +
+      '</body></html>',
+  )
+
+/** Only the bottom 20px of a 200px-tall target is not behind a fixed header. */
+const STICKY_OVERLAY_FIXTURE_URL =
+  'data:text/html,' +
+  encodeURIComponent(
+    '<!doctype html><html><body style="margin:0">' +
+      '<div id="hdr" style="position:fixed;left:0;top:0;width:100%;height:220px;' +
+      'background:#ccc;z-index:9"></div>' +
+      '<button id="t" style="position:absolute;left:600px;top:40px;width:80px;height:200px;" ' +
+      'onclick="window.__stickyClicked=true">T</button>' +
+      '</body></html>',
+  )
+
+/** A native `overflow:auto` container, scrolled by our own demo.scroll(). */
+const OVERFLOW_AUTO_FIXTURE_URL =
+  'data:text/html,' +
+  encodeURIComponent(
+    '<!doctype html><html><body style="margin:0">' +
+      '<div id="c" style="position:absolute;left:100px;top:100px;width:400px;' +
+      'height:300px;overflow:auto">' +
+      '<div style="height:2000px;position:relative">' +
+      '<button id="above" style="position:absolute;left:20px;top:20px;width:60px;' +
+      'height:30px;">Above</button>' +
+      '<button id="t" style="position:absolute;left:20px;top:900px;width:80px;' +
+      'height:30px;" onclick="window.__overflowClicked=true">T</button>' +
+      '</div></div>' +
+      '</body></html>',
+  )
+
 function roundBox(box: BoundingBox): BoundingBox {
   return {
     x: Math.round(box.x),
@@ -350,4 +402,82 @@ describe('record against a real headless Chromium', () => {
 
     expect(elapsed).toBeGreaterThanOrEqual(500)
   }, 15_000)
+
+  it('corrects course and still hits a target that moves during pointer travel', async () => {
+    const out = join(ARTIFACTS_ROOT, 'run-moves-after-settle')
+    await rm(out, { force: true, recursive: true })
+
+    let moved: unknown
+    await record({ out, seed: 7 }, async (page, demo) => {
+      await page.goto(MOVES_AFTER_SETTLE_FIXTURE_URL)
+      await demo.click('#t')
+      moved = await page.evaluate(
+        () => (window as unknown as { __moved?: boolean }).__moved,
+      )
+    })
+
+    // The old behavior: geometry settled before travel, no re-check after
+    // it, so this click landed on stale coordinates and the listener
+    // never fired even though record() reported success.
+    expect(moved).toBe(true)
+  }, 30_000)
+
+  it('corrects course and still hits a target replaced with a fresh DOM node during travel', async () => {
+    const out = join(ARTIFACTS_ROOT, 'run-rerender')
+    await rm(out, { force: true, recursive: true })
+
+    let rerendered: unknown
+    await record({ out, seed: 7 }, async (page, demo) => {
+      await page.goto(RERENDER_FIXTURE_URL)
+      await demo.click('#t')
+      rerendered = await page.evaluate(
+        () => (window as unknown as { __rerendered?: boolean }).__rerendered,
+      )
+    })
+
+    expect(rerendered).toBe(true)
+  }, 30_000)
+
+  it('finds a clickable point on a target mostly hidden behind a sticky overlay', async () => {
+    const out = join(ARTIFACTS_ROOT, 'run-sticky-overlay')
+    await rm(out, { force: true, recursive: true })
+
+    let stickyClicked: unknown
+    await record({ out, seed: 7 }, async (page, demo) => {
+      await page.goto(STICKY_OVERLAY_FIXTURE_URL)
+      await demo.click('#t')
+      stickyClicked = await page.evaluate(
+        () =>
+          (window as unknown as { __stickyClicked?: boolean }).__stickyClicked,
+      )
+    })
+
+    // The old behavior: the clamped midpoint of the full bbox landed on
+    // the fixed header covering its top 220px, not on the 20px of #t that
+    // was actually visible below it.
+    expect(stickyClicked).toBe(true)
+  }, 30_000)
+
+  it('scrolls a native overflow:auto container and hits the revealed target', async () => {
+    const out = join(ARTIFACTS_ROOT, 'run-overflow-auto')
+    await rm(out, { force: true, recursive: true })
+
+    let overflowClicked: unknown
+    await record({ out, seed: 7 }, async (page, demo) => {
+      await page.goto(OVERFLOW_AUTO_FIXTURE_URL)
+      // Positions the pointer over the container first, so the wheel
+      // events below land on it and trigger its native scrolling — not
+      // the page's.
+      await demo.click('#above')
+      await demo.scroll(0, 900)
+      await demo.click('#t')
+      overflowClicked = await page.evaluate(
+        () =>
+          (window as unknown as { __overflowClicked?: boolean })
+            .__overflowClicked,
+      )
+    })
+
+    expect(overflowClicked).toBe(true)
+  }, 30_000)
 })
