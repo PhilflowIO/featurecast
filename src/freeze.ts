@@ -70,37 +70,108 @@ export async function detectFreezes(
   return parseFreezeIntervals(stderr)
 }
 
+export type WindowMotionQuality = {
+  frozenSeconds: number
+  frozenShare: number
+  label: string
+  seconds: number
+}
+
+export type MotionQualityReport = {
+  frozenSecondsInMotionWindows: number
+  frozenShareOfMotionWindows: number
+  totalFrozenSeconds: number
+  totalFrozenShareOfRun: number
+  totalMotionWindowSeconds: number
+  totalRunSeconds: number
+  windows: WindowMotionQuality[]
+}
+
 /**
- * Fails if any scripted motion window (recorded by the benchmark script,
- * in video-relative seconds) overlaps a detected freeze by more than
- * `maxOverlapSeconds`. A window that was supposed to show continuous
- * motion but is provably frozen for a meaningful stretch means the script
- * scheduled time without producing the visible change M1 asks for.
- *
- * The default tolerance (1.5s) is set well above normal network/render
- * latency for a live third-party app (measured: a table switch against
- * OnlyDash occasionally takes ~1s to visibly repaint) and well below the
- * bug this gate exists to catch (measured on `m1-002`: two dead scroll
- * passes froze for 4.6s and 4.8s respectively — a full order of magnitude
- * more). A table load that takes over 1.5s to show anything is still
- * caught; ordinary fetch latency is not mistaken for a scripting bug.
+ * A per-window "does this ONE window overlap a freeze beyond a tolerance"
+ * check cannot fail a video shaped like N short windows, each individually
+ * under the tolerance, that are frozen almost the whole time anyway — proven
+ * with a synthetic 19x[1.0s still + 0.05s motion] case: 19s of 19.95s frozen,
+ * every one of 19 ~1.05s windows individually "passing" a 1.5s-overlap
+ * check, while the real acceptance video this was modeled on measured
+ * 92.3% duplicate output frames and 13.7s of 29.4s inside freezes >=1s.
+ * Judging aggregate motion quality — the frozen share of scripted
+ * motion-window time, and of the whole run — catches that shape and the
+ * single-long-freeze shape the same way, while still passing a run where
+ * most motion-window time is genuinely frozen-free.
  */
-export function validateNoFrozenMotionWindows(
+export function computeMotionQuality(
   freezeIntervals: readonly FreezeInterval[],
   motionWindows: readonly MotionWindowSeconds[],
-  maxOverlapSeconds = 1.5,
-): void {
-  for (const window of motionWindows) {
+  totalRunSeconds: number,
+): MotionQualityReport {
+  const windows = motionWindows.map((window) => {
+    const seconds = window.end - window.start
+    let frozenSeconds = 0
     for (const freeze of freezeIntervals) {
       const overlapStart = Math.max(window.start, freeze.startSeconds)
       const overlapEnd = Math.min(window.end, freeze.endSeconds)
-      const overlap = overlapEnd - overlapStart
-      if (overlap > maxOverlapSeconds) {
-        throw new Error(
-          `Motion window "${window.label}" (${window.start.toFixed(2)}-${window.end.toFixed(2)}s) contains a ${overlap.toFixed(2)}s frozen run (ffmpeg freezedetect ${freeze.startSeconds.toFixed(2)}-${freeze.endSeconds.toFixed(2)}s) — scripted motion produced no visible change`,
-        )
-      }
+      frozenSeconds += Math.max(0, overlapEnd - overlapStart)
     }
+    return {
+      frozenSeconds,
+      frozenShare: seconds > 0 ? frozenSeconds / seconds : 0,
+      label: window.label,
+      seconds,
+    }
+  })
+  const frozenSecondsInMotionWindows = windows.reduce(
+    (total, window) => total + window.frozenSeconds,
+    0,
+  )
+  const totalMotionWindowSeconds = windows.reduce(
+    (total, window) => total + window.seconds,
+    0,
+  )
+  const totalFrozenSeconds = freezeIntervals.reduce(
+    (total, freeze) => total + (freeze.endSeconds - freeze.startSeconds),
+    0,
+  )
+  return {
+    frozenSecondsInMotionWindows,
+    frozenShareOfMotionWindows:
+      totalMotionWindowSeconds > 0
+        ? frozenSecondsInMotionWindows / totalMotionWindowSeconds
+        : 0,
+    totalFrozenSeconds,
+    totalFrozenShareOfRun:
+      totalRunSeconds > 0 ? totalFrozenSeconds / totalRunSeconds : 0,
+    totalMotionWindowSeconds,
+    totalRunSeconds,
+    windows,
+  }
+}
+
+/** Above this, scripted motion time is mostly frozen — a scripting bug, not load latency. */
+const DEFAULT_MAX_FROZEN_SHARE_OF_MOTION_WINDOWS = 0.4
+/** Above this, the recording as a whole is mostly a slideshow, whether or not it was ever "claimed" as motion. */
+const DEFAULT_MAX_FROZEN_SHARE_OF_RUN = 0.5
+
+/**
+ * Fails on aggregate frozen share, not on any single window's overlap
+ * against a fixed tolerance — see `computeMotionQuality`'s doc comment for
+ * why a per-window threshold cannot catch a slideshow shaped as many short
+ * windows.
+ */
+export function validateMotionQuality(
+  quality: MotionQualityReport,
+  maxFrozenShareOfMotionWindows = DEFAULT_MAX_FROZEN_SHARE_OF_MOTION_WINDOWS,
+  maxFrozenShareOfRun = DEFAULT_MAX_FROZEN_SHARE_OF_RUN,
+): void {
+  if (quality.frozenShareOfMotionWindows > maxFrozenShareOfMotionWindows) {
+    throw new Error(
+      `${(quality.frozenShareOfMotionWindows * 100).toFixed(1)}% of scripted motion-window time (${quality.frozenSecondsInMotionWindows.toFixed(1)}s of ${quality.totalMotionWindowSeconds.toFixed(1)}s) is frozen — exceeds the ${(maxFrozenShareOfMotionWindows * 100).toFixed(0)}% limit`,
+    )
+  }
+  if (quality.totalFrozenShareOfRun > maxFrozenShareOfRun) {
+    throw new Error(
+      `${(quality.totalFrozenShareOfRun * 100).toFixed(1)}% of the whole run (${quality.totalFrozenSeconds.toFixed(1)}s of ${quality.totalRunSeconds.toFixed(1)}s) is frozen — exceeds the ${(maxFrozenShareOfRun * 100).toFixed(0)}% limit`,
+    )
   }
 }
 
