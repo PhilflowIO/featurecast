@@ -56,14 +56,25 @@ const OVERSHOOT_RAMP_START = 0.55
 
 /** M2's acceptance contract: no two consecutive pointer samples may differ by more. */
 export const MAX_POINTER_STEP_PX = 20
-// The Bézier base curve is not the only thing moving between two samples: overshoot
-// and tremor ride on top of it and can add their own per-sample delta near the
-// target. Budgeting only a fraction of MAX_POINTER_STEP_PX to the analytic bound
-// leaves headroom for that combined motion, confirmed numerically in
-// tests/record.test.ts's far-apart-target case.
+// Only a starting guess for the sample count — it assumes the minimum-jerk
+// peak-velocity formula applies to the full move, which is wrong on three
+// counts: travel only covers (1 - SETTLE_FRACTION) of progress, the Bézier's
+// parametric speed factor can run above 1x, and overshoot/tremor/rounding add
+// their own per-sample delta near the target. It is deliberately generous so
+// the guarantee loop below rarely has to grow the sample count at all.
 const DURATION_MARGIN = 1.7
+/** Safety valve for the growth loop; never expected to be hit in practice. */
+const MAX_GROWTH_ITERATIONS = 40
+/** Sample-count growth factor used when a rendered curve still breaks the cap. */
+const GROWTH_FACTOR = 1.3
 
-/** Generates deterministic, human-like pointer samples at the requested fps. */
+/**
+ * Generates deterministic, human-like pointer samples at the requested fps.
+ * The 20px inter-sample cap (`MAX_POINTER_STEP_PX`) is a hard guarantee, not
+ * a probability: the sample count starts at an analytic estimate and is then
+ * deterministically grown — same seed, same distance, same result — until the
+ * actually rendered, rounded curve satisfies it.
+ */
 export function generateMotionPoints(
   from: MotionPoint,
   to: MotionPoint,
@@ -75,13 +86,39 @@ export function generateMotionPoints(
 
   const phase = createRng(seed ^ 0x9e3779b9)() * Math.PI * 2
   const naturalSamples = Math.ceil((travelDuration(path.distance) / 1000) * fps)
-  const samples = Math.max(
+  let samples = Math.max(
     1,
     naturalSamples,
     minimumJerkBoundSamples(path.distance, fps),
   )
-  const points: MotionPoint[] = []
+  let points = renderSamples(path, samples, phase, to)
 
+  let guard = 0
+  while (
+    maxConsecutiveStep(points) > MAX_POINTER_STEP_PX &&
+    guard < MAX_GROWTH_ITERATIONS
+  ) {
+    samples = Math.ceil(samples * GROWTH_FACTOR) + 1
+    points = renderSamples(path, samples, phase, to)
+    guard += 1
+  }
+  if (maxConsecutiveStep(points) > MAX_POINTER_STEP_PX) {
+    throw new Error(
+      `Unable to keep pointer motion under ${MAX_POINTER_STEP_PX}px per ` +
+        `sample after ${String(guard)} growth iterations (distance ` +
+        `${String(path.distance)}px, seed ${String(seed)})`,
+    )
+  }
+  return points
+}
+
+function renderSamples(
+  path: Path,
+  samples: number,
+  phase: number,
+  to: MotionPoint,
+): MotionPoint[] {
+  const points: MotionPoint[] = []
   for (let index = 1; index <= samples; index += 1) {
     if (index === samples) {
       points.push({ ...to })
@@ -93,11 +130,23 @@ export function generateMotionPoints(
   return points
 }
 
+function maxConsecutiveStep(points: MotionPoint[]): number {
+  let max = 0
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]!
+    const current = points[index]!
+    const step = Math.hypot(current.x - previous.x, current.y - previous.y)
+    if (step > max) max = step
+  }
+  return max
+}
+
 /**
  * Analytic lower bound on sample count: a minimum-jerk profile peaks at 1.875x
  * its average velocity, so an unconstrained duration can blow past the 20px
  * inter-sample cap on long moves. Solve `1.875 * distance / (T * fps) <= target`
- * for the smallest T (in samples) that keeps the peak step under budget.
+ * for the smallest T (in samples) that keeps the peak step under budget. This
+ * is a starting estimate for the growth loop above, not the guarantee itself.
  */
 function minimumJerkBoundSamples(distance: number, fps: number): number {
   if (distance <= 0) return 1
