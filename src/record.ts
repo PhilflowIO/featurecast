@@ -10,6 +10,8 @@ const DEFAULT_VIEWPORT = { width: 1280, height: 720 }
 /** Deterministic per-keystroke delay range, in milliseconds. */
 const KEY_DELAY_MIN_MS = 40
 const KEY_DELAY_JITTER_MS = 70
+/** Default for `RecordOptions.settleTimeoutMs`. */
+const DEFAULT_SETTLE_TIMEOUT_MS = 2000
 
 export type BoundingBox = {
   height: number
@@ -57,6 +59,13 @@ export type RecordOptions = {
   out: string
   /** Stable seed used for reproducible pointer motion. */
   seed?: number
+  /**
+   * How long, in milliseconds, target-geometry resolution waits for a
+   * page's own scrolling/animation to settle before giving up. A page that
+   * animates forever (a marquee behind the target, say) would otherwise hang
+   * a recording indefinitely. Default 2000.
+   */
+  settleTimeoutMs?: number
 }
 
 export type Demo = {
@@ -154,6 +163,7 @@ export function createRecorder(
   return async (options, script) => {
     const seed = options.seed ?? 1
     assertSeed(seed)
+    const settleTimeoutMs = options.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS
     const random = createRandom(seed)
     const events: RecordEvent[] = []
     let tick = 0
@@ -169,21 +179,12 @@ export function createRecorder(
       ): Promise<{ bbox: BoundingBox; locator: LocatorLike }> => {
         const locator =
           typeof target === 'string' ? page.locator(target) : target
-        const bbox = await locator.boundingBox()
-        if (bbox === null || bbox.width <= 0 || bbox.height <= 0) {
-          throw new Error('Target must resolve to a visible bounding box')
-        }
-        const normalized = normalizedBoundingBox(bbox)
-        const viewport = page.viewportSize()
-        if (viewport !== null && !intersectsViewport(normalized, viewport)) {
-          throw new Error(
-            `Target bounding box (${normalized.x}, ${normalized.y}, ` +
-              `${normalized.width}x${normalized.height}) lies outside the ` +
-              `${viewport.width}x${viewport.height} viewport. Use demo.scroll ` +
-              'to bring it into view before interacting.',
-          )
-        }
-        return { bbox: normalized, locator }
+        const bbox = await waitForStableBoundingBox(
+          page,
+          locator,
+          settleTimeoutMs,
+        )
+        return { bbox, locator }
       }
 
       const moveToPoint = async (destination: {
@@ -218,19 +219,11 @@ export function createRecorder(
         target: Target,
       ): Promise<{ bbox: BoundingBox; x: number; y: number }> => {
         const { bbox } = await resolveTarget(target)
-        const destination = {
-          x: Math.round(bbox.x + bbox.width / 2),
-          y: Math.round(bbox.y + bbox.height / 2),
-        }
-        const viewport = page.viewportSize()
-        if (viewport !== null && !containsPoint(destination, viewport)) {
-          throw new Error(
-            `Interaction point (${String(destination.x)}, ` +
-              `${String(destination.y)}) lies outside the ` +
-              `${String(viewport.width)}x${String(viewport.height)} viewport. ` +
-              'Use demo.scroll to bring it into view before interacting.',
-          )
-        }
+        // Clamp to the visible intersection rather than rejecting outright:
+        // a hero or overlay bigger than the viewport is normal, and its
+        // on-screen portion is still perfectly clickable. The full bbox is
+        // still what gets logged, below.
+        const destination = clampInteractionPoint(bbox, page.viewportSize())
         await moveToPoint(destination)
         return { bbox, ...destination }
       }
@@ -309,12 +302,12 @@ export function createRecorder(
           const steps = computeScrollSteps(deltaX, deltaY)
           events.push({ type: 'scroll', tick, deltaX, deltaY })
           await paceWheel(page, deltaX, deltaY, steps)
-          // The wheel dispatch loop above only proves our synthetic input was
-          // sent; Chromium's own scroll (momentum, smooth-scroll) can still be
-          // animating after the last event. Block until the page reports a
-          // stable scroll position so the next target resolution reads
-          // settled geometry, not a mid-scroll snapshot.
-          await waitForScrollSettle(page)
+          // scroll() itself doesn't know which element will be interacted
+          // with next (it takes no target), so it can't settle on the
+          // geometry that actually matters. resolveTarget() — called by the
+          // next point/click/tap/type — is what waits for stable geometry,
+          // covering any scroll mechanism (window, inner container,
+          // JS-driven transform), not just this dispatch.
           tick += steps
         },
       }
@@ -473,66 +466,101 @@ async function sleepUntil(page: RecordPage, deadline: number): Promise<void> {
   if (remaining > 0) await page.waitForTimeout(remaining)
 }
 
+const STABLE_READS_REQUIRED = 3
+const STABLE_POLL_INTERVAL_MS = 16
+
 /**
- * Blocks until the page's own scroll position has been unchanged for a few
- * animation frames, so callers never read geometry mid-scroll. Throws (via
- * the rejected page-context promise) if it never settles within budget.
+ * Resolves a target's bounding box only once it has stopped moving —
+ * `STABLE_READS_REQUIRED` consecutive (rounded) reads must agree — so a
+ * caller never acts on geometry that's still mid-scroll or mid-animation.
+ * This is a plain Node-side polling loop over `locator.boundingBox()`, not a
+ * `page.evaluate()` watcher keyed on `window.scrollX/Y`: that would miss any
+ * scroll that isn't the window itself (an `overflow:auto` container, or a
+ * JS-driven transform like Lenis-style inertial scrolling), and the actual
+ * geometry of the element we're about to interact with is what matters,
+ * regardless of which mechanism moved it. Throws, naming the option that
+ * controls the budget, if it never stabilizes in time.
  */
-async function waitForScrollSettle(page: RecordPage): Promise<void> {
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        const REQUIRED_STABLE_FRAMES = 3
-        const TIMEOUT_MS = 2000
-        const start = performance.now()
-        let last = { x: window.scrollX, y: window.scrollY }
-        let stableFrames = 0
-        const check = (): void => {
-          const current = { x: window.scrollX, y: window.scrollY }
-          if (current.x === last.x && current.y === last.y) {
-            stableFrames += 1
-          } else {
-            stableFrames = 0
-            last = current
-          }
-          if (stableFrames >= REQUIRED_STABLE_FRAMES) {
-            resolve()
-            return
-          }
-          if (performance.now() - start > TIMEOUT_MS) {
-            reject(new Error('Scroll position did not settle within timeout'))
-            return
-          }
-          requestAnimationFrame(check)
-        }
-        requestAnimationFrame(check)
-      }),
+async function waitForStableBoundingBox(
+  page: RecordPage,
+  locator: LocatorLike,
+  timeoutMs: number,
+): Promise<BoundingBox> {
+  const start = Date.now()
+  let previous: BoundingBox | null = null
+  let stableReads = 0
+  for (;;) {
+    const raw = await locator.boundingBox()
+    if (raw === null || raw.width <= 0 || raw.height <= 0) {
+      throw new Error('Target must resolve to a visible bounding box')
+    }
+    const current = normalizedBoundingBox(raw)
+    stableReads =
+      previous !== null && sameBoundingBox(current, previous)
+        ? stableReads + 1
+        : 1
+    previous = current
+    if (stableReads >= STABLE_READS_REQUIRED) {
+      return current
+    }
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(
+        `Target geometry did not settle within settleTimeoutMs (${String(timeoutMs)}ms). ` +
+          'Increase RecordOptions.settleTimeoutMs if the page keeps animating intentionally.',
+      )
+    }
+    await page.waitForTimeout(STABLE_POLL_INTERVAL_MS)
+  }
+}
+
+function sameBoundingBox(a: BoundingBox, b: BoundingBox): boolean {
+  return (
+    a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
   )
 }
 
-function intersectsViewport(
+/**
+ * Clamps the interaction point to the visible intersection of the bbox and
+ * the viewport, instead of rejecting a target that's merely bigger than the
+ * viewport (a full-height hero, an overlay) — that's normal, and the visible
+ * portion is still clickable. Throws only when there's no visible overlap at
+ * all. The returned point is strictly inside `[0, width) x [0, height)`: the
+ * intersection midpoint can still round onto the boundary pixel for a target
+ * flush against an edge, which is not a valid, clickable coordinate.
+ */
+function clampInteractionPoint(
   bbox: BoundingBox,
-  viewport: ViewportSize,
-): boolean {
-  return (
-    bbox.x < viewport.width &&
-    bbox.x + bbox.width > 0 &&
-    bbox.y < viewport.height &&
-    bbox.y + bbox.height > 0
-  )
-}
+  viewport: ViewportSize | null,
+): { x: number; y: number } {
+  const naturalCenter = {
+    x: Math.round(bbox.x + bbox.width / 2),
+    y: Math.round(bbox.y + bbox.height / 2),
+  }
+  if (viewport === null) return naturalCenter
 
-/** Whether an interaction point (e.g. a bbox center) is actually clickable. */
-function containsPoint(
-  point: { x: number; y: number },
-  viewport: ViewportSize,
-): boolean {
-  return (
-    point.x >= 0 &&
-    point.x <= viewport.width &&
-    point.y >= 0 &&
-    point.y <= viewport.height
-  )
+  const left = Math.max(bbox.x, 0)
+  const right = Math.min(bbox.x + bbox.width, viewport.width)
+  const top = Math.max(bbox.y, 0)
+  const bottom = Math.min(bbox.y + bbox.height, viewport.height)
+  if (right <= left || bottom <= top) {
+    throw new Error(
+      `Target bounding box (${String(bbox.x)}, ${String(bbox.y)}, ` +
+        `${String(bbox.width)}x${String(bbox.height)}) has no visible ` +
+        `intersection with the ${String(viewport.width)}x` +
+        `${String(viewport.height)} viewport. Use demo.scroll to bring it ` +
+        'into view before interacting.',
+    )
+  }
+  return {
+    x: Math.min(
+      Math.max(Math.round((left + right) / 2), 0),
+      viewport.width - 1,
+    ),
+    y: Math.min(
+      Math.max(Math.round((top + bottom) / 2), 0),
+      viewport.height - 1,
+    ),
+  }
 }
 
 function validateEvent(event: RecordEvent): void {

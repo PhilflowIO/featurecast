@@ -146,7 +146,14 @@ describe('record', () => {
     const hold = events.find((event) => event.type === 'hold')!
     const scroll = events.find((event) => event.type === 'scroll')!
 
-    expect(pointerEvents.length).toBeGreaterThan(1)
+    // Independent, distance-derived lower bound (pigeonhole: you cannot cross
+    // ~591.7px in fewer than ceil(591.7 / 20) hops of <=20px each) — not
+    // computed from tick's own bookkeeping, so a broken sample count would
+    // actually fail this, unlike comparing tick fields against each other.
+    const viewportCenterToSaveDistance = Math.hypot(640 - 130, 360 - 60)
+    expect(pointerEvents.length).toBeGreaterThanOrEqual(
+      Math.ceil(viewportCenterToSaveDistance / 20),
+    )
     expect(pointerEvents.map((event) => event.tick)).toEqual(
       pointerEvents.map((_event, index) => index),
     )
@@ -356,7 +363,7 @@ describe('record', () => {
     ).rejects.toThrow('Target must resolve to a visible bounding box')
   })
 
-  it('rejects a target whose bounding box lies outside the viewport', async () => {
+  it('rejects a target whose bounding box has no visible intersection with the viewport', async () => {
     const output = await temporaryDirectory()
     const page = fakePage({ height: 720, width: 1280 })
     page.locator.mockReturnValue({
@@ -369,57 +376,111 @@ describe('record', () => {
       createRecorder(runtimeFor(page))({ out: output }, async (_page, demo) =>
         demo.click('#offscreen'),
       ),
-    ).rejects.toThrow(/lies outside the .* viewport.*demo\.scroll/)
+    ).rejects.toThrow(/no visible intersection.*demo\.scroll/)
   })
 
-  it('rejects a target whose interaction point falls outside the viewport even when its bounding box overlaps it', async () => {
+  it('clamps the interaction point to the visible intersection instead of rejecting a partially off-screen target', async () => {
     const output = await temporaryDirectory()
     const page = fakePage({ height: 720, width: 1280 })
-    // Overlaps the viewport (x+width = 20 > 0) so the bbox-overlap guard lets
-    // it through, but its center (x = -30) is not a clickable point.
+    // A full-height hero or overlay bigger than the viewport is normal; only
+    // 20 of its 100px width is actually on screen (x: -80 to x: 20).
     page.locator.mockReturnValue({
       boundingBox: vi
         .fn()
         .mockResolvedValue({ height: 40, width: 100, x: -80, y: 100 }),
     })
 
-    await expect(
-      createRecorder(runtimeFor(page))({ out: output }, async (_page, demo) =>
-        demo.click('#half-offscreen'),
-      ),
-    ).rejects.toThrow(
-      /Interaction point.*lies outside the .* viewport.*demo\.scroll/,
+    await createRecorder(runtimeFor(page))(
+      { out: output },
+      async (_page, demo) => {
+        await demo.click('#partially-offscreen')
+      },
     )
+
+    // Clamped to the midpoint of the visible slice: x in [0, 20), y in [100, 140).
+    expect(page.mouse.click).toHaveBeenCalledWith(10, 120)
+    const events = (await readFile(join(output, 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+    const click = events.find((event) => event.type === 'click')
+    // The full bbox is still logged, even though only part of it is visible.
+    expect(click).toMatchObject({
+      bbox: { height: 40, width: 100, x: -80, y: 100 },
+    })
   })
 
-  it('waits for the scroll position to settle before resolving', async () => {
+  it('clamps a sliver flush against the viewport edge strictly inside it (off-by-one guard)', async () => {
     const output = await temporaryDirectory()
-    const page = fakePage()
+    const page = fakePage({ height: 720, width: 1280 })
+    // Center of the unclamped bbox would be exactly x=1280 — outside a
+    // 1280-wide viewport (valid columns are 0..1279).
+    page.locator.mockReturnValue({
+      boundingBox: vi
+        .fn()
+        .mockResolvedValue({ height: 20, width: 20, x: 1270, y: 100 }),
+    })
 
     await createRecorder(runtimeFor(page))(
       { out: output },
       async (_page, demo) => {
-        await demo.scroll(0, 900)
+        await demo.click('#edge')
       },
     )
 
-    expect(page.evaluate).toHaveBeenCalled()
+    const [x, y] = page.mouse.click.mock.calls.at(-1)!
+    expect(x).toBeLessThan(1280)
+    expect(y).toBeLessThan(720)
   })
 
-  it('propagates a scroll-settle timeout instead of silently continuing', async () => {
+  it('resolves once the bounding box stabilizes instead of trusting the first read', async () => {
     const output = await temporaryDirectory()
     const page = fakePage()
-    page.evaluate = vi
+    const moving = { height: 20, width: 60, x: 40, y: 653 }
+    const settled = { height: 20, width: 60, x: 40, y: 300 }
+    const boundingBox = vi
       .fn()
-      .mockRejectedValue(
-        new Error('Scroll position did not settle within timeout'),
-      )
+      .mockResolvedValueOnce(moving)
+      .mockResolvedValueOnce(moving)
+      .mockResolvedValue(settled)
+    page.locator.mockReturnValue({ boundingBox })
+
+    await createRecorder(runtimeFor(page))(
+      { out: output },
+      async (_page, demo) => {
+        await demo.click('#below')
+      },
+    )
+
+    // Proves the wrapper polled past the still-moving reads: it must have
+    // called boundingBox() more than once to ever see the settled value.
+    expect(boundingBox.mock.calls.length).toBeGreaterThan(1)
+    const events = (await readFile(join(output, 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+    const click = events.find((event) => event.type === 'click')
+    expect(click).toMatchObject({ bbox: settled })
+  })
+
+  it('gives up with a settleTimeoutMs-naming error if geometry never stabilizes', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage()
+    let call = 0
+    page.locator.mockReturnValue({
+      boundingBox: vi.fn().mockImplementation(() => {
+        call += 1
+        // Never repeats the same value twice in a row: never settles.
+        return Promise.resolve({ height: 20, width: 60, x: 40, y: 100 + call })
+      }),
+    })
 
     await expect(
-      createRecorder(runtimeFor(page))({ out: output }, async (_page, demo) =>
-        demo.scroll(0, 900),
+      createRecorder(runtimeFor(page))(
+        { out: output, settleTimeoutMs: 50 },
+        async (_page, demo) => demo.click('#never-settles'),
       ),
-    ).rejects.toThrow('Scroll position did not settle within timeout')
+    ).rejects.toThrow(/settleTimeoutMs.*50ms/)
   })
 
   it('types every code point exactly once, even across a surrogate pair', async () => {
