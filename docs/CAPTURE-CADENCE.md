@@ -211,6 +211,45 @@ trigger heavy virtualization-style DOM churn may need a lower quality (or
 smaller capture size) specifically to keep capture efficiency — not just
 frame-byte throughput — above the 95% floor.
 
+**Corroborated cross-hardware, at a fixed 60fps paint rate.** The workstation
+measurements above hold a real app's paint rate constant only indirectly
+(through DOM-churn fixtures); a second measurement on the AI box's RTX 3090
+(`--use-gl=angle --use-angle=gl-egl`, a synthetic dense 70×18 table with a
+continuous CSS transform — compositor-only, no DOM churn, so the page paints
+a genuine, stable 60fps throughout) isolates the _encode-cost_ variable on
+its own: paint stayed 59.7-59.8fps in every row, but capture ranged
+48.0fps/~80% efficiency (quality 90, 899KB mean frame, 42.1MB/s) down to
+45.6fps/~76% (angle vulkan, 892KB, 39.7MB/s) — well under the ~80-100MB/s
+ceiling, so this is not a transport-bandwidth effect either. Repeating the
+same fixed-60fps-paint test on this workstation's weaker APU (bigger,
+1260-cell fixture, `--use-gl=angle --use-angle=gl-egl`) reproduces the same
+shape at every quality/size point tried, ack round-trip staying 1-2ms median
+throughout (ruling out this codebase's ack handling on both boxes):
+
+| quality | capture size | mean frame | efficiency (60fps paint held constant) |
+| ------- | ------------ | ---------- | -------------------------------------- |
+| 100     | 2560×1600    | 2217.5 KB  | 49.8%                                  |
+| 90      | 2560×1600    | 1104.8 KB  | 68.0%                                  |
+| 80      | 2560×1600    | 792.2 KB   | 86.1%                                  |
+| 70      | 2560×1600    | 659.5 KB   | 97.5%                                  |
+| 100     | 1920×1200    | 1430.3 KB  | 86.3%                                  |
+| 100     | 1280×800     | 834.0 KB   | ~100%                                  |
+
+Frame byte size predicts efficiency here at least as cleanly as it already
+predicted cadence in this document's original table — which means the
+~80-100MB/s "ceiling" described above was very likely this same
+efficiency-loss mechanism observed indirectly through fps, not a literal
+transport bandwidth limit: Chromium's screencast production does not queue
+and eventually deliver a slow-to-encode frame later, it drops it outright
+(confirmed by the fast, unaffected ack round-trip on every delivered frame),
+so a heavier per-frame encode cost shows up as missing frames, not merely
+slower ones. **Real OnlyDash frames during scroll (615-660KB median,
+comparable to this table's q70 row) would predict near-full efficiency from
+byte size alone** — the measured 45-86% loss during real DOM churn
+(`artifacts/m1-006`/`m1-007`) is therefore not explained by frame size on
+its own; DOM-churn CPU cost and encode CPU cost both draw on the same
+budget and compound. Both are upstream of `capture.ts`.
+
 ## PLAN.md / docs/DEVICES.md divergence (unresolved, flagged for the owner)
 
 Fixing the crop-shears-the-toolbar defect (see the main report, item 5)

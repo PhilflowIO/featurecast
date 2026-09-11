@@ -16,17 +16,25 @@ import type { Page } from 'playwright'
  * before this is called.
  */
 export async function startPaintRateProbe(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const featurecastWindow = window as unknown as {
-      __featurecastPaintTimestamps: number[]
-    }
-    featurecastWindow.__featurecastPaintTimestamps = []
-    function tick(): void {
-      featurecastWindow.__featurecastPaintTimestamps.push(Date.now())
-      requestAnimationFrame(tick)
-    }
-    requestAnimationFrame(tick)
-  })
+  // A raw source string, not a compiled closure: `tsx`/esbuild injects a
+  // `__name(fn, "tick")` call for the named local function below (to
+  // preserve `Function.prototype.name` across its own bundling), and that
+  // helper does not exist in the standalone browser-side realm
+  // `page.evaluate` runs a closure's `toString()` in — every other
+  // `page.evaluate` call in this codebase happens to be a single expression
+  // with no local named binding, which is why this has not surfaced before.
+  // A string literal is sent to the browser byte-for-byte and never passes
+  // through that transform.
+  await page.evaluate(`
+    (function () {
+      window.__featurecastPaintTimestamps = [];
+      function tick() {
+        window.__featurecastPaintTimestamps.push(Date.now());
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    })();
+  `)
 }
 
 /** Reads back every paint timestamp recorded since `startPaintRateProbe`. */
