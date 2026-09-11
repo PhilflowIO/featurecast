@@ -54,6 +54,53 @@ Ein Ziel, dessen Bounding-Box gar keine sichtbare Überschneidung mit dem Viewpo
 
 `device` wird bereits gegen Playwrights Geräteregistrierung aufgelöst, unter anderem für `hasTouch`, damit `tap` in einem echten Touch-Kontext läuft statt abzustürzen. Ein unbekannter Name bricht mit einer Fehlermeldung ab, die ähnliche oder verfügbare Namen nennt. Die kuratierte Voreinstellungs-Ebene darüber (Aufnahme-/Ausgabeformat, Zeiger-Art) folgt in M5.
 
+## Nachbearbeitung: Zoom, Zeiger, Tempo, Formate
+
+`pnpm render <aufnahme-ordner> <ziel-ordner>` macht aus einer Rohaufnahme
+fertige Videos. Es startet keinen Browser und kann keinen starten: die Eingabe
+sind die Einzelbilder, die die Aufnahme geschrieben hat, und das Ereignis-Log
+daneben. Ein anderer Zeiger, ein anderer Zoom, ein anderes Seitenverhältnis ist
+deshalb ein erneuter Lauf dieses Kommandos, kein erneuter Lauf des Skripts.
+
+```sh
+pnpm render artifacts/m1-008 dist/feature-xy
+pnpm render artifacts/m1-008 dist/feature-xy --padding 40 --cursor-size 32
+```
+
+Aus demselben Rohmaterial entstehen 16:9, 9:16 und 1:1. **Zoom ist immer ein
+Ausschnitt aus dem Original, nie eine Vergrößerung** — und das hat eine Folge,
+die die meisten Werkzeuge verschweigen: in einer 2560×1600-Desktop-Aufnahme
+steckt kein scharfes 1080×1920-Hochformat. Das größte 9:16-Rechteck darin ist
+900×1600. Der Renderer liefert dann 900×1600 in voller Schärfe und sagt es in
+der Ausgabe, statt hochzuskalieren. Ein scharfes Hochformat entsteht durch eine
+Aufnahme im Hochformat, das ist M3.
+
+Der Zoom rahmt beim Klick die Bounding-Box des getroffenen Elements. Diese Box
+ist die **Ruhelage** des Elements, nicht seine Geometrie im Bild, in dem der
+Klick landete — ein Element, das einblendet oder pulsiert, wird oben über ein
+Beobachtungsfenster eingehüllt. Der Ausschnitt steht deshalb still, während das
+Element atmet, und wird nie nachträglich aufgeweitet.
+
+Zeiger und Klick-Ripple werden hier gezeichnet, nicht aufgenommen: Headless
+Chromium rendert überhaupt keinen Zeiger, das Log ist die einzige Quelle. Größe,
+Form und Ripple-Dauer sind Parameter.
+
+Leerlauf wird gerafft. Das Signal dafür sind die Zeitstempel der Aufnahme
+selbst: die Aufnahme faltet bitgleiche Folgebilder bereits zusammen, eine große
+Lücke zwischen zwei überlebenden Bildern ist also eine Strecke, in der sich das
+Bild nicht geändert hat — nicht bloß ein Animationstakt ohne Neuzeichnung.
+Gerafft wird über eine einzige, streng monotone Zeitabbildung, durch die Bilder
+und Ereignisse gemeinsam laufen; sie können deshalb nicht auseinanderdriften.
+
+Das Kernstück ist eine reine Funktion von (Ereignissen mit einer Zeit in
+Millisekunden, Bild-Zeitstempeln in Millisekunden) auf Ausschnitt-Rechteck und
+Zeiger-Zeichenliste je Bild. Diese Entscheidungsdaten landen als
+`decisions.json` neben dem Video und sind das, was exakt reproduzierbar ist:
+zwei Läufe derselben Eingabe erzeugen die Datei bitgleich. Die Umrechnung von
+`tick` in Millisekunden steckt in genau einem kleinen Modul am Rand
+(`src/render/clock.ts`) — das ist das Stück, das Issue #9 löscht, sobald die
+Ereignisse echte Zeitstempel derselben Uhr tragen.
+
 ## Ein Kommando für die ganze Kette
 
 ```sh
