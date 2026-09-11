@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { generateMotionPoints } from './motion.js'
+import { generateMotionPoints, minimumJerk } from './motion.js'
 
 const EVENTS_FILE_NAME = 'events.jsonl'
 export const EVENT_LOG_FPS = 60
@@ -79,11 +79,25 @@ export type RecordOptions = {
   settleTimeoutMs?: number
 }
 
+export type ScrollOptions = {
+  /**
+   * Video-appropriate scroll speed in px/s along the straight-line distance
+   * `hypot(deltaX, deltaY)`. Defaults to `DEFAULT_SCROLL_SPEED_PX_PER_SECOND`.
+   * Override per call for a slower reveal or a faster "skip past this"
+   * scroll; the eased 60Hz cadence and the per-step cap apply either way.
+   */
+  speedPxPerSecond?: number
+}
+
 export type Demo = {
   click: (target: Target) => Promise<void>
   hold: (milliseconds: number) => Promise<void>
   point: (target: Target) => Promise<void>
-  scroll: (deltaX: number, deltaY: number) => Promise<void>
+  scroll: (
+    deltaX: number,
+    deltaY: number,
+    options?: ScrollOptions,
+  ) => Promise<void>
   tap: (target: Target) => Promise<void>
   type: (target: Target, text: string) => Promise<void>
 }
@@ -371,20 +385,30 @@ export function createRecorder(
           tick += Math.ceil((roundedMilliseconds / 1000) * EVENT_LOG_FPS)
           await page.waitForTimeout(roundedMilliseconds)
         },
-        scroll: async (deltaX, deltaY) => {
+        scroll: async (deltaX, deltaY, options) => {
           if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
             throw new Error('Scroll deltas must be finite numbers')
           }
-          const steps = computeScrollSteps(deltaX, deltaY)
+          const speedPxPerSecond =
+            options?.speedPxPerSecond ?? DEFAULT_SCROLL_SPEED_PX_PER_SECOND
+          if (!Number.isFinite(speedPxPerSecond) || speedPxPerSecond <= 0) {
+            throw new Error('Scroll speed must be a positive finite number')
+          }
+          const positions = computeScrollPositions(
+            deltaX,
+            deltaY,
+            speedPxPerSecond,
+            EVENT_LOG_FPS,
+          )
           events.push({ type: 'scroll', tick, deltaX, deltaY })
-          await paceWheel(page, deltaX, deltaY, steps)
+          await paceWheel(page, positions)
           // scroll() itself doesn't know which element will be interacted
           // with next (it takes no target), so it can't settle on the
           // geometry that actually matters. resolveTarget() — called by the
           // next point/click/tap/type — is what waits for stable geometry,
           // covering any scroll mechanism (window, inner container,
           // JS-driven transform), not just this dispatch.
-          tick += steps
+          tick += positions.length
         },
       }
 
@@ -507,32 +531,157 @@ function resolveDeviceDescriptor(
   throw new Error(`Unknown device "${name}". Close names: ${suggestions}`)
 }
 
-const MAX_WHEEL_STEP_PX = 40
+/**
+ * Default for `ScrollOptions.speedPxPerSecond`. Chosen as the midpoint of a
+ * 500-900px/s video-appropriate range: fast enough that a full-viewport
+ * scroll doesn't drag, slow enough that the eased motion below still reads
+ * as a deliberate, watchable scroll rather than a blur between two frames.
+ */
+export const DEFAULT_SCROLL_SPEED_PX_PER_SECOND = 700
+/**
+ * Hard per-60Hz-step cap on scroll travel, mirroring `MAX_POINTER_STEP_PX`'s
+ * "no big jumps between frames" guarantee for pointer motion. Issue #15's
+ * defect was exactly this missing for scroll: 40px-capped wheel *packets*
+ * turned a 525px scroll into 14 giant, evenly-spaced jumps (~37px each,
+ * ~2250px/s) that a screen recorder simply cannot resolve as motion — most
+ * of those jumps land between two captured frames. 30px comfortably covers
+ * the eased peak step at the top of the advertised 500-900px/s range (a
+ * minimum-jerk profile peaks at 1.875x its average step — see
+ * `SCROLL_MIN_JERK_PEAK_RATIO` below — which is ~28px/step at 900px/s), so
+ * the growth loop below almost never has to lengthen an in-range scroll's
+ * duration to satisfy this cap.
+ */
+export const MAX_SCROLL_STEP_PX = 30
+/**
+ * A minimum-jerk ease profile's peak instantaneous "velocity" (in progress
+ * units) is 1.875x its average — the same ratio `motion.ts` derives for
+ * pointer travel. Used below as an analytic starting estimate for how many
+ * 60Hz samples a scroll of a given distance needs to keep every step under
+ * `MAX_SCROLL_STEP_PX`; the growth loop that follows corrects any shortfall
+ * from rounding, so this only has to be a good guess, not exact.
+ */
+const SCROLL_MIN_JERK_PEAK_RATIO = 1.875
+/** Safety valve for the scroll sample-count growth loop; see motion.ts's
+ * identical `MAX_GROWTH_ITERATIONS` — never expected to be hit in practice. */
+const MAX_SCROLL_GROWTH_ITERATIONS = 100
+/** Deliberately gentle, matching motion.ts's `GROWTH_FACTOR` reasoning: a
+ * coarse factor overshoots the true minimum sample count, which directly
+ * inflates scroll duration for no benefit. */
+const SCROLL_GROWTH_FACTOR = 1.08
 
-/** Number of 60Hz increments a scroll of this size is split into. Pure and
- * deterministic so the tick timebase never depends on measured wall time. */
-function computeScrollSteps(deltaX: number, deltaY: number): number {
-  const magnitude = Math.hypot(deltaX, deltaY)
-  return Math.max(1, Math.ceil(magnitude / MAX_WHEEL_STEP_PX))
+/**
+ * Analytic lower bound on sample count, derived the same way as
+ * `minimumJerkBoundSamples` in motion.ts but without a settle-window
+ * subtraction — a scroll eases in and out over its *entire* travel, it
+ * doesn't spend a trailing fraction settling into an overshoot.
+ */
+function scrollMinimumJerkBoundSamples(distance: number): number {
+  if (distance <= 0) return 1
+  return Math.ceil((SCROLL_MIN_JERK_PEAK_RATIO * distance) / MAX_SCROLL_STEP_PX)
 }
 
-/** Splits a scroll into 60 Hz increments paced against absolute deadlines. */
-async function paceWheel(
-  page: RecordPage,
+/**
+ * Renders `samples` cumulative (from the scroll's own zero) wheel targets
+ * along an eased minimum-jerk envelope. The final sample is always the
+ * exact, unrounded `{ deltaX, deltaY }` — never a rounded approximation of
+ * it — so the total scrolled distance is exact regardless of how many
+ * intermediate steps got rounded to whole pixels.
+ */
+function renderScrollPositions(
   deltaX: number,
   deltaY: number,
-  steps: number,
+  samples: number,
+): { x: number; y: number }[] {
+  const positions: { x: number; y: number }[] = []
+  for (let index = 1; index <= samples; index += 1) {
+    if (index === samples) {
+      positions.push({ x: deltaX, y: deltaY })
+      continue
+    }
+    const eased = minimumJerk(index / samples)
+    positions.push({
+      x: Math.round(deltaX * eased),
+      y: Math.round(deltaY * eased),
+    })
+  }
+  return positions
+}
+
+/** Max step across the whole cumulative sequence, including the seam from
+ * the scroll's own zero to its first generated sample — see
+ * `maxConsecutiveStep` in motion.ts for why that seam counts too. */
+function maxConsecutiveScrollStep(
+  positions: { x: number; y: number }[],
+): number {
+  let max = 0
+  let previous = { x: 0, y: 0 }
+  for (const current of positions) {
+    const step = Math.hypot(current.x - previous.x, current.y - previous.y)
+    if (step > max) max = step
+    previous = current
+  }
+  return max
+}
+
+/**
+ * Turns a scroll into a distance-over-time motion, like pointer travel,
+ * instead of dividing a fixed distance into as few large wheel packets as
+ * possible (issue #15). The sample count starts from a video-appropriate
+ * speed and is then deterministically grown — same inputs, same result —
+ * until the actually rendered, rounded envelope satisfies the hard
+ * `MAX_SCROLL_STEP_PX` per-step cap, mirroring `generateMotionPoints`'s
+ * guarantee loop in motion.ts exactly.
+ */
+export function computeScrollPositions(
+  deltaX: number,
+  deltaY: number,
+  speedPxPerSecond: number,
+  fps: number,
+): { x: number; y: number }[] {
+  const distance = Math.hypot(deltaX, deltaY)
+  if (distance < 0.5) return [{ x: deltaX, y: deltaY }]
+
+  const naturalSamples = Math.ceil((distance / speedPxPerSecond) * fps)
+  let samples = Math.max(
+    1,
+    naturalSamples,
+    scrollMinimumJerkBoundSamples(distance),
+  )
+  let positions = renderScrollPositions(deltaX, deltaY, samples)
+
+  let guard = 0
+  while (
+    maxConsecutiveScrollStep(positions) > MAX_SCROLL_STEP_PX &&
+    guard < MAX_SCROLL_GROWTH_ITERATIONS
+  ) {
+    samples = Math.ceil(samples * SCROLL_GROWTH_FACTOR) + 1
+    positions = renderScrollPositions(deltaX, deltaY, samples)
+    guard += 1
+  }
+  if (maxConsecutiveScrollStep(positions) > MAX_SCROLL_STEP_PX) {
+    throw new Error(
+      `Unable to keep scroll motion under ${String(MAX_SCROLL_STEP_PX)}px ` +
+        `per 60Hz step after ${String(guard)} growth iterations (distance ` +
+        `${String(distance)}px, speed ${String(speedPxPerSecond)}px/s)`,
+    )
+  }
+  return positions
+}
+
+/** Splits a scroll into eased 60 Hz increments paced against absolute
+ * deadlines, exactly like `moveToPoint`'s pointer pacing above. */
+async function paceWheel(
+  page: RecordPage,
+  positions: { x: number; y: number }[],
 ): Promise<void> {
   const start = Date.now()
   let sentX = 0
   let sentY = 0
-  for (let index = 1; index <= steps; index += 1) {
-    await sleepUntil(page, start + (index / EVENT_LOG_FPS) * 1000)
-    const targetX = Math.round((deltaX * index) / steps)
-    const targetY = Math.round((deltaY * index) / steps)
-    await page.mouse.wheel(targetX - sentX, targetY - sentY)
-    sentX = targetX
-    sentY = targetY
+  for (const [index, target] of positions.entries()) {
+    await sleepUntil(page, start + ((index + 1) / EVENT_LOG_FPS) * 1000)
+    await page.mouse.wheel(target.x - sentX, target.y - sentY)
+    sentX = target.x
+    sentY = target.y
   }
 }
 

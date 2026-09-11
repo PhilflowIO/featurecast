@@ -250,7 +250,14 @@ function sampleMotion(
   }
 }
 
-function minimumJerk(progress: number): number {
+/**
+ * Classic minimum-jerk ease in/out: zero velocity and zero acceleration at
+ * both ends of `progress`. Exported so `record.ts` can reuse the exact same
+ * envelope for scroll pacing instead of a second, drifting implementation —
+ * a scroll's ease profile should feel like the same "hand" as a pointer
+ * move's approach.
+ */
+export function minimumJerk(progress: number): number {
   const value = clamp01(progress)
   return value * value * value * (10 - 15 * value + 6 * value * value)
 }
