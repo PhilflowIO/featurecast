@@ -1,0 +1,359 @@
+import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import type { Page, Screencast } from 'playwright'
+
+export const CAPTURE_SIZE = { height: 1600, width: 2560 } as const
+
+/**
+ * Upper bound on frames buffered between the screencast callback and the
+ * disk writer (roughly four seconds of backlog at 60 fps). A writer that
+ * cannot keep up with that for longer is broken, not merely slow, and
+ * capture must fail loudly rather than grow memory without bound.
+ */
+const DEFAULT_MAX_QUEUED_FRAMES = 240
+
+export type ScreencastFrame = {
+  data: Buffer
+  timestamp: number
+  viewportHeight: number
+  viewportWidth: number
+}
+
+export type CaptureDependencies = {
+  maxQueuedFrames?: number
+  now?: () => number
+  writeFrame?: (path: string, data: Buffer) => Promise<void>
+}
+
+export type TimestampManifest = {
+  captureSize: typeof CAPTURE_SIZE
+  frames: Array<{
+    file: string
+    timestamp: number
+    viewport: { height: number; width: number }
+  }>
+  session: {
+    duration: number
+    endedAt: number
+    startedAt: number
+  }
+  version: 1
+}
+
+export type ScreencastCapture = {
+  /** Source frames folded into the previous distinct frame's duration; see `captureScreencast`. */
+  droppedDuplicateFrameCount: number
+  framesDirectory: string
+  timestampsPath: string
+}
+
+function frameFileName(index: number): string {
+  return `frame-${String(index).padStart(6, '0')}.jpg`
+}
+
+type FrameQueue = {
+  close: () => void
+  drain: () => AsyncGenerator<ScreencastFrame>
+  fail: (error: Error) => void
+  onFailure: Promise<never>
+  push: (frame: ScreencastFrame) => void
+}
+
+/**
+ * A frame backlog with a bounded depth. `push` is synchronous and never
+ * returns a promise, so it is safe to call directly from Playwright's
+ * `onFrame` callback: see the comment in `captureScreencast` for why that is
+ * the whole point. Once `fail` has fired the queue stops accepting frames,
+ * which caps memory growth from a stalled writer instead of buffering
+ * forever, and `onFailure` lets a caller race the write pipeline against the
+ * scripted recording action for a fast, loud abort.
+ */
+function createFrameQueue(maxDepth: number): FrameQueue {
+  const items: ScreencastFrame[] = []
+  let wake: (() => void) | undefined
+  let closed = false
+  let failure: Error | undefined
+  let rejectOnFailure: (error: Error) => void = () => undefined
+  const onFailure = new Promise<never>((_resolve, reject) => {
+    rejectOnFailure = reject
+  })
+  // Nobody may ever await `onFailure` (the happy path never fails), so give
+  // it a no-op handler to avoid an unhandled-rejection warning; the real
+  // rejection is still observed by whoever explicitly awaits it.
+  onFailure.catch(() => undefined)
+
+  function fail(error: Error): void {
+    if (failure) return
+    failure = error
+    rejectOnFailure(error)
+    wake?.()
+    wake = undefined
+  }
+
+  function push(frame: ScreencastFrame): void {
+    if (failure) return
+    if (items.length >= maxDepth) {
+      fail(
+        new Error(
+          `Frame writer fell behind capture: ${String(maxDepth)} frames buffered without being written`,
+        ),
+      )
+      return
+    }
+    items.push(frame)
+    wake?.()
+    wake = undefined
+  }
+
+  function close(): void {
+    closed = true
+    wake?.()
+    wake = undefined
+  }
+
+  async function* drain(): AsyncGenerator<ScreencastFrame> {
+    for (;;) {
+      if (failure) throw failure
+      const next = items.shift()
+      if (next !== undefined) {
+        yield next
+        continue
+      }
+      if (closed) return
+      await new Promise<void>((resolve) => {
+        wake = resolve
+      })
+    }
+  }
+
+  return { close, drain, fail, onFailure, push }
+}
+
+export async function captureScreencast(
+  page: Page,
+  outputDirectory: string,
+  record: () => Promise<void>,
+  dependencies: CaptureDependencies = {},
+): Promise<ScreencastCapture> {
+  const framesDirectory = join(outputDirectory, 'frames')
+  const timestampsPath = join(outputDirectory, 'timestamps.json')
+  const screencast = page.screencast
+  const writeFrame = dependencies.writeFrame ?? writeCaptureFrame
+  const now = dependencies.now ?? Date.now
+  const maxQueuedFrames =
+    dependencies.maxQueuedFrames ?? DEFAULT_MAX_QUEUED_FRAMES
+  const manifest: TimestampManifest = {
+    captureSize: CAPTURE_SIZE,
+    frames: [],
+    session: { duration: 0, endedAt: 0, startedAt: 0 },
+    version: 1,
+  }
+  let stopAttempted = false
+  let queue: FrameQueue | undefined
+
+  await mkdir(dirname(outputDirectory), { recursive: true })
+  await createCaptureDirectory(outputDirectory)
+
+  try {
+    await mkdir(framesDirectory)
+
+    const stop = async (): Promise<void> => {
+      if (!stopAttempted) {
+        stopAttempted = true
+        await screencast.stop()
+      }
+    }
+
+    queue = createFrameQueue(maxQueuedFrames)
+    let frameIndex = 0
+    let previousTimestamp: number | undefined
+    let previousWrittenFrameData: Buffer | undefined
+    let droppedDuplicateFrameCount = 0
+
+    const writer = (async (): Promise<number> => {
+      for await (const frame of queue.drain()) {
+        if (
+          previousTimestamp !== undefined &&
+          frame.timestamp <= previousTimestamp
+        ) {
+          throw new Error('Screencast timestamps must be strictly increasing')
+        }
+        previousTimestamp = frame.timestamp
+
+        // `page.screencast` is documented to emit a frame only when the page
+        // repaints, but in practice it occasionally redelivers a
+        // byte-identical frame even mid-scroll (observed against a real
+        // dense UI: 1 duplicate pair in 226 frames of a ~20s run, gap ~21ms
+        // either side, i.e. not during an idle pause). That is a source-side
+        // artifact, not a bug in this writer, so we fold it into the
+        // previous frame's on-screen duration instead of writing a second,
+        // pointless copy — `buildCaptureTimeline` already derives each
+        // frame's duration from the gap to the *next distinct* frame.
+        if (
+          previousWrittenFrameData !== undefined &&
+          frame.data.equals(previousWrittenFrameData)
+        ) {
+          droppedDuplicateFrameCount += 1
+          continue
+        }
+        previousWrittenFrameData = frame.data
+
+        const file = frameFileName(frameIndex)
+        frameIndex += 1
+        await writeFrame(join(framesDirectory, file), frame.data)
+        manifest.frames.push({
+          file,
+          timestamp: frame.timestamp,
+          viewport: {
+            height: frame.viewportHeight,
+            width: frame.viewportWidth,
+          },
+        })
+      }
+      return droppedDuplicateFrameCount
+    })().catch((error: unknown) => {
+      const normalized =
+        error instanceof Error ? error : new Error(String(error))
+      queue?.fail(normalized)
+      throw normalized
+    })
+    // The final `await writer` below always observes this rejection; this
+    // extra handler only suppresses Node's unhandled-rejection warning for
+    // the case where `queue.onFailure` wins the race instead.
+    writer.catch(() => undefined)
+
+    // Playwright awaits whatever `onFrame` returns before it will ack the
+    // next CDP screencast frame (playwright-core's `Screencast.onScreencastFrame`
+    // races client promises via `Promise.race(asyncResults)`), and it
+    // silently discards any error that promise carries
+    // (`result2.catch(() => {})` in the same function). A quality-100 JPEG
+    // write at capture resolution is slow enough to throttle the source to a
+    // few frames per second if awaited here, and a validation error thrown
+    // inside this callback would simply vanish. Returning nothing (not a
+    // promise) makes Playwright ack synchronously instead — see the
+    // `Promise<any>|any` signature and the sync example in
+    // `Screencast.start`'s own type doc. `onFrame` therefore only enqueues;
+    // the writer above is a separate consumer, and its errors are surfaced
+    // explicitly through `writer`/`queue.onFailure`.
+    await screencast.start({
+      onFrame: (frame) => {
+        queue?.push({
+          data: frame.data,
+          timestamp: frame.timestamp,
+          viewportHeight: frame.viewportHeight,
+          viewportWidth: frame.viewportWidth,
+        })
+      },
+      quality: 100,
+      size: CAPTURE_SIZE,
+    })
+    manifest.session.startedAt = now()
+
+    const recordPromise = record()
+    recordPromise.catch(() => undefined)
+    await Promise.race([recordPromise, queue.onFailure])
+
+    manifest.session.endedAt = now()
+    manifest.session.duration =
+      manifest.session.endedAt - manifest.session.startedAt
+    await stop()
+    queue.close()
+    const finalDroppedDuplicateFrameCount = await writer
+    validateCaptureManifest(manifest)
+
+    await writeFile(timestampsPath, `${JSON.stringify(manifest, null, 2)}\n`, {
+      flag: 'wx',
+    })
+
+    return {
+      droppedDuplicateFrameCount: finalDroppedDuplicateFrameCount,
+      framesDirectory,
+      timestampsPath,
+    }
+  } catch (error) {
+    if (!stopAttempted) {
+      await stopCaptureSafely(screencast)
+    }
+    queue?.close()
+    await removeCaptureDirectorySafely(outputDirectory)
+    throw error
+  }
+}
+
+async function createCaptureDirectory(outputDirectory: string): Promise<void> {
+  try {
+    await mkdir(outputDirectory)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new Error(
+        'Capture output directory already exists; choose a unique or cleared --out directory',
+      )
+    }
+    throw error
+  }
+}
+
+async function writeCaptureFrame(path: string, data: Buffer): Promise<void> {
+  await writeFile(path, data, { flag: 'wx' })
+}
+
+async function stopCaptureSafely(screencast: Screencast): Promise<void> {
+  try {
+    await screencast.stop()
+  } catch {
+    // Preserve the original capture failure.
+  }
+}
+
+async function removeCaptureDirectorySafely(
+  outputDirectory: string,
+): Promise<void> {
+  try {
+    await rm(outputDirectory, { force: true, recursive: true })
+  } catch {
+    // Preserve the original capture failure.
+  }
+}
+
+/** Ensures capture metadata is sufficient for reproducible M1 acceptance. */
+export function validateCaptureManifest(manifest: TimestampManifest): void {
+  if (
+    manifest.version !== 1 ||
+    manifest.captureSize.width !== CAPTURE_SIZE.width ||
+    manifest.captureSize.height !== CAPTURE_SIZE.height
+  ) {
+    throw new Error('Capture manifest must use the expected 2560x1600 viewport')
+  }
+  if (manifest.frames.length === 0) {
+    throw new Error('Capture manifest must contain a positive frame count')
+  }
+  if (
+    !Number.isFinite(manifest.session.startedAt) ||
+    !Number.isFinite(manifest.session.endedAt) ||
+    !Number.isFinite(manifest.session.duration) ||
+    manifest.session.duration < 0 ||
+    manifest.session.endedAt - manifest.session.startedAt !==
+      manifest.session.duration
+  ) {
+    throw new Error('Capture manifest must contain valid session timing')
+  }
+
+  let previousTimestamp: number | undefined
+  for (const frame of manifest.frames) {
+    if (
+      frame.viewport.width !== CAPTURE_SIZE.width ||
+      frame.viewport.height !== CAPTURE_SIZE.height
+    ) {
+      throw new Error(
+        'Capture frame viewport must match the expected 2560x1600 viewport',
+      )
+    }
+    if (
+      !Number.isFinite(frame.timestamp) ||
+      (previousTimestamp !== undefined && frame.timestamp <= previousTimestamp)
+    ) {
+      throw new Error('Capture manifest timestamps must be strictly increasing')
+    }
+    previousTimestamp = frame.timestamp
+  }
+}

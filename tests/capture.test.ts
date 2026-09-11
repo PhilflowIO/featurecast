@@ -1,0 +1,365 @@
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import type { Page } from 'playwright'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { captureScreencast, validateCaptureManifest } from '../src/capture.js'
+
+const directories: string[] = []
+
+type TestScreencast = {
+  start: (options: {
+    onFrame(frame: {
+      data: Buffer
+      timestamp: number
+      viewportHeight: number
+      viewportWidth: number
+    }): unknown
+    quality: number
+    size: { height: number; width: number }
+  }) => Promise<void>
+  stop: () => Promise<void>
+}
+
+function testPage(screencast: TestScreencast): Page {
+  return { screencast } as unknown as Page
+}
+
+async function temporaryDirectory(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'featurecast-capture-'))
+  directories.push(directory)
+  return directory
+}
+
+afterEach(async () => {
+  await Promise.all(
+    directories
+      .splice(0)
+      .map((directory) => rm(directory, { force: true, recursive: true })),
+  )
+})
+
+describe('captureScreencast', () => {
+  it('writes numbered JPEG frames and monotonic timestamp metadata', async () => {
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const firstFrame = Buffer.from('first jpeg')
+    const secondFrame = Buffer.from('second jpeg')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      onFrame({
+        data: firstFrame,
+        timestamp: 1000,
+        viewportHeight: 1600,
+        viewportWidth: 2560,
+      })
+      onFrame({
+        data: secondFrame,
+        timestamp: 1016.667,
+        viewportHeight: 1600,
+        viewportWidth: 2560,
+      })
+    })
+    const page = testPage({ start, stop })
+
+    const result = await captureScreencast(
+      page,
+      outputDirectory,
+      async () => undefined,
+      { now: () => 0 },
+    )
+
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quality: 100,
+        size: { height: 1600, width: 2560 },
+      }),
+    )
+    expect(stop).toHaveBeenCalledOnce()
+    expect(
+      await readFile(join(outputDirectory, 'frames', 'frame-000000.jpg')),
+    ).toEqual(firstFrame)
+    expect(
+      await readFile(join(outputDirectory, 'frames', 'frame-000001.jpg')),
+    ).toEqual(secondFrame)
+    await expect(
+      readFile(join(outputDirectory, 'frames', 'frame-000002.jpg')),
+    ).rejects.toThrow()
+    await expect(readFile(result.timestampsPath, 'utf8')).resolves.toBe(
+      JSON.stringify(
+        {
+          captureSize: { height: 1600, width: 2560 },
+          frames: [
+            {
+              file: 'frame-000000.jpg',
+              timestamp: 1000,
+              viewport: { height: 1600, width: 2560 },
+            },
+            {
+              file: 'frame-000001.jpg',
+              timestamp: 1016.667,
+              viewport: { height: 1600, width: 2560 },
+            },
+          ],
+          session: { duration: 0, endedAt: 0, startedAt: 0 },
+          version: 1,
+        },
+        null,
+        2,
+      ) + '\n',
+    )
+  })
+
+  it('acks frames synchronously instead of awaiting the disk write', async () => {
+    // Playwright only advances the CDP screencast once whatever `onFrame`
+    // returns resolves, and swallows any error that promise carries. If
+    // `onFrame` returned a promise tied to the (slow) disk write, capture
+    // would be throttled to disk speed and a write failure would vanish
+    // silently. Enqueuing must therefore be synchronous.
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    let onFrameReturnValue: unknown = 'not called'
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      onFrameReturnValue = onFrame({
+        data: Buffer.from('frame'),
+        timestamp: 1,
+        viewportHeight: 1600,
+        viewportWidth: 2560,
+      })
+    })
+    const page = testPage({ start, stop })
+
+    await captureScreencast(page, outputDirectory, async () => undefined, {
+      writeFrame: async () =>
+        new Promise((resolve) => {
+          setTimeout(resolve, 30)
+        }),
+    })
+
+    expect(onFrameReturnValue).toBeUndefined()
+  })
+
+  it('fails loudly instead of buffering forever when the writer stalls', async () => {
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      for (let index = 0; index < 5; index += 1) {
+        onFrame({
+          data: Buffer.from(`frame-${String(index)}`),
+          timestamp: index + 1,
+          viewportHeight: 1600,
+          viewportWidth: 2560,
+        })
+      }
+    })
+    const page = testPage({ start, stop })
+    const writeFrame = vi.fn().mockImplementation(
+      async () =>
+        new Promise<void>(() => {
+          // Never resolves: simulates a stalled writer.
+        }),
+    )
+
+    await expect(
+      captureScreencast(page, outputDirectory, async () => undefined, {
+        maxQueuedFrames: 2,
+        writeFrame,
+      }),
+    ).rejects.toThrow('fell behind')
+
+    expect(stop).toHaveBeenCalledOnce()
+    await expect(access(outputDirectory)).rejects.toThrow()
+  })
+
+  it('records session timing around the scripted action', async () => {
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      onFrame({
+        data: Buffer.from('frame'),
+        timestamp: 100,
+        viewportHeight: 1600,
+        viewportWidth: 2560,
+      })
+    })
+    const now = vi.fn().mockReturnValueOnce(1_000).mockReturnValueOnce(1_250)
+
+    const result = await captureScreencast(
+      testPage({ start, stop }),
+      outputDirectory,
+      async () => undefined,
+      { now },
+    )
+
+    expect(
+      JSON.parse(await readFile(result.timestampsPath, 'utf8')),
+    ).toMatchObject({
+      session: { startedAt: 1_000, endedAt: 1_250, duration: 250 },
+    })
+  })
+
+  it('stops the screencast when the recorded action fails', async () => {
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockResolvedValue(undefined)
+    const page = testPage({ start, stop })
+
+    await expect(
+      captureScreencast(page, outputDirectory, async () => {
+        throw new Error('script failed')
+      }),
+    ).rejects.toThrow('script failed')
+
+    expect(stop).toHaveBeenCalledOnce()
+    await expect(access(outputDirectory)).rejects.toThrow()
+  })
+
+  it('rejects non-monotonic screencast timestamps and still stops capture', async () => {
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      onFrame({
+        data: Buffer.from('first'),
+        timestamp: 2,
+        viewportHeight: 1440,
+        viewportWidth: 2560,
+      })
+      onFrame({
+        data: Buffer.from('second'),
+        timestamp: 1,
+        viewportHeight: 1440,
+        viewportWidth: 2560,
+      })
+    })
+    const page = testPage({ start, stop })
+
+    await expect(
+      captureScreencast(page, outputDirectory, async () => undefined),
+    ).rejects.toThrow('Screencast timestamps must be strictly increasing')
+    expect(stop).toHaveBeenCalledOnce()
+    await expect(access(outputDirectory)).rejects.toThrow()
+  })
+
+  it('rejects an existing output directory before starting capture', async () => {
+    const outputDirectory = await temporaryDirectory()
+    const start = vi.fn().mockResolvedValue(undefined)
+    const stop = vi.fn().mockResolvedValue(undefined)
+
+    await expect(
+      captureScreencast(
+        testPage({ start, stop }),
+        outputDirectory,
+        async () => undefined,
+      ),
+    ).rejects.toThrow(
+      'Capture output directory already exists; choose a unique or cleared --out directory',
+    )
+
+    expect(start).not.toHaveBeenCalled()
+    expect(stop).not.toHaveBeenCalled()
+  })
+
+  it('stops and removes its capture directory when writing a frame fails', async () => {
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const writeError = new Error('frame write failed')
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      onFrame({
+        data: Buffer.from('frame'),
+        timestamp: 1,
+        viewportHeight: 1600,
+        viewportWidth: 2560,
+      })
+    })
+
+    await expect(
+      captureScreencast(
+        testPage({ start, stop }),
+        outputDirectory,
+        async () => undefined,
+        { writeFrame: async () => Promise.reject(writeError) },
+      ),
+    ).rejects.toBe(writeError)
+
+    expect(stop).toHaveBeenCalledOnce()
+    await expect(access(outputDirectory)).rejects.toThrow()
+  })
+
+  it('preserves the original error when stopping capture also fails', async () => {
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const originalError = new Error('record failed')
+    const stop = vi.fn().mockRejectedValue(new Error('stop failed'))
+    const start = vi.fn().mockResolvedValue(undefined)
+
+    await expect(
+      captureScreencast(
+        testPage({ start, stop }),
+        outputDirectory,
+        async () => {
+          throw originalError
+        },
+      ),
+    ).rejects.toBe(originalError)
+
+    expect(stop).toHaveBeenCalledOnce()
+    await expect(access(outputDirectory)).rejects.toThrow()
+  })
+})
+
+describe('validateCaptureManifest', () => {
+  it('accepts a complete M1 capture manifest', () => {
+    expect(() =>
+      validateCaptureManifest({
+        captureSize: { height: 1600, width: 2560 },
+        frames: [
+          {
+            file: 'frame-000000.jpg',
+            timestamp: 1,
+            viewport: { height: 1600, width: 2560 },
+          },
+        ],
+        session: { duration: 1, endedAt: 1, startedAt: 0 },
+        version: 1,
+      }),
+    ).not.toThrow()
+  })
+
+  it.each([
+    ['has no frames', []],
+    [
+      'uses the wrong viewport',
+      [
+        {
+          file: 'frame-000000.jpg',
+          timestamp: 1,
+          viewport: { height: 1080, width: 1920 },
+        },
+      ],
+    ],
+    [
+      'has non-monotonic timestamps',
+      [
+        {
+          file: 'frame-000000.jpg',
+          timestamp: 2,
+          viewport: { height: 1600, width: 2560 },
+        },
+        {
+          file: 'frame-000001.jpg',
+          timestamp: 2,
+          viewport: { height: 1600, width: 2560 },
+        },
+      ],
+    ],
+  ])('rejects a capture manifest that %s', (_description, frames) => {
+    expect(() =>
+      validateCaptureManifest({
+        captureSize: { height: 1600, width: 2560 },
+        frames,
+        session: { duration: 1, endedAt: 1, startedAt: 0 },
+        version: 1,
+      }),
+    ).toThrow()
+  })
+})
