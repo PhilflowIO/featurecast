@@ -11,6 +11,7 @@
     "browsers:install": "playwright install chromium",
     "demo:hello": "tsx demo/hello.ts",
     "demo:m1-capture": "tsx demo/m1-capture.ts",
+    "demo:record-smoke": "tsx demo/record-smoke.ts",
     "format": "prettier --check .",
     "lint": "eslint .",
     "prepare": "simple-git-hooks",
