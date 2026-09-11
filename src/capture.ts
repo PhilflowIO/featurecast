@@ -217,22 +217,38 @@ export async function captureScreencast(
     const writer = (async (): Promise<WriterResult> => {
       for await (const rawFrame of queue.drain()) {
         // CDP's screencast timestamp is not monotonic under fast
-        // (hardware-GL, see renderer.ts) capture: onFrame is still invoked
-        // in true display order (this is metadata jitter, not out-of-order
-        // delivery), but repeated measurement kept finding larger outliers
-        // as more runs were sampled — 3-9ms, then 30.5ms, then 82.5ms — a
-        // tail-distributed effect (likely scheduling/GC pauses under
-        // system load), not a fixed small jitter band with a meaningful
-        // cutoff. A fixed "hard-fail above N ms" tolerance was chasing that
-        // tail rather than protecting against anything: clamping is always
-        // safe for `buildCaptureTimeline`'s duration math regardless of the
-        // regression's size (worst case, one frame's duration is
-        // misattributed by that many ms — negligible in a 20s+ video), so
-        // every regression is now clamped and counted, with no ceiling
-        // that throws. Real session corruption would show as timestamps
-        // off by seconds or more, not milliseconds, which would still
-        // surface as a nonsensical `capture-stats.json` clampedTimestampCount
-        // relative to frameCount, not silently.
+        // (hardware-GL, see renderer.ts) capture. This is proven, not
+        // guessed: instrumenting playwright-core's own
+        // `CRPage._onScreencastFrame` (the Chromium `Page.screencastFrame`
+        // handler, which computes
+        // `frameSwapWallTime: payload.metadata.timestamp ? payload.metadata.timestamp * 1e3 : Date.now()`)
+        // against a real acceptance run logged every frame's raw CDP
+        // `metadata.timestamp` alongside `Date.now()`. Result: 0 of 671
+        // frames were missing `metadata.timestamp` (so the `Date.now()`
+        // fallback — mixing a browser-clock timestamp with a Node-clock one
+        // — never fired; that hypothesis is refuted for this pipeline).
+        // Every one of the 6 regressions that run produced (3.7-18.1ms)
+        // carried a genuine, non-fallback `metadata.timestamp` on both the
+        // regressing frame and its predecessor, and the *next* frame after
+        // each regression always jumped forward past both — i.e. Chromium
+        // itself hands two adjacent screencast frames real capture
+        // timestamps that are briefly out of order. `onFrame` still fires
+        // in true delivery order (Playwright's own guarantee this file
+        // already relies on below), so this is JPEG-encode-completion
+        // reordering inside Chromium's screencast pipeline (frames are
+        // encoded asynchronously; encode completion, which drives CDP
+        // delivery order, can occasionally finish a hair out of step with
+        // the compositor's own capture-time stamps) — not a Node/browser
+        // clock-mixing artifact, and not GC pauses. Delivery order is the
+        // trustworthy signal; clamping the *timestamp* forward to match
+        // delivery order is therefore correct regardless of the
+        // regression's size: worst case, one frame's duration is
+        // misattributed by that many ms, negligible in a 20s+ video. Every
+        // regression is clamped and counted, with no ceiling that throws;
+        // real session corruption would show as timestamps off by seconds
+        // or more, which would still surface as a nonsensical
+        // `capture-stats.json` clampedTimestampCount relative to
+        // frameCount, not silently.
         let frame = rawFrame
         if (
           previousTimestamp !== undefined &&

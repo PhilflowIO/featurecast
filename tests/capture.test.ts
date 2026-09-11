@@ -338,14 +338,18 @@ describe('captureScreencast', () => {
   })
 
   it('clamps a large timestamp regression forward instead of failing', async () => {
-    // Repeated measurement against real hardware-GL capture found
-    // successively larger outliers as more runs were sampled (3-9ms, then
-    // 30.5ms, then 82.5ms) — a tail-distributed effect, not a fixed jitter
-    // band with a meaningful cutoff. Every regression is clamped
-    // regardless of size: it is always safe for the duration math, and a
-    // fixed "fail above N ms" threshold was chasing that tail rather than
-    // protecting against anything real (genuine session corruption would
-    // show as seconds, not milliseconds).
+    // Proven cause (see the comment in capture.ts's writer loop): Chromium's
+    // screencast pipeline occasionally hands two adjacent, delivery-ordered
+    // frames genuine `metadata.timestamp` values that are briefly out of
+    // order (JPEG-encode-completion reordering, not a Node/browser
+    // clock-mixing artifact and not GC pauses — both were checked directly
+    // against raw CDP payloads and ruled out). Observed regressions so far:
+    // 3-9ms, 30.5ms, 82.5ms across increasingly many sampled runs — a
+    // tail-distributed effect, not a fixed jitter band with a meaningful
+    // cutoff. Every regression is clamped regardless of size: it is always
+    // safe for the duration math, and a fixed "fail above N ms" threshold
+    // was chasing that tail rather than protecting against anything real
+    // (genuine session corruption would show as seconds, not milliseconds).
     const outputDirectory = join(await temporaryDirectory(), 'capture')
     const stop = vi.fn().mockResolvedValue(undefined)
     const start = vi.fn().mockImplementation(async ({ onFrame }) => {
@@ -377,8 +381,10 @@ describe('captureScreencast', () => {
 
   it('clamps a small timestamp regression forward too', async () => {
     // Measured directly against hardware-GL capture on this box: ~1-2% of
-    // frames report a timestamp a few ms *before* the previous one (CDP
-    // metadata jitter, not out-of-order delivery or corruption).
+    // frames report a timestamp a few ms *before* the previous one. Proven
+    // by instrumenting Chromium's own CDP payloads (see capture.ts) to be
+    // genuine `metadata.timestamp` reordering between adjacent,
+    // delivery-ordered frames, not out-of-order delivery or corruption.
     const outputDirectory = join(await temporaryDirectory(), 'capture')
     const stop = vi.fn().mockResolvedValue(undefined)
     const start = vi.fn().mockImplementation(async ({ onFrame }) => {
