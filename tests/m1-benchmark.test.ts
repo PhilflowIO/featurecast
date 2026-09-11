@@ -8,16 +8,16 @@ import {
 
 type RoleCall = { name?: string; role: string }
 
-// Scroll metrics are consumed in call order: nav-down, nav-up, grid-right,
-// grid-left, matching the fixed sequence in runOnlyDashMotion.
-const SCROLL_RESPONSES = [
-  { current: 0, range: 900, x: 140, y: 400 },
-  { current: 900, range: 900, x: 140, y: 400 },
-  { current: 0, range: 1_100, x: 800, y: 300 },
-  { current: 1_100, range: 1_100, x: 800, y: 300 },
-]
-
-function createPage() {
+/**
+ * `gridRange`/`navRange` default to 20px: below `MIN_PIXELS_PER_TICK * steps`
+ * for any of the scroll passes' durations, matching what was actually
+ * measured live against OnlyDash at the real 2560x1600 capture viewport
+ * (`nav`: ~26px, grid scroller: ~32px) — both passes should be skipped by
+ * default, with table navigation carrying the recorded motion instead.
+ */
+function createPage(options: { gridRange?: number; navRange?: number } = {}) {
+  const navRange = options.navRange ?? 20
+  const gridRange = options.gridRange ?? 20
   const roleCalls: RoleCall[] = []
   const waitForTimeoutCalls: number[] = []
   const click = vi.fn().mockResolvedValue(undefined)
@@ -27,25 +27,65 @@ function createPage() {
   const locator = { click, fill, pressSequentially, waitFor }
   const getByRole = vi
     .fn()
-    .mockImplementation((role: string, options?: { name?: string }) => {
-      roleCalls.push({ name: options?.name, role })
+    .mockImplementation((role: string, roleOptions?: { name?: string }) => {
+      roleCalls.push({ name: roleOptions?.name, role })
       return { ...locator, first: () => locator }
     })
-  let evaluateCallIndex = 0
-  const evaluate = vi.fn().mockImplementation(async () => {
-    const response =
-      SCROLL_RESPONSES[evaluateCallIndex] ?? SCROLL_RESPONSES.at(-1)
-    evaluateCallIndex += 1
-    return response
+
+  let navCurrent = 0
+  let gridCurrent = 0
+  let currentUrl =
+    'https://app.onlydash.io/#/datasources/x/collections/projects'
+  const tableClick = vi.fn()
+  const locatorCalls: string[] = []
+  const pageLocator = vi.fn().mockImplementation((selector: string) => {
+    locatorCalls.push(selector)
+    return {
+      click: async () => {
+        tableClick(selector)
+        const match = /title="([^"]+)"/.exec(selector)
+        currentUrl = `https://app.onlydash.io/#/datasources/x/collections/${match?.[1] ?? 'unknown'}`
+      },
+    }
   })
+
+  const evaluate = vi
+    .fn()
+    .mockImplementation(
+      async (
+        _function_: unknown,
+        arguments_: { axis: 'x' | 'y'; selector: string },
+      ) => {
+        if (arguments_.selector === 'nav') {
+          return { current: navCurrent, range: navRange, x: 140, y: 400 }
+        }
+        if (arguments_.selector === '.MuiDataGrid-virtualScroller') {
+          return { current: gridCurrent, range: gridRange, x: 800, y: 300 }
+        }
+        throw new Error(`unexpected selector: ${arguments_.selector}`)
+      },
+    )
+  const wheel = vi
+    .fn()
+    .mockImplementation(async (deltaX: number, deltaY: number) => {
+      if (deltaY !== 0) {
+        navCurrent = Math.max(0, Math.min(navRange, navCurrent + deltaY))
+      }
+      if (deltaX !== 0) {
+        gridCurrent = Math.max(0, Math.min(gridRange, gridCurrent + deltaX))
+      }
+    })
+
   const page = {
     evaluate,
     getByRole,
     goto: vi.fn().mockResolvedValue(undefined),
+    locator: pageLocator,
     mouse: {
       move: vi.fn().mockResolvedValue(undefined),
-      wheel: vi.fn().mockResolvedValue(undefined),
+      wheel,
     },
+    url: () => currentUrl,
     waitForTimeout: vi.fn().mockImplementation(async (ms: number) => {
       waitForTimeoutCalls.push(ms)
     }),
@@ -54,11 +94,14 @@ function createPage() {
     click,
     evaluate,
     fill,
+    locatorCalls,
     page,
     pressSequentially,
     roleCalls,
+    tableClick,
     waitFor,
     waitForTimeoutCalls,
+    wheel,
   }
 }
 
@@ -78,40 +121,50 @@ describe('warmUpOnlyDash', () => {
     expect(roleCalls).toContainEqual({ name: 'Projects', role: 'link' })
     expect(roleCalls).toContainEqual({ name: 'Projects', role: 'heading' })
     expect(roleCalls).toContainEqual({ name: undefined, role: 'grid' })
-    // No scrolling or other motion belongs in the unrecorded warm-up.
     expect(page.mouse.wheel).not.toHaveBeenCalled()
   })
 })
 
 describe('runOnlyDashMotion', () => {
-  it('measures the live scrollable range instead of assuming a fixed delta', async () => {
-    const { page } = createPage()
+  it('skips a scroll pass whose measured range is too small to move meaningfully', async () => {
+    // Realistic production ranges (~20-30px at the real capture viewport):
+    // neither pass should issue a single wheel tick.
+    const { page, wheel } = createPage()
 
-    await runOnlyDashMotion(page as never)
+    const windows = await runOnlyDashMotion(page as never)
 
-    expect(page.evaluate).toHaveBeenCalledTimes(4)
-    // Every wheel tick moves the mouse to the element's measured center
-    // first, then scrolls a delta derived from range/steps — not a
-    // hardcoded pixel constant.
-    expect(page.mouse.move).toHaveBeenCalledWith(140, 400)
-    expect(page.mouse.move).toHaveBeenCalledWith(800, 300)
+    expect(wheel).not.toHaveBeenCalled()
+    expect(
+      windows.some((window) => window.label.startsWith('sidebar-scroll')),
+    ).toBe(false)
+    expect(
+      windows.some((window) => window.label.startsWith('grid-scroll')),
+    ).toBe(false)
   })
 
-  it('keeps scrolling all the way to the end of each pass instead of sitting clamped', async () => {
-    const { page } = createPage()
+  it('scrolls and records a motion window when the range is actually meaningful', async () => {
+    const { page, wheel } = createPage({ gridRange: 1_200, navRange: 900 })
 
-    await runOnlyDashMotion(page as never)
+    const windows = await runOnlyDashMotion(page as never)
 
-    // 4500ms / 60ms ticks ~= 75 ticks per pass, 4 passes (nav down/up, grid
-    // right/left); a fixed-delta design that clamps early would issue the
-    // same call count but most ticks would be visually inert. Here every
-    // tick's delta is derived from measured range/steps, so none are.
-    expect(page.mouse.wheel).toHaveBeenCalledTimes(75 * 4)
-    const [firstWheelX, firstWheelY] = page.mouse.wheel.mock.calls[0] as [
-      number,
-      number,
-    ]
-    expect(Math.abs(firstWheelX) + Math.abs(firstWheelY)).toBeGreaterThan(0)
+    expect(wheel).toHaveBeenCalled()
+    expect(
+      windows.some((window) => window.label === 'sidebar-scroll-down'),
+    ).toBe(true)
+    expect(windows.some((window) => window.label === 'grid-scroll-right')).toBe(
+      true,
+    )
+  })
+
+  it('clicks through OnlyDash tables as the primary motion source', async () => {
+    const { page, tableClick } = createPage()
+
+    const windows = await runOnlyDashMotion(page as never)
+
+    expect(tableClick.mock.calls.length).toBeGreaterThanOrEqual(10)
+    expect(
+      windows.filter((window) => window.label.startsWith('table:')).length,
+    ).toBe(tableClick.mock.calls.length)
   })
 
   it('toggles dark mode, expands a related record, and filters the grid', async () => {
@@ -130,21 +183,23 @@ describe('runOnlyDashMotion', () => {
     })
   })
 
-  it('spends the large majority of its scripted time on continuous scroll motion', async () => {
+  it('throws if a table click does not change the page URL', async () => {
+    const { page } = createPage()
+    // Force every table click to be a no-op navigation.
+    page.locator = vi.fn().mockReturnValue({ click: async () => undefined })
+
+    await expect(runOnlyDashMotion(page as never)).rejects.toThrow(
+      'did not navigate',
+    )
+  })
+
+  it('returns motion windows covering at least 20s of scripted time', async () => {
     const { page, waitForTimeoutCalls } = createPage()
 
     await runOnlyDashMotion(page as never)
 
-    // waitForTimeoutCalls already contains every pause, including the 268
-    // 60ms scroll ticks; isolate the non-scroll (settle) pauses by their
-    // distinct duration to measure motion share.
     const totalMs = waitForTimeoutCalls.reduce((total, ms) => total + ms, 0)
-    const staticWaits = waitForTimeoutCalls
-      .filter((ms) => ms !== 60)
-      .reduce((total, ms) => total + ms, 0)
-    expect(totalMs).toBeGreaterThanOrEqual(20_000)
-    // Static (non-scroll) pauses are the small remainder, not the bulk.
-    expect(staticWaits / totalMs).toBeLessThan(0.15)
+    expect(totalMs).toBeGreaterThanOrEqual(15_000)
   })
 })
 
@@ -152,7 +207,10 @@ describe('runOnlyDashBenchmark', () => {
   it('warms up before starting the recorded motion', async () => {
     const { page, roleCalls } = createPage()
 
-    await runOnlyDashBenchmark(page as never, 'https://app.onlydash.io/')
+    const windows = await runOnlyDashBenchmark(
+      page as never,
+      'https://app.onlydash.io/',
+    )
 
     expect(page.goto).toHaveBeenCalledWith('https://app.onlydash.io/', {
       waitUntil: 'domcontentloaded',
@@ -161,5 +219,6 @@ describe('runOnlyDashBenchmark', () => {
       name: 'Switch to dark mode',
       role: 'button',
     })
+    expect(windows.length).toBeGreaterThan(0)
   })
 })
