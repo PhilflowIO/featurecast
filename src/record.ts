@@ -210,11 +210,10 @@ export function createRecorder(
         return { bbox, point }
       }
 
-      const moveToPoint = async (destination: {
-        x: number
-        y: number
-      }): Promise<void> => {
-        const motionSeed = Math.floor(random() * 0x1_0000_0000)
+      const moveToPoint = async (
+        destination: { x: number; y: number },
+        motionSeed: number,
+      ): Promise<void> => {
         const points = generateMotionPoints(
           pointer,
           destination,
@@ -238,12 +237,31 @@ export function createRecorder(
         }
       }
 
+      // A logical interaction's motion seed(s) are derived deterministically
+      // from (recorder seed, interaction index, move role) — never drawn
+      // from the shared `random()` stream. The corrective stretch below only
+      // runs when arrival-time verification fails, which is a timing race
+      // against the page; if that draw came from the shared stream, an
+      // extra (even zero-length) correction would shift the seed of every
+      // later move and tick, putting bit-identical reproducibility at risk
+      // on any page with a chance of triggering it. A pure hash keyed on the
+      // interaction's own index cannot be perturbed by what happened before.
+      let interactionIndex = -1
+      const INITIAL_MOVE_INDEX = -1
+      const PRIMARY_MOVE_ROLE = 0
+      const CORRECTIVE_MOVE_ROLE = 1
+
       const moveTo = async (
         target: Target,
       ): Promise<{ bbox: BoundingBox; x: number; y: number }> => {
+        interactionIndex += 1
+        const thisInteraction = interactionIndex
         const locator = resolveLocator(target)
-        let { bbox, point } = await resolveVerifiedTarget(locator)
-        await moveToPoint(point)
+        const { point: initialPoint } = await resolveVerifiedTarget(locator)
+        await moveToPoint(
+          initialPoint,
+          deriveMotionSeed(seed, thisInteraction, PRIMARY_MOVE_ROLE),
+        )
 
         // The travel above can take 0.4-4s (longer for distant targets).
         // Trusting geometry resolved *before* it — as the previous version
@@ -253,9 +271,13 @@ export function createRecorder(
         // the same point actually still hits the target now that we've
         // arrived; only if that fails does the more expensive full
         // re-resolution below run.
+        let point = initialPoint
         if (!(await hitsTarget(locator, point))) {
           const corrected = await resolveVerifiedTarget(locator)
-          await moveToPoint(corrected.point)
+          await moveToPoint(
+            corrected.point,
+            deriveMotionSeed(seed, thisInteraction, CORRECTIVE_MOVE_ROLE),
+          )
           if (!(await hitsTarget(locator, corrected.point))) {
             throw new Error(
               'Target moved during pointer travel and could not be ' +
@@ -263,20 +285,33 @@ export function createRecorder(
                 'approach. Never logging an unverified interaction.',
             )
           }
-          bbox = corrected.bbox
           point = corrected.point
         }
-        return { bbox, ...point }
+
+        // Refreshed unconditionally, right before the caller logs it — not
+        // just inside the corrective branch above. A target can grow or
+        // shift around a stable center during the 0.4-4s travel and still
+        // hit-test correctly at the same point without ever entering that
+        // branch, yet be a visually different rect than what was resolved
+        // before moving; a later renderer zooms exactly this bbox.
+        const freshRaw = await locator.boundingBox()
+        if (freshRaw === null || freshRaw.width <= 0 || freshRaw.height <= 0) {
+          throw new Error('Target must resolve to a visible bounding box')
+        }
+        return { bbox: normalizedBoundingBox(freshRaw), ...point }
       }
 
       // Give the log and the app the same deterministic rest position before
       // the script's first interaction, and actually drive the real cursor
       // there through the same paced, capped curve as any other move.
       const startViewport = page.viewportSize() ?? DEFAULT_VIEWPORT
-      await moveToPoint({
-        x: Math.round(startViewport.width / 2),
-        y: Math.round(startViewport.height / 2),
-      })
+      await moveToPoint(
+        {
+          x: Math.round(startViewport.width / 2),
+          y: Math.round(startViewport.height / 2),
+        },
+        deriveMotionSeed(seed, INITIAL_MOVE_INDEX, PRIMARY_MOVE_ROLE),
+      )
 
       const demo: Demo = {
         point: async (target) => {
@@ -753,6 +788,26 @@ function normalizedBoundingBox(bbox: BoundingBox): BoundingBox {
     height: Math.round(bbox.height),
   }
 }
+/**
+ * Derives a motion seed as a pure function of (recorder seed, interaction
+ * index, move role) — never by drawing from a shared sequential stream. This
+ * is what makes a corrective move (see moveTo) safe for determinism: however
+ * many logical interactions ran before it, and whether or not any of them
+ * needed a correction, this interaction's seed(s) are always the same.
+ */
+function deriveMotionSeed(
+  baseSeed: number,
+  interactionIndex: number,
+  role: number,
+): number {
+  const mixed =
+    (baseSeed ^
+      Math.imul(interactionIndex, 0x9e3779b1) ^
+      Math.imul(role, 0x85ebca6b)) >>>
+    0
+  return Math.floor(createRandom(mixed)() * 0x1_0000_0000)
+}
+
 function createRandom(seed: number): () => number {
   let state = seed
   return () => {
