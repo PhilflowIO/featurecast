@@ -3,10 +3,13 @@ import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { TimestampManifest } from './capture.js'
+import type { RendererInfo } from './renderer.js'
 
 const STATIC_INTERVAL_THRESHOLD_MS = 20
 
 export type SourceCadenceReport = {
+  /** Frames whose CDP timestamp regressed a few ms and was clamped forward; see `capture.ts`. */
+  clampedTimestampCount: number
   /**
    * Byte-identical redelivered source frames `captureScreencast` folded
    * into the previous frame's duration instead of writing to disk (see
@@ -19,7 +22,47 @@ export type SourceCadenceReport = {
   frameCount: number
   medianIntervalMs: number
   p95IntervalMs: number
+  /** WebGL renderer string active during capture; see `renderer.ts`. */
+  renderer?: RendererInfo
   shareUnderTwentyMs: number
+}
+
+/** A scripted stretch of the recording (absolute `Date.now()`-domain ms) that was meant to show visible motion. */
+export type MotionWindow = {
+  end: number
+  label: string
+  start: number
+}
+
+export type MotionWindowCadence = SourceCadenceReport & {
+  durationSeconds: number
+  end: number
+  label: string
+  start: number
+}
+
+/** Per-motion-window cadence, so a slow window is attributable to the action that caused it. */
+export function computeMotionWindowCadence(
+  manifest: TimestampManifest,
+  windows: readonly MotionWindow[],
+): MotionWindowCadence[] {
+  return windows.map((window) => {
+    const framesInWindow = manifest.frames.filter(
+      (frame) =>
+        frame.timestamp >= window.start && frame.timestamp <= window.end,
+    )
+    const cadence = computeSourceCadence({
+      ...manifest,
+      frames: framesInWindow,
+    })
+    return {
+      ...cadence,
+      durationSeconds: (window.end - window.start) / 1000,
+      end: window.end,
+      label: window.label,
+      start: window.start,
+    }
+  })
 }
 
 /**
@@ -74,6 +117,7 @@ function percentile(sorted: readonly number[], fraction: number): number {
 export function computeSourceCadence(
   manifest: TimestampManifest,
   droppedDuplicateFrameCount = 0,
+  clampedTimestampCount = 0,
 ): SourceCadenceReport {
   const intervals: number[] = []
   for (let index = 1; index < manifest.frames.length; index += 1) {
@@ -87,6 +131,7 @@ export function computeSourceCadence(
 
   if (intervals.length === 0) {
     return {
+      clampedTimestampCount,
       droppedDuplicateFrameCount,
       frameCount: manifest.frames.length,
       medianIntervalMs: 0,
@@ -101,6 +146,7 @@ export function computeSourceCadence(
       .length / intervals.length
 
   return {
+    clampedTimestampCount,
     droppedDuplicateFrameCount,
     frameCount: manifest.frames.length,
     medianIntervalMs: percentile(sorted, 0.5),
@@ -114,12 +160,20 @@ export async function writeCaptureStats(
   captureDirectory: string,
   manifest: TimestampManifest,
   droppedDuplicateFrameCount = 0,
+  renderer?: RendererInfo,
+  clampedTimestampCount = 0,
 ): Promise<SourceCadenceReport> {
-  const cadence = computeSourceCadence(manifest, droppedDuplicateFrameCount)
+  const cadence = computeSourceCadence(
+    manifest,
+    droppedDuplicateFrameCount,
+    clampedTimestampCount,
+  )
+  const report: SourceCadenceReport =
+    renderer === undefined ? cadence : { ...cadence, renderer }
   await writeFile(
     join(captureDirectory, 'capture-stats.json'),
-    `${JSON.stringify(cadence, null, 2)}\n`,
+    `${JSON.stringify(report, null, 2)}\n`,
     { flag: 'wx' },
   )
-  return cadence
+  return report
 }

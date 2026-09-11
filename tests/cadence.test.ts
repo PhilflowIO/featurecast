@@ -6,10 +6,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import type { TimestampManifest } from '../src/capture.js'
 import {
+  computeMotionWindowCadence,
   computeSourceCadence,
   validateNoDuplicateAdjacentFrames,
   writeCaptureStats,
 } from '../src/cadence.js'
+import type { RendererInfo } from '../src/renderer.js'
 
 const directories: string[] = []
 
@@ -91,6 +93,7 @@ describe('computeSourceCadence', () => {
     const report = computeSourceCadence(manifestWithTimestamps([1]))
 
     expect(report).toEqual({
+      clampedTimestampCount: 0,
       droppedDuplicateFrameCount: 0,
       frameCount: 1,
       medianIntervalMs: 0,
@@ -121,5 +124,42 @@ describe('writeCaptureStats', () => {
     )
     expect(written).toEqual(report)
     expect(report.frameCount).toBe(3)
+  })
+
+  it('includes the renderer info when supplied', async () => {
+    const captureDirectory = await temporaryDirectory()
+    const manifest = manifestWithTimestamps([0, 16.667, 33.334])
+    const renderer: RendererInfo = {
+      launchArgs: ['--use-gl=angle'],
+      renderer: 'ANGLE (AMD, AMD Radeon 860M Graphics)',
+      softwareRendering: false,
+    }
+
+    const report = await writeCaptureStats(
+      captureDirectory,
+      manifest,
+      0,
+      renderer,
+    )
+
+    expect(report.renderer).toEqual(renderer)
+  })
+})
+
+describe('computeMotionWindowCadence', () => {
+  it('computes cadence separately per motion window', () => {
+    const manifest = manifestWithTimestamps([
+      0, 16.667, 33.334, 1_000, 1_016.667, 1_033.334,
+    ])
+
+    const [first, second] = computeMotionWindowCadence(manifest, [
+      { end: 40, label: 'first', start: 0 },
+      { end: 1_040, label: 'second', start: 990 },
+    ])
+
+    expect(first?.frameCount).toBe(3)
+    expect(first?.label).toBe('first')
+    expect(second?.frameCount).toBe(3)
+    expect(second?.label).toBe('second')
   })
 })
