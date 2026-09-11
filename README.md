@@ -30,4 +30,42 @@ pnpm browsers:install
 pnpm demo:hello
 ```
 
+## M1-Aufnahme wiederholen
+
+Der folgende manuelle Befehl zeichnet eine öffentliche, dichte Testoberfläche
+gut 20 Sekunden lang im festgelegten 2560×1600-Capture-Viewport auf. Er
+speichert JPEG-Frames, `timestamps.json` und `capture-stats.json` unter dem
+angegebenen Artefaktordner und rendert daraus `output.mp4`. Der Render
+schneidet dabei mittig auf 16:9 (`2560×1440`, 80 Pixel oben und unten) und
+verkleinert anschließend auf 1920×1080; es wird nie hochskaliert.
+
+```sh
+pnpm demo:m1-capture
+ffprobe -v error -select_streams v:0 \
+  -show_entries stream=width,height,avg_frame_rate,r_frame_rate,nb_frames,duration \
+  -of json artifacts/m1-capture/output.mp4
+```
+
+Der Befehl ist kein automatisierter Test. Er verwendet standardmäßig
+`https://app.onlydash.io/` als öffentliche, zugangsfrei erreichbare OnlyDash-
+Gastoberfläche für den dichten UI-Benchmark. Eine abweichende öffentliche URL
+und ein Artefaktordner können als erstes und zweites Argument angegeben werden.
+Der Artefaktordner muss bei jedem Lauf neu sein oder vorher bewusst gelöscht
+werden; die Aufnahme überschreibt bestehende Artefakte nicht. Verwende dafür
+einen eindeutigen Pfad als zweites Argument, etwa
+`pnpm demo:m1-capture https://app.onlydash.io/ artifacts/m1-capture-001`.
+
+Frame-Erfassung und Festplatten-Schreiben sind entkoppelt: `onFrame` reiht nur
+synchron ein, ein separater Writer schreibt im Hintergrund, damit ein
+langsamer Schreibvorgang die Quellbildrate nicht drosselt (Playwright ackt den
+nächsten Screencast-Frame erst, wenn `onFrame` zurückkehrt, und verschluckt
+dabei jeden Fehler). Vor dem Zusammenbau werden aufeinanderfolgende
+JPEG-Quellframes per SHA-256 auf Duplikate geprüft, und `capture-stats.json`
+hält Median- und p95-Bildabstand sowie den Anteil der Abstände ≤ 20 ms fest.
+Danach prüft `ffprobe` Auflösung, konstante 60 fps, Dauer gegen die
+Aufnahme-Zeitspanne und Frameanzahl gegen eine echte 60-fps-Kodierung dieser
+Dauer. Für die M1-Abnahme wird das Ergebnis dennoch angesehen und mit einer
+Screen-Studio-Aufnahme verglichen; Aufnahme und Vergleichsmaterial werden vor
+dem Teilen auf private Daten geprüft.
+
 Vorarbeit: `research/web-feature-recording-sota-2026-09.md` im Research-Repo — 24 Kandidaten, 18 im Quelltext geprüft, 9 durchgemessen.
