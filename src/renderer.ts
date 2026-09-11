@@ -56,6 +56,14 @@ export async function detectRenderer(
  * every existing frame-count/duration check still passes. Set
  * `FEATURECAST_ALLOW_SOFTWARE_RENDERER=1` to proceed anyway (e.g. a
  * GPU-less CI runner) — this is an explicit opt-in, not a fallback.
+ *
+ * The remedy in the thrown message depends on `info.launchArgs` (what was
+ * actually passed to `chromium.launch`, recorded by the caller — not
+ * necessarily `HARDWARE_GL_LAUNCH_ARGS`): if it's empty, the fix is to add
+ * those flags; if hardware-GL flags were already there and rendering is
+ * still software, repeating the same flags back is not actionable — the
+ * real problem is environment/driver availability (e.g. no GPU, or one not
+ * reachable from inside a container), so the message says that instead.
  */
 export function assertHardwareRenderer(info: RendererInfo): void {
   if (!info.softwareRendering) {
@@ -64,12 +72,15 @@ export function assertHardwareRenderer(info: RendererInfo): void {
   if (process.env['FEATURECAST_ALLOW_SOFTWARE_RENDERER'] === '1') {
     return
   }
+  const remedy =
+    info.launchArgs.length > 0
+      ? `Chromium was already launched with hardware-GL flags (${info.launchArgs.join(' ')}) and still fell back to software rendering — check GPU/driver availability in this environment (glxinfo -B, vulkaninfo).`
+      : `Launch Chromium with hardware GL (${HARDWARE_GL_LAUNCH_ARGS.join(' ')}).`
   throw new Error(
     `Capture is running on a software GL renderer ("${info.renderer}") ` +
       'instead of hardware acceleration. This silently produces a much ' +
       'lower frame rate (measured ~17fps on a real dense UI vs ~60fps with ' +
-      'hardware GL) that ffprobe and duration checks still accept. Launch ' +
-      `Chromium with hardware GL (${info.launchArgs.join(' ')}) or set ` +
-      'FEATURECAST_ALLOW_SOFTWARE_RENDERER=1 to proceed anyway.',
+      `hardware GL) that ffprobe and duration checks still accept. ${remedy} ` +
+      'Or set FEATURECAST_ALLOW_SOFTWARE_RENDERER=1 to proceed anyway.',
   )
 }

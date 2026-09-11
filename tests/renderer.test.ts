@@ -80,4 +80,26 @@ describe('assertHardwareRenderer', () => {
       }),
     ).not.toThrow()
   })
+
+  it('advises the hardware-GL flags when none were passed', () => {
+    expect(() =>
+      assertHardwareRenderer({
+        launchArgs: [],
+        renderer: 'SwiftShader driver',
+        softwareRendering: true,
+      }),
+    ).toThrow(
+      `Launch Chromium with hardware GL (${HARDWARE_GL_LAUNCH_ARGS.join(' ')})`,
+    )
+  })
+
+  it('points at the environment instead of repeating already-used flags', () => {
+    expect(() =>
+      assertHardwareRenderer({
+        launchArgs: HARDWARE_GL_LAUNCH_ARGS,
+        renderer: 'SwiftShader driver',
+        softwareRendering: true,
+      }),
+    ).toThrow('already launched with hardware-GL flags')
+  })
 })
