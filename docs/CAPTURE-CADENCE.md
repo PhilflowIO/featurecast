@@ -447,26 +447,58 @@ the idle time now sits. The mechanism is proven causal, and it is a real
 video defect (a horizontal scroll whose first quarter-second is a freeze),
 not a counting artifact.
 
-**Mechanism 4 (open) — frames captured by viz but not in the manifest.**
-Even with the lock released, viz captures 97% of presented frames but only
-84-86% reach the manifest. Candidates, not yet separated:
-DevTools drops a captured frame while more than two are still encoding or
-unacknowledged (`content/browser/devtools/protocol/page_handler.cc:1808-1821`,
-`kMaxScreencastFramesInFlight = 2`), and `captureScreencast` folds
-byte-identical redelivered frames (`src/capture.ts`, 11-42 per session in
-these runs). `dark-mode-toggle` belongs here: viz captured 24-26 of 24-26
-presented frames in every run, 19-21 were delivered.
+**Mechanism 4 — DevTools' in-flight limit, not duplicate folding (resolved by
+an independent re-measurement).** Even with the lock released, viz captures
+97% of presented frames but only 84-86% reach the manifest. An adversarial
+verifier separated the two candidates on the box
+(`~/featurecast-bench/verify-lockin/`, own parser, a raw pre-fold counter in a
+throwaway copy of the capture code): for `dark-mode-toggle`, 26 frames were
+captured by viz, 22 reached the `onFrame` callback, 1 was folded as a
+byte-identical redelivery, 21 landed on disk. Four of the five missing frames
+therefore die in DevTools, not in `src/capture.ts`. No delivered frame had
+more than two unacknowledged predecessors while every dropped one had two to
+three, which is the documented behaviour of
+`content/browser/devtools/protocol/page_handler.cc:1808-1821`
+(`kMaxScreencastFramesInFlight = 2`). Attribution per frame is possible
+because DevTools stamps the frame only after the drop check
+(`page_handler.cc:177`, called at `:1850`), a median 0.38ms after capture end.
+Unlike the lock-in, this loss is attackable from our side: acknowledge
+earlier, make frames smaller, or leave the DevTools path.
+
+**The lock-in has no reachable off-switch (independently re-verified).** At
+the pinned Chromium 153.0.8010.12 from the Playwright 1.63 image, the mojo
+call `SetAnimationFpsLockIn` exists
+(`frame_sink_video_capturer_impl.cc:372-381`, `video_capture_oracle.h:81-86`,
+`animated_content_sampler.h:30`, default on per
+`frame_sink_video_capture.mojom:175` and `animated_content_sampler.cc:51`),
+but across 108 files loaded at that revision it appears only in the client
+pass-through (`client_frame_sink_video_capturer.cc:42-49, 219-220`), the
+implementation and three test doubles — no production caller, no
+`base::Feature`, no command-line switch, no CDP parameter
+(`Page.pdl:1161-1174` exposes only format, quality, width, height, every-nth-
+frame). `Page.startScreenRecording` does not help either: it runs through
+`WebContentsVideoCaptureDevice` -> `FrameSinkVideoCaptureDevice`, which sets
+only period and resolution (`frame_sink_video_capture_device.cc:327-332`).
+The verifier also strengthened the causal proof: at every single refusal of a
+presented frame (56/56 without idle, 24/24 with idle, 59/59 in `presented-t1`)
+the smooth sampler's token bucket stood at >=10ms 7-10us earlier, so both the
+minimum capture period and the smooth sampler would have said yes
+(`video_capture_oracle.cc:162-176`); utilization throttling is excluded
+because it only scales size (pinned by `SetResolutionConstraints min=max`) and
+no `PipelineLimited` event occurred.
 
 **Quality does not help either loss.** Quality 85 and 80 delivered 21/21 and
 20/21 dark-mode frames against 21/19/21 at 90, with the same `scroll-right`
 and `invoices:sort-asc` refusals; gate 0.850/0.864 (q85), 0.842/0.853 (q80)
 vs 0.838/0.838 (q90, excluding `pq-q90-r1`). `CAPTURE_QUALITY` stays 90.
 
-**Not verified here:** whether mechanism 4 is the DevTools in-flight limit
-or duplicate folding (needs the raw pre-fold delivery count); these traced
-runs carry tracing overhead and are not acceptance runs (the last
-untraced acceptance is `artifacts/m1-008`); a capture path that bypasses the
-viz oracle (e.g. `HeadlessExperimental.beginFrame` screenshots) is untested.
+**Not verified here:** these traced runs carry tracing overhead and are not
+acceptance runs (the last untraced acceptance is `artifacts/m1-008`); a
+capture path that bypasses the viz oracle (e.g.
+`HeadlessExperimental.beginFrame` screenshots) is untested; the
+re-measurements above are single runs per variant, so run-to-run spread is
+unknown; the completeness of the caller search rests on GitHub's code-search
+index over the Chromium mirror.
 
 ## PLAN.md / docs/DEVICES.md divergence (unresolved, flagged for the owner)
 
