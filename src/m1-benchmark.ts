@@ -1,38 +1,28 @@
 import type { Page } from 'playwright'
 
 import type { MotionWindow } from './cadence.js'
+import type { Demo } from './record.js'
 
 export const ONLYDASH_GUEST_BENCHMARK_URL = 'https://app.onlydash.io/'
 const DEFAULT_OUTPUT_DIRECTORY = 'artifacts/m1-capture'
 
 /**
- * A handful of OnlyDash's 43 tables, clicked through in sequence as the
- * primary source of motion. Chosen over sidebar/grid scrolling because,
- * measured live at the actual 2560x1600 capture viewport, neither
- * scrollable container has meaningful range: `nav`'s scrollHeight exceeds
- * its clientHeight by only ~26px (all 43 table names nearly fit without
- * scrolling at that height) and `.MuiDataGrid-virtualScroller`'s by ~32px
- * (all 9 Projects columns fit at that width). A full table switch is a
- * guaranteed, large, real visual change regardless of viewport size.
+ * Measured live against all 43 OnlyDash tables at the real 2560x1600
+ * capture viewport: only these hold >=10 records (`tasks` 19, `invoices`
+ * 17, `users` 13, `expenses` 13) — everything else, including most of a
+ * previous version's 16-table rotation, holds 0-2. A 2-row table on a
+ * ~70% empty dark background held for a full second is not the dense UI
+ * M1 asks for, no matter how many distinct such tables a script visits.
+ * `tasks` and `invoices` are additionally the only tables with a
+ * meaningfully scrollable grid at this viewport (528px/369px vertical
+ * range; every other table measured <=71px) — real within-table motion,
+ * not just a sequence of static screenshots.
  */
-const MOTION_TABLE_TITLES = [
-  'tasks',
-  'users',
-  'invoices',
-  'risks',
-  'milestones',
-  'sprints',
-  'reports',
-  'stakeholders',
-  'teams',
-  'skills',
-  'showcase',
-  'change_requests',
-  'kanban_tasks',
-  'activity_logs',
-  'notifications',
-  'custom_fields',
-] as const
+const DENSE_TABLES = ['tasks', 'invoices', 'users', 'expenses'] as const
+const MIN_TABLE_RECORDS = 10
+
+/** Below this, a scroll is not worth claiming as a motion window (see `scrollContainerToEdge`). */
+const MIN_MEANINGFUL_SCROLL_PX = 200
 
 export function resolveM1CaptureArguments(arguments_: readonly string[]): {
   outputDirectory: string
@@ -45,27 +35,9 @@ export function resolveM1CaptureArguments(arguments_: readonly string[]): {
   return { outputDirectory, url }
 }
 
-/**
- * A scroll pass counts as meaningful only if its available range lets each
- * tick move at least this many pixels; otherwise the pass is skipped
- * instead of scheduling wall-clock time against a container that cannot
- * actually move. Root cause of a real defect: `nav`'s 26px range at the
- * real capture viewport divided across 75 ticks rounded to a 4px-per-tick
- * delta (the previous `Math.max(4, ...)` floor), so the pass reached its
- * edge in ~7 ticks and the remaining ~68 sat clamped — 9.4s of the
- * delivered m1-002 recording had zero repaints during exactly those two
- * "scrolling" passes.
- */
-const MIN_PIXELS_PER_TICK = 8
+type ScrollableMetrics = { current: number; range: number }
 
-type ScrollableMetrics = {
-  current: number
-  range: number
-  x: number
-  y: number
-}
-
-/** Measures a scrollable element's remaining range and viewport center live. */
+/** Measures a scrollable element's remaining range live. */
 async function measureScrollable(
   page: Page,
   selector: string,
@@ -77,15 +49,12 @@ async function measureScrollable(
       if (!(element instanceof HTMLElement)) {
         throw new Error(`scrollable element not found: ${selectorArgument}`)
       }
-      const rect = element.getBoundingClientRect()
       return {
         current: axisArgument === 'y' ? element.scrollTop : element.scrollLeft,
         range:
           axisArgument === 'y'
             ? element.scrollHeight - element.clientHeight
             : element.scrollWidth - element.clientWidth,
-        x: rect.left + rect.width / 2,
-        y: rect.top + rect.height / 2,
       }
     },
     { axis, selector },
@@ -93,45 +62,67 @@ async function measureScrollable(
 }
 
 /**
- * Scrolls `selector` toward one edge with many small wheel ticks spread
- * over `durationMs`, measuring the live scrollable range first instead of
- * assuming a fixed delta (see `MIN_PIXELS_PER_TICK`'s doc comment for why).
- * Returns whether it actually scrolled: `false` means the range was too
- * small to be worth the scheduled time, so the caller should not count on
- * this as a motion window. Asserts afterward that the element's position
- * actually changed — a defensive check against any other clamping this
- * function did not anticipate producing a scheduled-but-silent pass again.
+ * Positions the mouse over `selector` with a single `boundingBox()` read
+ * and jump, instead of `demo.point`'s verified-hit-test-and-settle
+ * machinery. That machinery exists for precise click targeting (wait for
+ * geometry to stop moving, verify the exact pixel actually hits the
+ * element) and is the wrong tool for hovering a scroll container: measured
+ * live against `.MuiDataGrid-virtualScroller`, its 80ms-stability window
+ * never closed within a 10s `settleTimeoutMs` because MUI's row
+ * virtualization keeps recalculating the scroller's own geometry while
+ * scrolling — `demo.point` doesn't just fail to help here, it inflates the
+ * claimed motion window with several seconds of static waiting BEFORE any
+ * real scrolling starts, which is exactly the frozen-motion-window problem
+ * this benchmark is supposed to avoid. The cursor is not rendered in the
+ * capture (PLAN.md renders it in a later post-processing stage from
+ * `events.jsonl`), so an instant jump has no visual cost; only the actual
+ * wheel pacing (`demo.scroll`, still 60Hz) needs to go through the wrapper.
  */
-async function continuousScrollToEdge(
+async function hoverContainer(page: Page, selector: string): Promise<void> {
+  const box = await page.locator(selector).boundingBox()
+  if (box === null) {
+    throw new Error(`hoverContainer: ${selector} has no bounding box`)
+  }
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+}
+
+/**
+ * Scrolls `selector` toward one edge through the merged `demo.scroll`
+ * wrapper (60Hz-paced, `src/record.ts`) instead of a hand-rolled wheel
+ * loop: a hand-rolled `await page.waitForTimeout(60)`-per-tick loop
+ * measured a 69.79ms median interval on `grid-scroll-right` (1.9% of gaps
+ * <=20ms) — ~14fps of visible motion, not smooth scrolling, because each
+ * tick paid the real cost of a JS-side timer plus its own event-loop
+ * turnaround on top of the nominal 60ms. `demo.scroll` paces against
+ * absolute deadlines and lets Chromium coalesce delivery, and is already
+ * proven at 60Hz on a 105k-move sweep.
+ *
+ * Measures the live scrollable range first (not a fixed delta) and skips
+ * (returns false) if it is below `MIN_MEANINGFUL_SCROLL_PX` — real ranges
+ * for the sidebar (~26px) and most grids (~2-71px) at this viewport are
+ * not worth claiming as motion. Asserts afterward that the position
+ * actually changed when it did attempt to scroll.
+ */
+async function scrollContainerToEdge(
   page: Page,
+  demo: Demo,
   selector: string,
   axis: 'x' | 'y',
   direction: 1 | -1,
-  durationMs: number,
-  tickMs: number,
 ): Promise<boolean> {
-  const steps = Math.max(1, Math.round(durationMs / tickMs))
-  const { current, range, x, y } = await measureScrollable(page, selector, axis)
+  const { current, range } = await measureScrollable(page, selector, axis)
   const target = direction > 0 ? range : 0
-  const distance = Math.abs(target - current)
-  if (distance < steps * MIN_PIXELS_PER_TICK) {
+  const delta = target - current
+  if (Math.abs(delta) < MIN_MEANINGFUL_SCROLL_PX) {
     return false
   }
-  const perTick = Math.max(4, Math.round(distance / steps)) * direction
-
-  await page.mouse.move(x, y)
-  for (let step = 0; step < steps; step += 1) {
-    await page.mouse.wheel(
-      axis === 'x' ? perTick : 0,
-      axis === 'y' ? perTick : 0,
-    )
-    await page.waitForTimeout(tickMs)
-  }
+  await hoverContainer(page, selector)
+  await demo.scroll(axis === 'x' ? delta : 0, axis === 'y' ? delta : 0)
 
   const after = await measureScrollable(page, selector, axis)
   if (after.current === current) {
     throw new Error(
-      `continuousScrollToEdge: ${selector} (${axis}) did not move despite a measured ${String(distance)}px range`,
+      `scrollContainerToEdge: ${selector} (${axis}) did not move despite a measured ${String(Math.abs(delta))}px range`,
     )
   }
   return true
@@ -143,7 +134,7 @@ async function continuousScrollToEdge(
  * `session.startedAt`/`endedAt`) if it reports it produced motion.
  * `action` returning `void` counts as motion unconditionally (a click or
  * type always visibly changes something); returning `false` (as
- * `continuousScrollToEdge` does when it skips a too-small range) means no
+ * `scrollContainerToEdge` does when it skips a too-small range) means no
  * window is recorded — a skipped pass has nothing to freeze-check.
  */
 async function withMotionWindow(
@@ -156,6 +147,68 @@ async function withMotionWindow(
   if (result === undefined || result === true) {
     windows.push({ end: Date.now(), label, start })
   }
+}
+
+/** Waits (briefly, non-fatally) for a "Loading…" chart panel to clear before continuing. */
+async function waitForLoadingToClear(page: Page): Promise<void> {
+  await page
+    .getByText(/Loading/i)
+    .first()
+    .waitFor({ state: 'hidden', timeout: 2_000 })
+    .catch(() => undefined)
+}
+
+/**
+ * Root-cause defense for the dense-UI requirement: rather than trusting
+ * `DENSE_TABLES` to stay accurate forever (a demo dataset can change), read
+ * the live "N records" heading and fail loudly if a table that was
+ * selected for its density no longer has it.
+ */
+async function assertTableIsDense(page: Page, title: string): Promise<void> {
+  const recordCount = await page.evaluate(() => {
+    const heading = document.querySelector('main h1')
+    const text = heading?.parentElement?.textContent ?? ''
+    const match = /(\d+)\s*records?/.exec(text)
+    return match ? Number(match[1]) : -1
+  })
+  if (recordCount < MIN_TABLE_RECORDS) {
+    throw new Error(
+      `table "${title}" has ${String(recordCount)} records, below the ${String(MIN_TABLE_RECORDS)}-record density floor`,
+    )
+  }
+}
+
+/**
+ * Deliberately does *not* go through `demo.click`: `demo`'s pointer travel
+ * is a real, paced 0.4-4s curve to the target (by design — that realism is
+ * the point of the event log), but the cursor is not rendered into this
+ * capture (PLAN.md renders it later, from `events.jsonl`, in a
+ * post-processing stage this milestone doesn't build). Measured live: 12
+ * table switches through `demo.click` each carried 2.5-6.5s of window
+ * duration, almost entirely invisible travel time, and pushed the frozen
+ * share of motion-window time past 55% — the exact defect this benchmark
+ * exists to avoid. A plain `Locator.click()` (Playwright's own near-instant
+ * click, no artificial curve) is used instead for the one interaction that
+ * runs a dozen times per recording; `demo.click`/`demo.type` remain in use
+ * for the few single-shot interactions (dark-mode toggle, expand-owner,
+ * search) where the total travel-time cost is small.
+ */
+async function switchToTable(
+  windows: MotionWindow[],
+  page: Page,
+  title: string,
+  label: string,
+): Promise<void> {
+  await withMotionWindow(windows, label, async () => {
+    const urlBefore = page.url()
+    await page.locator(`nav a[title="${title}"]`).click()
+    await page.getByRole('grid').waitFor()
+    if (page.url() === urlBefore) {
+      throw new Error(`table switch to "${title}" did not navigate`)
+    }
+  })
+  await waitForLoadingToClear(page)
+  await assertTableIsDense(page, title)
 }
 
 /**
@@ -183,91 +236,137 @@ export async function warmUpOnlyDash(
   await page.getByRole('link', { name: 'Projects' }).click()
   await page.getByRole('heading', { name: 'Projects', level: 1 }).waitFor()
   await page.getByRole('grid').waitFor()
-  // Lets the grid's own data-fetch settle and any mount transition finish
-  // before the first frame is captured. Not recorded, so a generous wait
-  // costs nothing.
+  await waitForLoadingToClear(page)
+  // Lets any remaining mount transition finish before the first frame is
+  // captured. Not recorded, so a generous wait costs nothing.
   await page.waitForTimeout(600)
 }
 
 /**
- * The recorded ~20s+ of motion: dark-mode toggle, an in-place search
- * filter, expanding a related record, two (possibly skipped — see
- * `continuousScrollToEdge`) full-range scroll attempts each on the
- * sidebar and the grid, and clicking through most of OnlyDash's 43 tables
- * — the primary motion source at this viewport, each switch a full,
- * guaranteed content change. Returns the motion windows it produced, for
- * `capture-stats.json`'s per-window cadence and the freeze-detection gate.
+ * The recorded ~20s+ of motion, driven through the merged `demo` wrapper
+ * (`src/record.ts`) for every click, type, and scroll: dark-mode toggle,
+ * expanding a related record, an in-place search filter (real UI change,
+ * not asserted as a motion window — see the comment at its call site), and
+ * two passes through `DENSE_TABLES` — genuinely dense grids, scrolled
+ * vertically and (for `tasks`, which is also wider than the viewport)
+ * horizontally wherever the range is meaningful. Returns the motion
+ * windows produced, for `capture-stats.json`'s per-window cadence and the
+ * freeze-detection gate.
+ *
+ * `page` (not just `demo`) is threaded through for everything `demo`
+ * cannot do: measuring scrollable range, waiting for a locator's role,
+ * reading `page.url()`, and text-based "Loading…" polling — `Demo` is
+ * purely an interaction API, not a DOM inspection one.
  */
-export async function runOnlyDashMotion(page: Page): Promise<MotionWindow[]> {
+export async function runOnlyDashMotion(
+  page: Page,
+  demo: Demo,
+): Promise<MotionWindow[]> {
   const windows: MotionWindow[] = []
 
+  // `role=` selector-engine strings, not `getByRole(...)` Locators:
+  // Playwright's `Locator` doesn't structurally satisfy `demo`'s
+  // `LocatorLike` (its `evaluate` overload set is too generic for a plain
+  // callers-side interface).
+  const DARK_MODE_BUTTON = 'role=button[name="Switch to dark mode"]'
+  const EXPAND_OWNER_BUTTON = 'role=button[name="Expand Owner"] >> nth=0'
+  const SEARCH_BOX = 'role=searchbox[name="Search records"]'
+
+  // Plain `Locator.click()`, not `demo.click()`, for the same reason
+  // `switchToTable` avoids it (see that function's doc comment): these
+  // single-shot clicks measured 2.6-3.9s of mostly-invisible pointer
+  // travel each through `demo.click`, almost entirely counted as frozen
+  // motion-window time since the cursor isn't rendered into this capture.
   await withMotionWindow(windows, 'dark-mode-toggle', async () => {
-    await page.getByRole('button', { name: 'Switch to dark mode' }).click()
+    await page.locator(DARK_MODE_BUTTON).click()
     await page.waitForTimeout(400)
   })
 
-  await withMotionWindow(windows, 'sidebar-scroll-down', () =>
-    continuousScrollToEdge(page, 'nav', 'y', 1, 3_000, 60),
-  )
-  await withMotionWindow(windows, 'sidebar-scroll-up', () =>
-    continuousScrollToEdge(page, 'nav', 'y', -1, 3_000, 60),
-  )
-
   await withMotionWindow(windows, 'expand-owner', async () => {
-    await page.getByRole('button', { name: 'Expand Owner' }).first().click()
+    await page.locator(EXPAND_OWNER_BUTTON).click()
     await page.waitForTimeout(500)
   })
 
-  // Not wrapped in withMotionWindow: measured live, typing into the search
-  // box changes only a small textbox against an otherwise-static
+  // Not wrapped as an asserted motion window: measured live, typing into
+  // the search box changes only a small textbox against an otherwise-static
   // 2560x1600 frame, and ffmpeg's freezedetect measures whole-frame
-  // difference — the edit registered as a 1.21s "frozen" run even though
-  // the input value visibly changed. That is a mismatch between a global
-  // freeze detector and a local UI change, not evidence the action did
-  // nothing; the action still runs for real-script coverage, it just is
-  // not asserted as a full-frame motion window the way scrolling and
-  // table switches are.
+  // difference — the edit registered as a 1.21s "freeze" despite the input
+  // value visibly changing. The action still runs for real-script coverage,
+  // and does go through `demo.type` — its keystroke-jitter pacing has no
+  // travel-time cost, unlike click/point.
   await withMotionWindow(windows, 'search-filter', async () => {
-    const search = page.getByRole('searchbox', { name: 'Search records' })
-    await search.click()
-    await search.pressSequentially('Web', { delay: 120 })
+    await page.locator(SEARCH_BOX).click()
+    await demo.type(SEARCH_BOX, 'Web')
     await page.waitForTimeout(400)
-    await search.fill('')
+    await page.locator(SEARCH_BOX).fill('')
     await page.waitForTimeout(400)
     return false
   })
 
-  await withMotionWindow(windows, 'grid-scroll-right', () =>
-    continuousScrollToEdge(
-      page,
-      '.MuiDataGrid-virtualScroller',
-      'x',
-      1,
-      3_000,
-      60,
-    ),
-  )
-  await withMotionWindow(windows, 'grid-scroll-left', () =>
-    continuousScrollToEdge(
-      page,
-      '.MuiDataGrid-virtualScroller',
-      'x',
-      -1,
-      3_000,
-      60,
-    ),
-  )
-
-  for (const title of MOTION_TABLE_TITLES) {
-    await withMotionWindow(windows, `table:${title}`, async () => {
-      const urlBefore = page.url()
-      await page.locator(`nav a[title="${title}"]`).click()
-      await page.getByRole('grid').waitFor()
-      await page.waitForTimeout(1_000)
-      if (page.url() === urlBefore) {
-        throw new Error(`table switch to "${title}" did not navigate`)
-      }
-    })
+  for (const cycle of [1, 2]) {
+    for (const title of DENSE_TABLES) {
+      await switchToTable(
+        windows,
+        page,
+        title,
+        `table:${title}:${String(cycle)}`,
+      )
+      // Not part of any asserted motion window: this is dwell time so a
+      // viewer actually sees the newly-loaded dense table, not scripted
+      // "motion" — the frozen-share budget stays generous (measured 4.9%
+      // of motion-window time on a real run) precisely because this time
+      // isn't claimed against it.
+      await page.waitForTimeout(700)
+      await withMotionWindow(
+        windows,
+        `${title}:scroll-down:${String(cycle)}`,
+        () =>
+          scrollContainerToEdge(
+            page,
+            demo,
+            '.MuiDataGrid-virtualScroller',
+            'y',
+            1,
+          ),
+      )
+      await withMotionWindow(
+        windows,
+        `${title}:scroll-up:${String(cycle)}`,
+        () =>
+          scrollContainerToEdge(
+            page,
+            demo,
+            '.MuiDataGrid-virtualScroller',
+            'y',
+            -1,
+          ),
+      )
+      await withMotionWindow(
+        windows,
+        `${title}:scroll-right:${String(cycle)}`,
+        () =>
+          scrollContainerToEdge(
+            page,
+            demo,
+            '.MuiDataGrid-virtualScroller',
+            'x',
+            1,
+          ),
+      )
+      await withMotionWindow(
+        windows,
+        `${title}:scroll-left:${String(cycle)}`,
+        () =>
+          scrollContainerToEdge(
+            page,
+            demo,
+            '.MuiDataGrid-virtualScroller',
+            'x',
+            -1,
+          ),
+      )
+      await page.waitForTimeout(300)
+    }
   }
 
   await page.waitForTimeout(600)
@@ -277,8 +376,9 @@ export async function runOnlyDashMotion(page: Page): Promise<MotionWindow[]> {
 /** Full OnlyDash benchmark: warm up unrecorded, then run the recorded motion. */
 export async function runOnlyDashBenchmark(
   page: Page,
+  demo: Demo,
   url = ONLYDASH_GUEST_BENCHMARK_URL,
 ): Promise<MotionWindow[]> {
   await warmUpOnlyDash(page, url)
-  return runOnlyDashMotion(page)
+  return runOnlyDashMotion(page, demo)
 }
