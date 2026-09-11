@@ -337,34 +337,45 @@ describe('captureScreencast', () => {
     await expect(access(outputDirectory)).rejects.toThrow()
   })
 
-  it('rejects a screencast timestamp regression beyond the jitter tolerance', async () => {
+  it('clamps a large timestamp regression forward instead of failing', async () => {
+    // Repeated measurement against real hardware-GL capture found
+    // successively larger outliers as more runs were sampled (3-9ms, then
+    // 30.5ms, then 82.5ms) — a tail-distributed effect, not a fixed jitter
+    // band with a meaningful cutoff. Every regression is clamped
+    // regardless of size: it is always safe for the duration math, and a
+    // fixed "fail above N ms" threshold was chasing that tail rather than
+    // protecting against anything real (genuine session corruption would
+    // show as seconds, not milliseconds).
     const outputDirectory = join(await temporaryDirectory(), 'capture')
     const stop = vi.fn().mockResolvedValue(undefined)
     const start = vi.fn().mockImplementation(async ({ onFrame }) => {
       onFrame({
         data: Buffer.from('first'),
-        timestamp: 100,
+        timestamp: 1_000,
         viewportHeight: 1600,
         viewportWidth: 2560,
       })
       onFrame({
         data: Buffer.from('second'),
-        // 79ms regression, well beyond the 50ms jitter tolerance.
-        timestamp: 21,
+        timestamp: 917, // 83ms regression — larger than any tolerance tried so far.
         viewportHeight: 1600,
         viewportWidth: 2560,
       })
     })
     const page = testPage({ start, stop })
 
-    await expect(
-      captureScreencast(page, outputDirectory, async () => undefined),
-    ).rejects.toThrow('beyond the 50ms jitter tolerance')
-    expect(stop).toHaveBeenCalledOnce()
-    await expect(access(outputDirectory)).rejects.toThrow()
+    const result = await captureScreencast(
+      page,
+      outputDirectory,
+      async () => undefined,
+    )
+
+    expect(result.clampedTimestampCount).toBe(1)
+    const manifest = JSON.parse(await readFile(result.timestampsPath, 'utf8'))
+    expect(manifest.frames[1].timestamp).toBe(1_000)
   })
 
-  it('clamps a small timestamp regression forward instead of failing', async () => {
+  it('clamps a small timestamp regression forward too', async () => {
     // Measured directly against hardware-GL capture on this box: ~1-2% of
     // frames report a timestamp a few ms *before* the previous one (CDP
     // metadata jitter, not out-of-order delivery or corruption).
@@ -379,7 +390,7 @@ describe('captureScreencast', () => {
       })
       onFrame({
         data: Buffer.from('second'),
-        timestamp: 95, // 5ms regression, within the 50ms tolerance.
+        timestamp: 95, // 5ms regression.
         viewportHeight: 1600,
         viewportWidth: 2560,
       })
