@@ -177,10 +177,28 @@ compared window by window. M1's acceptance pipeline (`demo/m1-capture.ts`)
 now gates on this (95% floor) instead of on the repeated-output-frame share,
 which stays as a reported (not gating) slideshow-detection number.
 
-**Where the loss actually is.** Measured directly against real OnlyDash
-`tasks`-grid scrolling: the page painted ~21fps (in-page rAF, screencast
-attached) while this pipeline only captured ~14fps of it — a real ~69%
-efficiency loss, not a page-paint-rate problem. Isolating the cause with
+**Correction (superseded by the AI-box measurement below): "the app itself
+paints only ~21fps while scrolling" was wrong.** That number was measured
+on this workstation's iGPU, against `.MuiDataGrid-virtualScroller` as the
+scroll target — a selector since proven wrong on its own terms (see
+`src/m1-benchmark.ts`'s `findLargestScrollElement`: that element's live
+range varies from 2px to 500+px depending on MUI's row-virtualization
+layout timing, so the "scroll" it measured was frequently near-empty). On
+the AI box's RTX 3090, with the corrected scroll target and counting
+**distinct content changes** rather than raw paint ticks, the same real
+OnlyDash Tasks view delivers ~58-60 content changes/s while scrolling — the
+app was never the bottleneck; both the wrong scroll target and this
+workstation's weaker iGPU were. The paragraph immediately below (the
+~14fps/~69%-loss number) is **workstation-only** and reflects that iGPU,
+not a property of OnlyDash. See "AI-box acceptance run" further down for
+the corrected, decisive numbers.
+
+**Where the loss actually is (workstation, iGPU).** Measured directly
+against real OnlyDash `tasks`-grid scrolling on this box: the page painted
+~21fps (in-page rAF, screencast attached, using the since-corrected scroll
+target) while this pipeline only captured ~14fps of it — a real ~69%
+efficiency loss on this hardware, not a page-paint-rate problem general to
+OnlyDash. Isolating the cause with
 synthetic fixtures (no Playwright interaction, a trivial `() => count++`
 `onFrame` with no I/O, so this pipeline's own write queue is provably not
 engaged):
