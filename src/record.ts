@@ -10,8 +10,13 @@ const DEFAULT_VIEWPORT = { width: 1280, height: 720 }
 /** Deterministic per-keystroke delay range, in milliseconds. */
 const KEY_DELAY_MIN_MS = 40
 const KEY_DELAY_JITTER_MS = 70
-/** Default for `RecordOptions.settleTimeoutMs`. */
-const DEFAULT_SETTLE_TIMEOUT_MS = 2000
+/**
+ * Default for `RecordOptions.settleTimeoutMs`. Marketing pages routinely run
+ * multi-second CSS transitions on the exact content this tool records; 2000ms
+ * aborted an ordinary 4s transition outright. 5000ms covers that with room to
+ * spare while still failing a genuinely never-settling page in finite time.
+ */
+const DEFAULT_SETTLE_TIMEOUT_MS = 5000
 
 export type BoundingBox = {
   height: number
@@ -22,6 +27,11 @@ export type BoundingBox = {
 
 export type LocatorLike = {
   boundingBox: () => Promise<BoundingBox | null>
+  /** Mirrors Playwright's `Locator.evaluate`; used to hit-test the live DOM. */
+  evaluate: <Arg>(
+    pageFunction: (element: Element, arg: Arg) => unknown,
+    arg: Arg,
+  ) => Promise<unknown>
 }
 
 export type ViewportSize = { height: number; width: number }
@@ -63,7 +73,8 @@ export type RecordOptions = {
    * How long, in milliseconds, target-geometry resolution waits for a
    * page's own scrolling/animation to settle before giving up. A page that
    * animates forever (a marquee behind the target, say) would otherwise hang
-   * a recording indefinitely. Default 2000.
+   * a recording indefinitely. Default 5000 — long enough for an ordinary
+   * multi-second CSS transition, short enough to fail fast otherwise.
    */
   settleTimeoutMs?: number
 }
@@ -174,17 +185,29 @@ export function createRecorder(
       // from a real position, not a teleport.
       let pointer = { x: 0, y: 0 }
 
-      const resolveTarget = async (
-        target: Target,
-      ): Promise<{ bbox: BoundingBox; locator: LocatorLike }> => {
-        const locator =
-          typeof target === 'string' ? page.locator(target) : target
+      const resolveLocator = (target: Target): LocatorLike =>
+        typeof target === 'string' ? page.locator(target) : target
+
+      /**
+       * Resolves a settled bbox and a verified, hit-testable interaction
+       * point for it in one step — the two always travel together, since a
+       * point is only meaningful relative to the geometry it was derived
+       * from.
+       */
+      const resolveVerifiedTarget = async (
+        locator: LocatorLike,
+      ): Promise<{ bbox: BoundingBox; point: { x: number; y: number } }> => {
         const bbox = await waitForStableBoundingBox(
           page,
           locator,
           settleTimeoutMs,
         )
-        return { bbox, locator }
+        const point = await findVerifiedInteractionPoint(
+          locator,
+          bbox,
+          page.viewportSize(),
+        )
+        return { bbox, point }
       }
 
       const moveToPoint = async (destination: {
@@ -218,14 +241,32 @@ export function createRecorder(
       const moveTo = async (
         target: Target,
       ): Promise<{ bbox: BoundingBox; x: number; y: number }> => {
-        const { bbox } = await resolveTarget(target)
-        // Clamp to the visible intersection rather than rejecting outright:
-        // a hero or overlay bigger than the viewport is normal, and its
-        // on-screen portion is still perfectly clickable. The full bbox is
-        // still what gets logged, below.
-        const destination = clampInteractionPoint(bbox, page.viewportSize())
-        await moveToPoint(destination)
-        return { bbox, ...destination }
+        const locator = resolveLocator(target)
+        let { bbox, point } = await resolveVerifiedTarget(locator)
+        await moveToPoint(point)
+
+        // The travel above can take 0.4-4s (longer for distant targets).
+        // Trusting geometry resolved *before* it — as the previous version
+        // did — is exactly how a click gets logged for something that never
+        // happened: the target can move, get re-rendered, or end up covered
+        // by something else while the cursor is still travelling. Re-verify
+        // the same point actually still hits the target now that we've
+        // arrived; only if that fails does the more expensive full
+        // re-resolution below run.
+        if (!(await hitsTarget(locator, point))) {
+          const corrected = await resolveVerifiedTarget(locator)
+          await moveToPoint(corrected.point)
+          if (!(await hitsTarget(locator, corrected.point))) {
+            throw new Error(
+              'Target moved during pointer travel and could not be ' +
+                'reliably hit even after re-resolving and correcting the ' +
+                'approach. Never logging an unverified interaction.',
+            )
+          }
+          bbox = corrected.bbox
+          point = corrected.point
+        }
+        return { bbox, ...point }
       }
 
       // Give the log and the app the same deterministic rest position before
@@ -466,44 +507,54 @@ async function sleepUntil(page: RecordPage, deadline: number): Promise<void> {
   if (remaining > 0) await page.waitForTimeout(remaining)
 }
 
-const STABLE_READS_REQUIRED = 3
+const STABLE_WINDOW_MS = 80
 const STABLE_POLL_INTERVAL_MS = 16
+/**
+ * Below this, two reads count as "the same" geometry. Deliberately a real
+ * sub-pixel epsilon, not integer rounding: rounding first made two reads of
+ * a 0.25px/16ms drift compare equal on every single poll, so a target that
+ * never actually stopped moving was declared settled anyway.
+ */
+const STABLE_EPSILON_PX = 0.5
 
 /**
- * Resolves a target's bounding box only once it has stopped moving —
- * `STABLE_READS_REQUIRED` consecutive (rounded) reads must agree — so a
- * caller never acts on geometry that's still mid-scroll or mid-animation.
- * This is a plain Node-side polling loop over `locator.boundingBox()`, not a
- * `page.evaluate()` watcher keyed on `window.scrollX/Y`: that would miss any
- * scroll that isn't the window itself (an `overflow:auto` container, or a
- * JS-driven transform like Lenis-style inertial scrolling), and the actual
- * geometry of the element we're about to interact with is what matters,
- * regardless of which mechanism moved it. Throws, naming the option that
- * controls the budget, if it never stabilizes in time.
+ * Resolves a target's bounding box only once it has stayed within
+ * `STABLE_EPSILON_PX` of a reference reading for a full `STABLE_WINDOW_MS`
+ * window — a time budget, not a fixed read count, so a crawl slower than the
+ * poll interval (e.g. 1px/100ms) can't rack up "unchanged" reads by luck
+ * before the window has actually elapsed. This is a plain Node-side polling
+ * loop over `locator.boundingBox()`, not a `page.evaluate()` watcher keyed on
+ * `window.scrollX/Y`: that would miss any scroll that isn't the window
+ * itself (an `overflow:auto` container, or a JS-driven transform like
+ * Lenis-style inertial scrolling), and the actual geometry of the element
+ * we're about to interact with is what matters, regardless of which
+ * mechanism moved it. Throws, naming the option that controls the budget, if
+ * it never stabilizes in time. Rounds only the final, settled value — never
+ * the intermediate comparisons — so the caller gets the same clean integers
+ * the rest of the log already uses.
  */
 async function waitForStableBoundingBox(
   page: RecordPage,
   locator: LocatorLike,
   timeoutMs: number,
 ): Promise<BoundingBox> {
-  const start = Date.now()
-  let previous: BoundingBox | null = null
-  let stableReads = 0
+  const overallStart = Date.now()
+  let reference: BoundingBox | null = null
+  let windowStart = Date.now()
   for (;;) {
     const raw = await locator.boundingBox()
     if (raw === null || raw.width <= 0 || raw.height <= 0) {
       throw new Error('Target must resolve to a visible bounding box')
     }
-    const current = normalizedBoundingBox(raw)
-    stableReads =
-      previous !== null && sameBoundingBox(current, previous)
-        ? stableReads + 1
-        : 1
-    previous = current
-    if (stableReads >= STABLE_READS_REQUIRED) {
-      return current
+    const now = Date.now()
+    if (reference === null || !closeEnough(raw, reference)) {
+      reference = raw
+      windowStart = now
     }
-    if (Date.now() - start > timeoutMs) {
+    if (now - windowStart >= STABLE_WINDOW_MS) {
+      return normalizedBoundingBox(raw)
+    }
+    if (now - overallStart > timeoutMs) {
       throw new Error(
         `Target geometry did not settle within settleTimeoutMs (${String(timeoutMs)}ms). ` +
           'Increase RecordOptions.settleTimeoutMs if the page keeps animating intentionally.',
@@ -513,30 +564,40 @@ async function waitForStableBoundingBox(
   }
 }
 
-function sameBoundingBox(a: BoundingBox, b: BoundingBox): boolean {
+function closeEnough(a: BoundingBox, b: BoundingBox): boolean {
   return (
-    a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+    Math.abs(a.x - b.x) < STABLE_EPSILON_PX &&
+    Math.abs(a.y - b.y) < STABLE_EPSILON_PX &&
+    Math.abs(a.width - b.width) < STABLE_EPSILON_PX &&
+    Math.abs(a.height - b.height) < STABLE_EPSILON_PX
   )
 }
 
+/** How far, in px, an edge/corner probe sits inside the visible intersection. */
+const EDGE_PROBE_INSET_PX = 4
+
 /**
- * Clamps the interaction point to the visible intersection of the bbox and
- * the viewport, instead of rejecting a target that's merely bigger than the
- * viewport (a full-height hero, an overlay) — that's normal, and the visible
- * portion is still clickable. Throws only when there's no visible overlap at
- * all. The returned point is strictly inside `[0, width) x [0, height)`: the
- * intersection midpoint can still round onto the boundary pixel for a target
- * flush against an edge, which is not a valid, clickable coordinate.
+ * A small, deterministic set of candidate interaction points inside the
+ * visible bbox/viewport intersection: center first (the common case), then
+ * a point near the middle of each edge, then each corner — inset a few
+ * pixels so a probe doesn't land exactly on a boundary. This is what finds a
+ * clickable sliver when most of the element is covered by something else
+ * (e.g. only the bottom 20px of a 200px-tall element is below a fixed
+ * header): the center alone would land on the header every time. Throws if
+ * the bbox has no visible overlap with the viewport at all.
  */
-function clampInteractionPoint(
+function candidateInteractionPoints(
   bbox: BoundingBox,
   viewport: ViewportSize | null,
-): { x: number; y: number } {
-  const naturalCenter = {
-    x: Math.round(bbox.x + bbox.width / 2),
-    y: Math.round(bbox.y + bbox.height / 2),
+): { x: number; y: number }[] {
+  if (viewport === null) {
+    return [
+      {
+        x: Math.round(bbox.x + bbox.width / 2),
+        y: Math.round(bbox.y + bbox.height / 2),
+      },
+    ]
   }
-  if (viewport === null) return naturalCenter
 
   const left = Math.max(bbox.x, 0)
   const right = Math.min(bbox.x + bbox.width, viewport.width)
@@ -551,16 +612,89 @@ function clampInteractionPoint(
         'into view before interacting.',
     )
   }
-  return {
-    x: Math.min(
-      Math.max(Math.round((left + right) / 2), 0),
-      viewport.width - 1,
-    ),
-    y: Math.min(
-      Math.max(Math.round((top + bottom) / 2), 0),
-      viewport.height - 1,
-    ),
+
+  const inset = Math.min(
+    EDGE_PROBE_INSET_PX,
+    (right - left) / 2,
+    (bottom - top) / 2,
+  )
+  const xs = {
+    left: left + inset,
+    mid: (left + right) / 2,
+    right: right - inset,
   }
+  const ys = {
+    top: top + inset,
+    mid: (top + bottom) / 2,
+    bottom: bottom - inset,
+  }
+  const raw: [number, number][] = [
+    [xs.mid, ys.mid],
+    [xs.mid, ys.top],
+    [xs.mid, ys.bottom],
+    [xs.left, ys.mid],
+    [xs.right, ys.mid],
+    [xs.left, ys.top],
+    [xs.right, ys.top],
+    [xs.left, ys.bottom],
+    [xs.right, ys.bottom],
+  ]
+  const clampToViewport = (x: number, y: number): { x: number; y: number } => ({
+    x: Math.min(Math.max(Math.round(x), 0), viewport.width - 1),
+    y: Math.min(Math.max(Math.round(y), 0), viewport.height - 1),
+  })
+  const points = raw.map(([x, y]) => clampToViewport(x, y))
+  return points.filter(
+    (point, index) =>
+      points.findIndex(
+        (other) => other.x === point.x && other.y === point.y,
+      ) === index,
+  )
+}
+
+/**
+ * Hit-tests a candidate point against the live DOM: does the element that
+ * actually paints at these coordinates right now equal the target or one of
+ * its descendants? This — not the geometry alone — is the ground truth for
+ * "would a real click here land on the target", and it catches occlusion
+ * (something else on top) the same way it catches the target having moved.
+ * The callback contains no named nested function: tsx compiles with
+ * esbuild's `keepNames: true`, which would otherwise wrap it in a
+ * `__name(...)` call that doesn't exist once this source text is serialized
+ * into the page (see tests/tsx-pipeline.test.ts).
+ */
+async function hitsTarget(
+  locator: LocatorLike,
+  point: { x: number; y: number },
+): Promise<boolean> {
+  const result = await locator.evaluate((element, arg) => {
+    const hit = document.elementFromPoint(arg.x, arg.y)
+    return hit !== null && (hit === element || element.contains(hit))
+  }, point)
+  return result === true
+}
+
+/**
+ * Finds the first candidate interaction point that actually hit-tests to the
+ * target, trying center first and falling back through edges and corners.
+ * Throws if the target is occluded at every candidate — a script author
+ * needs to know their interaction was never sent, not get a silent miss.
+ */
+async function findVerifiedInteractionPoint(
+  locator: LocatorLike,
+  bbox: BoundingBox,
+  viewport: ViewportSize | null,
+): Promise<{ x: number; y: number }> {
+  const candidates = candidateInteractionPoints(bbox, viewport)
+  for (const candidate of candidates) {
+    if (await hitsTarget(locator, candidate)) return candidate
+  }
+  throw new Error(
+    `Target bounding box (${String(bbox.x)}, ${String(bbox.y)}, ` +
+      `${String(bbox.width)}x${String(bbox.height)}) is occluded at every ` +
+      'candidate point inside it — something else (an overlay, a sticky ' +
+      'header) is on top. Never logging an unverified interaction.',
+  )
 }
 
 function validateEvent(event: RecordEvent): void {

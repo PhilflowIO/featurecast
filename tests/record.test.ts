@@ -29,11 +29,16 @@ afterEach(async () => {
   )
 })
 
+/** A locator double that always hit-tests as landing on the target. */
+function hittableLocator(boundingBox: ReturnType<typeof vi.fn>) {
+  return { boundingBox, evaluate: vi.fn().mockResolvedValue(true) }
+}
+
 function fakePage(viewport = { height: 720, width: 1280 }) {
   const boundingBox = vi
     .fn()
     .mockResolvedValue({ height: 20, width: 60, x: 100, y: 50 })
-  const locatorValue = { boundingBox }
+  const locatorValue = hittableLocator(boundingBox)
   const locator = vi.fn().mockReturnValue(locatorValue)
   return {
     evaluate: vi.fn().mockResolvedValue(undefined),
@@ -277,11 +282,11 @@ describe('record', () => {
       '#far-right': { height: 20, width: 20, x: 2520, y: 10 },
       '#nearby': { height: 20, width: 20, x: 120, y: 60 },
     }
-    page.locator.mockImplementation((selector: string) => ({
-      boundingBox: vi
-        .fn()
-        .mockResolvedValue(boxes[selector as keyof typeof boxes]),
-    }))
+    page.locator.mockImplementation((selector: string) =>
+      hittableLocator(
+        vi.fn().mockResolvedValue(boxes[selector as keyof typeof boxes]),
+      ),
+    )
 
     for (const seed of [0, 1, 42, 0xffffffff]) {
       await createRecorder(runtimeFor(page))(
@@ -352,9 +357,9 @@ describe('record', () => {
   it('rejects targets that do not resolve to a visible bounding box', async () => {
     const output = await temporaryDirectory()
     const page = fakePage()
-    page.locator.mockReturnValue({
-      boundingBox: vi.fn().mockResolvedValue(null),
-    })
+    page.locator.mockReturnValue(
+      hittableLocator(vi.fn().mockResolvedValue(null)),
+    )
 
     await expect(
       createRecorder(runtimeFor(page))({ out: output }, async (_page, demo) =>
@@ -366,11 +371,11 @@ describe('record', () => {
   it('rejects a target whose bounding box has no visible intersection with the viewport', async () => {
     const output = await temporaryDirectory()
     const page = fakePage({ height: 720, width: 1280 })
-    page.locator.mockReturnValue({
-      boundingBox: vi
-        .fn()
-        .mockResolvedValue({ height: 20, width: 20, x: -1210, y: 640 }),
-    })
+    page.locator.mockReturnValue(
+      hittableLocator(
+        vi.fn().mockResolvedValue({ height: 20, width: 20, x: -1210, y: 640 }),
+      ),
+    )
 
     await expect(
       createRecorder(runtimeFor(page))({ out: output }, async (_page, demo) =>
@@ -384,11 +389,11 @@ describe('record', () => {
     const page = fakePage({ height: 720, width: 1280 })
     // A full-height hero or overlay bigger than the viewport is normal; only
     // 20 of its 100px width is actually on screen (x: -80 to x: 20).
-    page.locator.mockReturnValue({
-      boundingBox: vi
-        .fn()
-        .mockResolvedValue({ height: 40, width: 100, x: -80, y: 100 }),
-    })
+    page.locator.mockReturnValue(
+      hittableLocator(
+        vi.fn().mockResolvedValue({ height: 40, width: 100, x: -80, y: 100 }),
+      ),
+    )
 
     await createRecorder(runtimeFor(page))(
       { out: output },
@@ -415,11 +420,11 @@ describe('record', () => {
     const page = fakePage({ height: 720, width: 1280 })
     // Center of the unclamped bbox would be exactly x=1280 — outside a
     // 1280-wide viewport (valid columns are 0..1279).
-    page.locator.mockReturnValue({
-      boundingBox: vi
-        .fn()
-        .mockResolvedValue({ height: 20, width: 20, x: 1270, y: 100 }),
-    })
+    page.locator.mockReturnValue(
+      hittableLocator(
+        vi.fn().mockResolvedValue({ height: 20, width: 20, x: 1270, y: 100 }),
+      ),
+    )
 
     await createRecorder(runtimeFor(page))(
       { out: output },
@@ -443,7 +448,7 @@ describe('record', () => {
       .mockResolvedValueOnce(moving)
       .mockResolvedValueOnce(moving)
       .mockResolvedValue(settled)
-    page.locator.mockReturnValue({ boundingBox })
+    page.locator.mockReturnValue(hittableLocator(boundingBox))
 
     await createRecorder(runtimeFor(page))(
       { out: output },
@@ -467,13 +472,20 @@ describe('record', () => {
     const output = await temporaryDirectory()
     const page = fakePage()
     let call = 0
-    page.locator.mockReturnValue({
-      boundingBox: vi.fn().mockImplementation(() => {
-        call += 1
-        // Never repeats the same value twice in a row: never settles.
-        return Promise.resolve({ height: 20, width: 60, x: 40, y: 100 + call })
-      }),
-    })
+    page.locator.mockReturnValue(
+      hittableLocator(
+        vi.fn().mockImplementation(() => {
+          call += 1
+          // Never repeats the same value twice in a row: never settles.
+          return Promise.resolve({
+            height: 20,
+            width: 60,
+            x: 40,
+            y: 100 + call,
+          })
+        }),
+      ),
+    )
 
     await expect(
       createRecorder(runtimeFor(page))(
