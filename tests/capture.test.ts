@@ -349,7 +349,7 @@ describe('captureScreencast', () => {
       })
       onFrame({
         data: Buffer.from('second'),
-        // 79ms regression, well beyond the 20ms jitter tolerance.
+        // 79ms regression, well beyond the 50ms jitter tolerance.
         timestamp: 21,
         viewportHeight: 1600,
         viewportWidth: 2560,
@@ -359,7 +359,7 @@ describe('captureScreencast', () => {
 
     await expect(
       captureScreencast(page, outputDirectory, async () => undefined),
-    ).rejects.toThrow('beyond the 20ms jitter tolerance')
+    ).rejects.toThrow('beyond the 50ms jitter tolerance')
     expect(stop).toHaveBeenCalledOnce()
     await expect(access(outputDirectory)).rejects.toThrow()
   })
@@ -379,7 +379,7 @@ describe('captureScreencast', () => {
       })
       onFrame({
         data: Buffer.from('second'),
-        timestamp: 95, // 5ms regression, within the 20ms tolerance.
+        timestamp: 95, // 5ms regression, within the 50ms tolerance.
         viewportHeight: 1600,
         viewportWidth: 2560,
       })

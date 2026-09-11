@@ -65,11 +65,13 @@ type WriterResult = {
 /**
  * Above this, a "decreasing" screencast timestamp is treated as real
  * corruption rather than metadata jitter. Measured directly against
- * hardware-GL capture on this box: observed regressions of 3-9ms across
- * several 2s runs; 20ms matches the existing near-60fps threshold used
- * elsewhere in this codebase.
+ * hardware-GL capture on this box across many runs: regressions of
+ * 3-30.5ms; 50ms keeps a wide margin above the largest observed jitter
+ * while staying orders of magnitude below anything that would indicate
+ * real corruption (a mixed-up session would show a regression of seconds
+ * or more, not tens of milliseconds).
  */
-const MAX_TOLERATED_TIMESTAMP_REGRESSION_MS = 20
+const MAX_TOLERATED_TIMESTAMP_REGRESSION_MS = 50
 
 function frameFileName(index: number): string {
   return `frame-${String(index).padStart(6, '0')}.jpg`
