@@ -5,9 +5,24 @@ import type { Page, Screencast } from 'playwright'
 export const CAPTURE_SIZE = { height: 1600, width: 2560 } as const
 
 /**
+ * JPEG quality Chromium encodes every screencast frame at. Chromium drops,
+ * rather than queues, a frame whose encode does not finish inside the frame
+ * budget, so this is a capture-completeness setting before it is an image
+ * one. Measured on the AI box (RTX 3090, real OnlyDash Tasks view scrolled
+ * at 60 content changes/s, 12s per run, frames written to a bind mount the
+ * way this module does): quality 100 captured 91.2-91.5% of distinct content
+ * changes (698KB mean frame), 95 captured 95.2-95.8% (439KB), 90 captured
+ * 98.2-99.0% (351KB), 85 and 80 captured 98.2-98.7% — and quality 100 also
+ * slowed the wheel driver itself from 59 to 52 events/s. 90 is the highest
+ * quality that captures essentially every painted frame; see
+ * `docs/CAPTURE-CADENCE.md`.
+ */
+export const CAPTURE_QUALITY = 90
+
+/**
  * Upper bound on bytes buffered between the screencast callback and the
  * disk writer (roughly a couple of seconds of backlog for a dense
- * 2560x1600 quality-100 JPEG stream, where individual frames have measured
+ * 2560x1600 JPEG stream, where individual frames have measured
  * up to ~650KB). A writer that cannot keep up with that for longer is
  * broken, not merely slow, and capture must fail loudly rather than grow
  * memory without bound. This is a byte bound rather than a frame-count
@@ -309,8 +324,8 @@ export async function captureScreencast(
     // next CDP screencast frame (playwright-core's `Screencast.onScreencastFrame`
     // races client promises via `Promise.race(asyncResults)`), and it
     // silently discards any error that promise carries
-    // (`result2.catch(() => {})` in the same function). A quality-100 JPEG
-    // write at capture resolution is slow enough to throttle the source to a
+    // (`result2.catch(() => {})` in the same function). A capture-resolution
+    // JPEG write is slow enough to throttle the source to a
     // few frames per second if awaited here, and a validation error thrown
     // inside this callback would simply vanish. Returning nothing (not a
     // promise) makes Playwright ack synchronously instead — see the
@@ -327,7 +342,7 @@ export async function captureScreencast(
           viewportWidth: frame.viewportWidth,
         })
       },
-      quality: 100,
+      quality: CAPTURE_QUALITY,
       size: CAPTURE_SIZE,
     })
     manifest.session.startedAt = now()

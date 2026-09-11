@@ -77,7 +77,9 @@ describe('captureScreencast', () => {
 
     expect(start).toHaveBeenCalledWith(
       expect.objectContaining({
-        quality: 100,
+        // Quality 100 measurably dropped frames on a real dense UI; see
+        // CAPTURE_QUALITY's doc comment in src/capture.ts.
+        quality: 90,
         size: { height: 1600, width: 2560 },
       }),
     )
