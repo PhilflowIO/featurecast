@@ -1,0 +1,22 @@
+node_modules/
+dist/
+out/
+.env
+.env.*
+!.env.example
+
+# Aufnahme-Artefakte: Rohbilder und Videos gehören nicht ins Repo
+frames/
+recordings/
+*.webm
+*.mp4
+*.jpg
+*.png
+!docs/**/*.png
+
+# Angemeldete Sitzungen, Cookies, Browser-Profile — niemals committen.
+# Pauschal sperren, nicht einzelne Unterpfade: Profile legen Cookies in
+# SQLite-Dateien ohne verräterische Endung ab.
+auth/*
+!auth/.gitkeep
+playwright/.auth/
