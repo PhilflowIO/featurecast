@@ -1,4 +1,4 @@
-import type { Page } from 'playwright'
+import type { ElementHandle, Page } from 'playwright'
 
 import type { MotionWindow } from './cadence.js'
 import type { Demo } from './record.js'
@@ -42,92 +42,126 @@ export function resolveM1CaptureArguments(arguments_: readonly string[]): {
 
 type ScrollableMetrics = { current: number; range: number }
 
+/**
+ * Finds the element with the largest actual scroll range on `axis`, among
+ * every `overflow: auto|scroll` element plus the document's own scrolling
+ * element — instead of a hard-coded selector.
+ *
+ * A hard-coded `.MuiDataGrid-virtualScroller` selector was the root cause
+ * of the dead-scroll-pass bug across several earlier rounds of this
+ * benchmark: measured live, that element's own vertical range depends on
+ * MUI's row-virtualization layout timing and was observed anywhere from 2px
+ * (once its layout has settled — indistinguishable, to this benchmark, from
+ * "there is genuinely nothing to scroll") to 500+px (right after a table
+ * switch, before it settles) for the exact same table and viewport. The
+ * element that actually carries the page's real scroll at 2560x1600 turned
+ * out to be the *page's own* scroll container
+ * (`main.flex-1.overflow-auto.min-w-0` in OnlyDash's current layout, not
+ * hard-coded here either, since a future layout change would silently make
+ * that selector wrong too) — this function measures ranges directly instead
+ * of trusting either selector to still be the right one.
+ */
+async function findLargestScrollElement(
+  page: Page,
+  axis: 'x' | 'y',
+): Promise<ElementHandle<Element>> {
+  const handle = await page.evaluateHandle((axisArgument: 'x' | 'y') => {
+    function range(element: Element): number {
+      return axisArgument === 'y'
+        ? element.scrollHeight - element.clientHeight
+        : element.scrollWidth - element.clientWidth
+    }
+    let best: Element = document.scrollingElement ?? document.documentElement
+    let bestRange = range(best)
+    for (const element of document.querySelectorAll('*')) {
+      const style = getComputedStyle(element)
+      const overflow = axisArgument === 'y' ? style.overflowY : style.overflowX
+      if (overflow !== 'auto' && overflow !== 'scroll') continue
+      const elementRange = range(element)
+      if (elementRange > bestRange) {
+        bestRange = elementRange
+        best = element
+      }
+    }
+    return best
+  }, axis)
+  const element = handle.asElement()
+  if (element === null) {
+    throw new Error(
+      `findLargestScrollElement: evaluateHandle did not return an Element for axis ${axis}`,
+    )
+  }
+  return element
+}
+
 /** Measures a scrollable element's remaining range live. */
 async function measureScrollable(
-  page: Page,
-  selector: string,
+  element: ElementHandle<Element>,
   axis: 'x' | 'y',
 ): Promise<ScrollableMetrics> {
-  return page.evaluate(
-    ({ axis: axisArgument, selector: selectorArgument }) => {
-      const element = document.querySelector(selectorArgument)
-      if (!(element instanceof HTMLElement)) {
-        throw new Error(`scrollable element not found: ${selectorArgument}`)
-      }
-      return {
-        current: axisArgument === 'y' ? element.scrollTop : element.scrollLeft,
-        range:
-          axisArgument === 'y'
-            ? element.scrollHeight - element.clientHeight
-            : element.scrollWidth - element.clientWidth,
-      }
-    },
-    { axis, selector },
-  )
+  return element.evaluate((node, axisArgument: 'x' | 'y') => {
+    return {
+      current: axisArgument === 'y' ? node.scrollTop : node.scrollLeft,
+      range:
+        axisArgument === 'y'
+          ? node.scrollHeight - node.clientHeight
+          : node.scrollWidth - node.clientWidth,
+    }
+  }, axis)
 }
 
 /**
- * Positions the mouse over `selector` with a single `boundingBox()` read
- * and jump, instead of `demo.point`'s verified-hit-test-and-settle
- * machinery. That machinery exists for precise click targeting (wait for
- * geometry to stop moving, verify the exact pixel actually hits the
- * element) and is the wrong tool for hovering a scroll container: measured
- * live against `.MuiDataGrid-virtualScroller`, its 80ms-stability window
- * never closed within a 10s `settleTimeoutMs` because MUI's row
- * virtualization keeps recalculating the scroller's own geometry while
- * scrolling — `demo.point` doesn't just fail to help here, it inflates the
- * claimed motion window with several seconds of static waiting BEFORE any
- * real scrolling starts, which is exactly the frozen-motion-window problem
- * this benchmark is supposed to avoid. The cursor is not rendered in the
- * capture (PLAN.md renders it in a later post-processing stage from
- * `events.jsonl`), so an instant jump has no visual cost; only the actual
- * wheel pacing (`demo.scroll`, still 60Hz) needs to go through the wrapper.
- */
-async function hoverContainer(page: Page, selector: string): Promise<void> {
-  const box = await page.locator(selector).boundingBox()
-  if (box === null) {
-    throw new Error(`hoverContainer: ${selector} has no bounding box`)
-  }
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-}
-
-/**
- * Scrolls `selector` toward one edge through the merged `demo.scroll`
- * wrapper (60Hz-paced, `src/record.ts`) instead of a hand-rolled wheel
- * loop: a hand-rolled `await page.waitForTimeout(60)`-per-tick loop
- * measured a 69.79ms median interval on `grid-scroll-right` (1.9% of gaps
- * <=20ms) — ~14fps of visible motion, not smooth scrolling, because each
- * tick paid the real cost of a JS-side timer plus its own event-loop
- * turnaround on top of the nominal 60ms. `demo.scroll` paces against
- * absolute deadlines and lets Chromium coalesce delivery, and is already
- * proven at 60Hz on a 105k-move sweep.
+ * Scrolls the element with the largest live scroll range on `axis` toward
+ * one edge, through the merged `demo.scroll` wrapper (60Hz-paced,
+ * `src/record.ts`) instead of a hand-rolled wheel loop: a hand-rolled
+ * `await page.waitForTimeout(60)`-per-tick loop measured a 69.79ms median
+ * interval on `grid-scroll-right` (1.9% of gaps <=20ms) — ~14fps of visible
+ * motion, not smooth scrolling, because each tick paid the real cost of a
+ * JS-side timer plus its own event-loop turnaround on top of the nominal
+ * 60ms. `demo.scroll` paces against absolute deadlines and lets Chromium
+ * coalesce delivery, and is already proven at 60Hz on a 105k-move sweep.
  *
  * Measures the live scrollable range first (not a fixed delta) and skips
  * (returns false) if it is below `MIN_MEANINGFUL_SCROLL_PX` — real ranges
- * for the sidebar (~26px) and most grids (~2-71px) at this viewport are
- * not worth claiming as motion. Asserts afterward that the position
- * actually changed when it did attempt to scroll.
+ * for the sidebar (~26px) and most grids (~2-71px) at this viewport are not
+ * worth claiming as motion. Asserts afterward that the position actually
+ * changed when it did attempt to scroll.
+ *
+ * Hovers the target with a single `boundingBox()` read and jump, not
+ * `demo.point`'s verified-hit-test-and-settle machinery: `demo.point`'s
+ * 80ms-stability window never closed within a 10s `settleTimeoutMs` against
+ * a MUI grid's virtualized scroller, which keeps recalculating its own
+ * geometry while scrolling — inflating the claimed motion window with
+ * several seconds of static waiting *before* any real scrolling starts, the
+ * exact frozen-motion-window problem this benchmark exists to avoid. The
+ * cursor is not rendered into this capture (PLAN.md renders it later, from
+ * `events.jsonl`), so an instant jump has no visual cost; only the actual
+ * wheel pacing (`demo.scroll`, still 60Hz) needs to go through the wrapper.
  */
 async function scrollContainerToEdge(
   page: Page,
   demo: Demo,
-  selector: string,
   axis: 'x' | 'y',
   direction: 1 | -1,
 ): Promise<boolean> {
-  const { current, range } = await measureScrollable(page, selector, axis)
-  const target = direction > 0 ? range : 0
-  const delta = target - current
+  const target = await findLargestScrollElement(page, axis)
+  const { current, range } = await measureScrollable(target, axis)
+  const scrollTarget = direction > 0 ? range : 0
+  const delta = scrollTarget - current
   if (Math.abs(delta) < MIN_MEANINGFUL_SCROLL_PX) {
     return false
   }
-  await hoverContainer(page, selector)
+  const box = await target.boundingBox()
+  if (box === null) {
+    throw new Error('scrollContainerToEdge: scroll target has no bounding box')
+  }
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
   await demo.scroll(axis === 'x' ? delta : 0, axis === 'y' ? delta : 0)
 
-  const after = await measureScrollable(page, selector, axis)
+  const after = await measureScrollable(target, axis)
   if (after.current === current) {
     throw new Error(
-      `scrollContainerToEdge: ${selector} (${axis}) did not move despite a measured ${String(Math.abs(delta))}px range`,
+      `scrollContainerToEdge: (${axis}) did not move despite a measured ${String(Math.abs(delta))}px range`,
     )
   }
   return true
@@ -351,50 +385,22 @@ export async function runOnlyDashMotion(
       await withMotionWindow(
         windows,
         `${title}:scroll-down:${String(cycle)}`,
-        () =>
-          scrollContainerToEdge(
-            page,
-            demo,
-            '.MuiDataGrid-virtualScroller',
-            'y',
-            1,
-          ),
+        () => scrollContainerToEdge(page, demo, 'y', 1),
       )
       await withMotionWindow(
         windows,
         `${title}:scroll-up:${String(cycle)}`,
-        () =>
-          scrollContainerToEdge(
-            page,
-            demo,
-            '.MuiDataGrid-virtualScroller',
-            'y',
-            -1,
-          ),
+        () => scrollContainerToEdge(page, demo, 'y', -1),
       )
       await withMotionWindow(
         windows,
         `${title}:scroll-right:${String(cycle)}`,
-        () =>
-          scrollContainerToEdge(
-            page,
-            demo,
-            '.MuiDataGrid-virtualScroller',
-            'x',
-            1,
-          ),
+        () => scrollContainerToEdge(page, demo, 'x', 1),
       )
       await withMotionWindow(
         windows,
         `${title}:scroll-left:${String(cycle)}`,
-        () =>
-          scrollContainerToEdge(
-            page,
-            demo,
-            '.MuiDataGrid-virtualScroller',
-            'x',
-            -1,
-          ),
+        () => scrollContainerToEdge(page, demo, 'x', -1),
       )
       // Scrolling is real motion only while the grid's own scroll range
       // stays meaningful, which a live probe found shrinks to ~0 once its

@@ -76,24 +76,38 @@ function createHarness(options: { gridRange?: number } = {}) {
     return genericLocator
   })
 
-  // measureScrollable calls `evaluate(fn, { axis, selector })`;
-  // assertTableIsDense calls `evaluate(fn)` with no second argument. The
-  // presence of that argument is what distinguishes them here.
-  const evaluate = vi
-    .fn()
-    .mockImplementation(
-      async (_function_: unknown, argument?: { axis: 'x' | 'y' }) => {
-        if (argument) {
-          const current = argument.axis === 'x' ? gridCurrentX : gridCurrentY
-          return { current, range: gridRange }
-        }
-        const title = currentUrl.split('/').pop() ?? ''
-        return recordsByPath[title] ?? -1
-      },
-    )
+  // assertTableIsDense is the only caller left of plain `page.evaluate(fn)`
+  // (no arguments) — scroll-target discovery and measurement now go through
+  // `evaluateHandle`/the returned handle's own `.evaluate()` below.
+  const evaluate = vi.fn().mockImplementation(async () => {
+    const title = currentUrl.split('/').pop() ?? ''
+    return recordsByPath[title] ?? -1
+  })
+
+  // `findLargestScrollElement` (page.evaluateHandle) returns a single fake
+  // scroll-target handle regardless of axis, and that handle's own
+  // `.evaluate(fn, axis)` (called by `measureScrollable`) reports
+  // `gridCurrentX`/`gridCurrentY` against the fixed `gridRange` — the same
+  // scriptable state the old direct `page.evaluate(fn, { axis })` mock used,
+  // just reached through the handle now that the real code discovers a
+  // scroll target instead of trusting a hard-coded selector.
+  const scrollElementHandle = {
+    asElement: () => scrollElementHandle,
+    boundingBox: vi
+      .fn()
+      .mockResolvedValue({ height: 800, width: 2000, x: 0, y: 0 }),
+    evaluate: vi
+      .fn()
+      .mockImplementation(async (_function_: unknown, axis: 'x' | 'y') => {
+        const current = axis === 'x' ? gridCurrentX : gridCurrentY
+        return { current, range: gridRange }
+      }),
+  }
+  const evaluateHandle = vi.fn().mockResolvedValue(scrollElementHandle)
 
   const page = {
     evaluate,
+    evaluateHandle,
     getByRole,
     getByText,
     goto: vi.fn().mockResolvedValue(undefined),
