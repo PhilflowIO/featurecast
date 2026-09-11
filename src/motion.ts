@@ -56,17 +56,21 @@ const OVERSHOOT_RAMP_START = 0.55
 
 /** M2's acceptance contract: no two consecutive pointer samples may differ by more. */
 export const MAX_POINTER_STEP_PX = 20
-// Only a starting guess for the sample count — it assumes the minimum-jerk
-// peak-velocity formula applies to the full move, which is wrong on three
-// counts: travel only covers (1 - SETTLE_FRACTION) of progress, the Bézier's
-// parametric speed factor can run above 1x, and overshoot/tremor/rounding add
-// their own per-sample delta near the target. It is deliberately generous so
-// the guarantee loop below rarely has to grow the sample count at all.
-const DURATION_MARGIN = 1.7
+// Deliberately not inflated: the analytic estimate below is only a starting
+// guess (it ignores the settle window, the Bézier's non-uniform parametric
+// speed, and rounding), but the guarantee loop that follows already corrects
+// any shortfall by growing the sample count until the cap actually holds. A
+// margin here would just add latency to every move for a guarantee the loop
+// provides for free — see the property test in tests/motion.test.ts.
 /** Safety valve for the growth loop; never expected to be hit in practice. */
-const MAX_GROWTH_ITERATIONS = 40
-/** Sample-count growth factor used when a rendered curve still breaks the cap. */
-const GROWTH_FACTOR = 1.3
+const MAX_GROWTH_ITERATIONS = 100
+/**
+ * Sample-count growth factor used when a rendered curve still breaks the cap.
+ * Deliberately gentle: a coarse factor overshoots the true minimum sample
+ * count (verified during development: 1.3x landed ~27% above it on a 1500px
+ * move), which directly inflates move duration for no benefit.
+ */
+const GROWTH_FACTOR = 1.08
 
 /**
  * Generates deterministic, human-like pointer samples at the requested fps.
@@ -89,7 +93,7 @@ export function generateMotionPoints(
   let samples = Math.max(
     1,
     naturalSamples,
-    minimumJerkBoundSamples(path.distance, fps),
+    minimumJerkBoundSamples(path.distance),
   )
   let points = renderSamples(path, samples, phase, to)
 
@@ -143,16 +147,19 @@ function maxConsecutiveStep(points: MotionPoint[]): number {
 
 /**
  * Analytic lower bound on sample count: a minimum-jerk profile peaks at 1.875x
- * its average velocity, so an unconstrained duration can blow past the 20px
- * inter-sample cap on long moves. Solve `1.875 * distance / (T * fps) <= target`
- * for the smallest T (in samples) that keeps the peak step under budget. This
- * is a starting estimate for the growth loop above, not the guarantee itself.
+ * its *travel-window* average velocity, and travel only covers
+ * (1 - SETTLE_FRACTION) of total progress (the rest is the overshoot
+ * settle). So the peak real-world speed is
+ * `1.875 * distance / (1 - SETTLE_FRACTION)` per unit of overall progress;
+ * solve for the smallest sample count that keeps that under budget. This is
+ * a starting estimate for the growth loop above, not the guarantee itself —
+ * it still ignores overshoot/tremor/rounding, which the loop corrects for.
  */
-function minimumJerkBoundSamples(distance: number, fps: number): number {
+function minimumJerkBoundSamples(distance: number): number {
   if (distance <= 0) return 1
-  const targetStepPx = MAX_POINTER_STEP_PX / DURATION_MARGIN
-  const boundSeconds = (1.875 * distance) / (targetStepPx * fps)
-  return Math.ceil(boundSeconds * fps)
+  const peakSpeedPerProgress =
+    (1.875 * distance) / (1 - SETTLE_FRACTION) / MAX_POINTER_STEP_PX
+  return Math.ceil(peakSpeedPerProgress)
 }
 
 function createRng(seed: number): () => number {
