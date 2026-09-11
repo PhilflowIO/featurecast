@@ -23,8 +23,13 @@ type TestScreencast = {
   stop: () => Promise<void>
 }
 
-function testPage(screencast: TestScreencast): Page {
-  return { screencast } as unknown as Page
+function testPage(
+  screencast: TestScreencast,
+  close: (options?: { runBeforeUnload?: boolean }) => Promise<void> = vi
+    .fn()
+    .mockResolvedValue(undefined),
+): Page {
+  return { close, screencast } as unknown as Page
 }
 
 async function temporaryDirectory(): Promise<string> {
@@ -143,6 +148,8 @@ describe('captureScreencast', () => {
   it('fails loudly instead of buffering forever when the writer stalls', async () => {
     const outputDirectory = join(await temporaryDirectory(), 'capture')
     const stop = vi.fn().mockResolvedValue(undefined)
+    // Every frame is 7 bytes ('frame-0' .. 'frame-4'); a 15-byte cap allows
+    // two frames (14 bytes) and overflows on the third.
     const start = vi.fn().mockImplementation(async ({ onFrame }) => {
       for (let index = 0; index < 5; index += 1) {
         onFrame({
@@ -163,13 +170,128 @@ describe('captureScreencast', () => {
 
     await expect(
       captureScreencast(page, outputDirectory, async () => undefined, {
-        maxQueuedFrames: 2,
+        maxQueuedBytes: 15,
         writeFrame,
       }),
     ).rejects.toThrow('fell behind')
 
     expect(stop).toHaveBeenCalledOnce()
     await expect(access(outputDirectory)).rejects.toThrow()
+  })
+
+  it('fails loudly instead of hanging forever when a single write stalls', async () => {
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      onFrame({
+        data: Buffer.from('frame'),
+        timestamp: 1,
+        viewportHeight: 1600,
+        viewportWidth: 2560,
+      })
+    })
+    const page = testPage({ start, stop })
+    const writeFrame = vi.fn().mockImplementation(
+      async () =>
+        new Promise<void>(() => {
+          // Never resolves, but never overflows the (default) byte bound
+          // either: only a per-write timeout can catch this.
+        }),
+    )
+
+    await expect(
+      captureScreencast(page, outputDirectory, async () => undefined, {
+        writeFrame,
+        writeFrameTimeoutMs: 20,
+      }),
+    ).rejects.toThrow('did not finish writing')
+
+    expect(stop).toHaveBeenCalledOnce()
+  })
+
+  it('cancels a still-running recording action when the capture pipeline fails', async () => {
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const close = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      for (let index = 0; index < 5; index += 1) {
+        onFrame({
+          data: Buffer.from(`frame-${String(index)}`),
+          timestamp: index + 1,
+          viewportHeight: 1600,
+          viewportWidth: 2560,
+        })
+      }
+    })
+    const page = testPage({ start, stop }, close)
+    const writeFrame = vi.fn().mockImplementation(
+      async () =>
+        new Promise<void>(() => {
+          // Never resolves: the queue overflow below fires first.
+        }),
+    )
+    // record() never settles on its own, standing in for a scripted action
+    // still mid-flight when the capture pipeline aborts.
+    const record = (): Promise<void> => new Promise<void>(() => undefined)
+
+    await expect(
+      captureScreencast(page, outputDirectory, record, {
+        maxQueuedBytes: 15,
+        writeFrame,
+      }),
+    ).rejects.toThrow('fell behind')
+
+    expect(close).toHaveBeenCalledWith({ runBeforeUnload: false })
+  })
+
+  it('does not close the page when the recording action fails on its own', async () => {
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const close = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockResolvedValue(undefined)
+    const page = testPage({ start, stop }, close)
+
+    await expect(
+      captureScreencast(page, outputDirectory, async () => {
+        throw new Error('script failed')
+      }),
+    ).rejects.toThrow('script failed')
+
+    expect(close).not.toHaveBeenCalled()
+  })
+
+  it('ignores a frame delivered after the capture has already closed', async () => {
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    let lateOnFrame:
+      | ((frame: {
+          data: Buffer
+          timestamp: number
+          viewportHeight: number
+          viewportWidth: number
+        }) => unknown)
+      | undefined
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      lateOnFrame = onFrame
+      onFrame({
+        data: Buffer.from('frame'),
+        timestamp: 1,
+        viewportHeight: 1600,
+        viewportWidth: 2560,
+      })
+    })
+    const page = testPage({ start, stop })
+
+    await captureScreencast(page, outputDirectory, async () => undefined)
+
+    expect(() =>
+      lateOnFrame?.({
+        data: Buffer.from('late'),
+        timestamp: 9_999,
+        viewportHeight: 1600,
+        viewportWidth: 2560,
+      }),
+    ).not.toThrow()
   })
 
   it('records session timing around the scripted action', async () => {

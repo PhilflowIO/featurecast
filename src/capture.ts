@@ -5,12 +5,19 @@ import type { Page, Screencast } from 'playwright'
 export const CAPTURE_SIZE = { height: 1600, width: 2560 } as const
 
 /**
- * Upper bound on frames buffered between the screencast callback and the
- * disk writer (roughly four seconds of backlog at 60 fps). A writer that
- * cannot keep up with that for longer is broken, not merely slow, and
- * capture must fail loudly rather than grow memory without bound.
+ * Upper bound on bytes buffered between the screencast callback and the
+ * disk writer (roughly a couple of seconds of backlog for a dense
+ * 2560x1600 quality-100 JPEG stream, where individual frames have measured
+ * up to ~650KB). A writer that cannot keep up with that for longer is
+ * broken, not merely slow, and capture must fail loudly rather than grow
+ * memory without bound. This is a byte bound rather than a frame-count
+ * bound deliberately: a fixed frame count (the previous design) sized for
+ * a light page allows ~700MB of backlog for a dense one, where frames run
+ * tens of times larger.
  */
-const DEFAULT_MAX_QUEUED_FRAMES = 240
+const DEFAULT_MAX_QUEUED_BYTES = 256 * 1024 * 1024
+/** How long a single `writeFrame` call may take before it counts as stalled. */
+const DEFAULT_WRITE_TIMEOUT_MS = 10_000
 
 export type ScreencastFrame = {
   data: Buffer
@@ -20,9 +27,10 @@ export type ScreencastFrame = {
 }
 
 export type CaptureDependencies = {
-  maxQueuedFrames?: number
+  maxQueuedBytes?: number
   now?: () => number
   writeFrame?: (path: string, data: Buffer) => Promise<void>
+  writeFrameTimeoutMs?: number
 }
 
 export type TimestampManifest = {
@@ -51,6 +59,29 @@ function frameFileName(index: number): string {
   return `frame-${String(index).padStart(6, '0')}.jpg`
 }
 
+/** Rejects if `promise` has not settled within `ms`, without abandoning it. */
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(message))
+    }, ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      },
+    )
+  })
+}
+
 type FrameQueue = {
   close: () => void
   drain: () => AsyncGenerator<ScreencastFrame>
@@ -60,16 +91,18 @@ type FrameQueue = {
 }
 
 /**
- * A frame backlog with a bounded depth. `push` is synchronous and never
- * returns a promise, so it is safe to call directly from Playwright's
- * `onFrame` callback: see the comment in `captureScreencast` for why that is
- * the whole point. Once `fail` has fired the queue stops accepting frames,
- * which caps memory growth from a stalled writer instead of buffering
- * forever, and `onFailure` lets a caller race the write pipeline against the
- * scripted recording action for a fast, loud abort.
+ * A frame backlog bounded by total buffered bytes. `push` is synchronous
+ * and never returns a promise, so it is safe to call directly from
+ * Playwright's `onFrame` callback: see the comment in `captureScreencast`
+ * for why that is the whole point. Once `fail` has fired, or once `close`
+ * has been called, the queue stops accepting frames — both cap memory
+ * growth from a stalled writer or a straggling late frame instead of
+ * buffering forever, and `onFailure` lets a caller race the write pipeline
+ * against the scripted recording action for a fast, loud abort.
  */
-function createFrameQueue(maxDepth: number): FrameQueue {
+function createFrameQueue(maxBytes: number): FrameQueue {
   const items: ScreencastFrame[] = []
+  let queuedBytes = 0
   let wake: (() => void) | undefined
   let closed = false
   let failure: Error | undefined
@@ -91,15 +124,16 @@ function createFrameQueue(maxDepth: number): FrameQueue {
   }
 
   function push(frame: ScreencastFrame): void {
-    if (failure) return
-    if (items.length >= maxDepth) {
+    if (failure || closed) return
+    if (queuedBytes + frame.data.length > maxBytes) {
       fail(
         new Error(
-          `Frame writer fell behind capture: ${String(maxDepth)} frames buffered without being written`,
+          `Frame writer fell behind capture: ${String(maxBytes)} bytes buffered without being written`,
         ),
       )
       return
     }
+    queuedBytes += frame.data.length
     items.push(frame)
     wake?.()
     wake = undefined
@@ -116,6 +150,7 @@ function createFrameQueue(maxDepth: number): FrameQueue {
       if (failure) throw failure
       const next = items.shift()
       if (next !== undefined) {
+        queuedBytes -= next.data.length
         yield next
         continue
       }
@@ -140,8 +175,9 @@ export async function captureScreencast(
   const screencast = page.screencast
   const writeFrame = dependencies.writeFrame ?? writeCaptureFrame
   const now = dependencies.now ?? Date.now
-  const maxQueuedFrames =
-    dependencies.maxQueuedFrames ?? DEFAULT_MAX_QUEUED_FRAMES
+  const maxQueuedBytes = dependencies.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES
+  const writeFrameTimeoutMs =
+    dependencies.writeFrameTimeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS
   const manifest: TimestampManifest = {
     captureSize: CAPTURE_SIZE,
     frames: [],
@@ -164,7 +200,7 @@ export async function captureScreencast(
       }
     }
 
-    queue = createFrameQueue(maxQueuedFrames)
+    queue = createFrameQueue(maxQueuedBytes)
     let frameIndex = 0
     let previousTimestamp: number | undefined
     let previousWrittenFrameData: Buffer | undefined
@@ -200,7 +236,11 @@ export async function captureScreencast(
 
         const file = frameFileName(frameIndex)
         frameIndex += 1
-        await writeFrame(join(framesDirectory, file), frame.data)
+        await withTimeout(
+          writeFrame(join(framesDirectory, file), frame.data),
+          writeFrameTimeoutMs,
+          `Frame writer stalled: ${file} did not finish writing within ${String(writeFrameTimeoutMs)}ms`,
+        )
         manifest.frames.push({
           file,
           timestamp: frame.timestamp,
@@ -249,9 +289,27 @@ export async function captureScreencast(
     })
     manifest.session.startedAt = now()
 
-    const recordPromise = record()
+    let recordSettled = false
+    const recordPromise = record().finally(() => {
+      recordSettled = true
+    })
     recordPromise.catch(() => undefined)
-    await Promise.race([recordPromise, queue.onFailure])
+    try {
+      await Promise.race([recordPromise, queue.onFailure])
+    } catch (raceError) {
+      if (!recordSettled) {
+        // The capture pipeline failed (queue overflow, a stalled write, a
+        // non-monotonic timestamp) while the scripted action was still
+        // running. Nothing downstream of this failure is going to use
+        // whatever `record()` does next, so close the page instead of
+        // leaving it to keep clicking, scrolling, and waiting against a
+        // capture that has already been abandoned — every pending
+        // Playwright call in `record()` then rejects promptly instead of
+        // running to completion for no reason.
+        await page.close({ runBeforeUnload: false }).catch(() => undefined)
+      }
+      throw raceError
+    }
 
     manifest.session.endedAt = now()
     manifest.session.duration =
