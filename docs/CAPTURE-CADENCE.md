@@ -369,7 +369,8 @@ passes). Counter-examples E and F remain rejected (`tests/repeats.test.ts`).
 Scroll paint rate rose from 31-35 to ~49 changes/s, and scroll capture is
 essentially complete.
 
-**Open (not proven): the remaining gate gap.** It concentrates in the
+**Open (not proven): the remaining gate gap.** (Mechanism for the first two
+windows found by trace, see "Trace: presented vs captured frames" below.) It concentrates in the
 same windows in every run: `tasks:scroll-right` (15 scroll ticks, 4-5
 frames, no frame for the first ~240ms), `invoices:sort-asc` (16-17 counted
 ticks, 1-3 frames) and `dark-mode-toggle` (0.73-0.85 at q90 vs 0.96 at
@@ -377,6 +378,95 @@ headroom, i.e. real encode loss on a full-page colour transition). The first
 two under-deliver even with encode headroom while Chromium's renderer
 `DrawFrame` trace events count 13-18 draws, and neither reproduced when the
 interaction was run in isolation, so their mechanism is still unknown.
+
+## Trace: presented vs captured frames (added 2026-09-11)
+
+Question: does the gate's denominator (`paint-rate.ts`'s change-signal ticks)
+over-count, i.e. were the missing frames never presented by Chromium, or did
+Chromium present frames the screencast skipped? Answered with a browser-level
+CDP trace across the unchanged product pipeline (`captureScreencast` at
+2560×1600, bind-mount writes, full `runOnlyDashMotion`), serially on GPU1
+(RTX 3090, ANGLE GL, Chromium 153.0.8010.12), nine runs. Per window it
+counts the product's ticks, frames viz actually drew
+(`Display::DrawAndSwap`), frames the viz video capturer took
+(`gpu.capture` `Capture`), frames the capturer refused (`FpsRateLimited`),
+and frames delivered to the manifest. Box scripts:
+`~/featurecast-bench/bisect/presented.ts` (with a per-tick animation logger
+in `presented-t1`), `presented-quality-chain.sh`, `presented-gap.ts`,
+`presented-analyze.py`, `presented-aggregate.py`. Results
+(summary JSON + gzipped trace per run): `~/featurecast-bench/out/<run>.json`
+and `<run>.trace.json.gz`.
+
+| run          | quality | idle after scroll-up | gate (delivered/tick) | delivered/presented | viz captured/presented | `tasks:scroll-right` tick/presented/captured/refused/delivered | `invoices:sort-asc` tick/presented/captured/refused/delivered | `dark-mode-toggle` tick/presented/captured/delivered |
+| ------------ | ------- | -------------------- | --------------------- | ------------------- | ---------------------- | -------------------------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------- |
+| presented-t1 | 90      | 0                    | 0.838                 | 0.810               | 0.912                  | 30/27/10/32/8                                                  | 32/33/4/49/4                                                  | 25/25/25/21                                          |
+| pq-q90-r1    | 90      | 0                    | 0.932                 | 0.910               | 0.980                  | 37/36/15/39/10                                                 | 54/54/54/0/55                                                 | 26/26/26/21                                          |
+| pq-q90-r2    | 90      | 0                    | 0.838                 | 0.821               | 0.914                  | 34/28/12/32/10                                                 | 32/32/4/50/4                                                  | 24/24/24/19                                          |
+| pq-q85-r1    | 85      | 0                    | 0.850                 | 0.823               | 0.923                  | 32/27/11/32/8                                                  | 31/31/3/50/3                                                  | 26/25/25/21                                          |
+| pq-q85-r2    | 85      | 0                    | 0.864                 | 0.824               | 0.913                  | 30/27/11/30/9                                                  | 33/32/4/49/4                                                  | 25/25/25/21                                          |
+| pq-q80-r1    | 80      | 0                    | 0.842                 | 0.824               | 0.926                  | 30/27/10/32/8                                                  | 33/32/4/50/4                                                  | 26/25/25/20                                          |
+| pq-q80-r2    | 80      | 0                    | 0.853                 | 0.823               | 0.917                  | 30/28/10/32/7                                                  | 33/32/4/49/4                                                  | 26/25/25/21                                          |
+| pg-gap400-r1 | 90      | 400ms                | 0.851                 | 0.837               | 0.973                  | 32/28/29/0/25                                                  | 25/28/28/10/17                                                | 26/25/25/20                                          |
+| pg-gap400-r2 | 90      | 400ms                | 0.875                 | 0.860               | 0.970                  | 30/28/28/0/22                                                  | 26/28/29/4/24                                                 | 25/25/25/21                                          |
+
+Window columns sum both cycles. `refused` counts `FpsRateLimited` events for
+both compositor and refresh triggers, so it can exceed `presented`.
+
+**The denominator is not the gap.** Ticks and presented frames agree within
+2-4% over all windows (624 vs 646, 837 vs 857, 628 vs 641) and inside the
+failing windows (e.g. 30 vs 27, 32 vs 33). Chromium _did_ present the frames
+the screencast is missing; switching the gate to presented frames would make
+it stricter (0.81-0.91), not pass. `pq-q90-r1` is not comparable to the other
+runs: OnlyDash's live layout gave it 42 motion windows instead of 38, and its
+invoices sort was not preceded by a long scroll (see mechanism 3).
+
+**Mechanism 3 — capture loss: Chromium's animated-content lock-in.** The
+screencast is fed by viz's `FrameSinkVideoCapturerImpl`, which asks
+`VideoCaptureOracle` before each capture and emits `FpsRateLimited` when it
+says no (`components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.cc:826-838`).
+Once one damage rect has animated for ≥1s at ≥12fps, the oracle's
+`AnimatedContentSampler` locks onto it
+(`media/capture/content/animated_content_sampler.cc:27-38`, `:241-252`) and
+refuses every frame whose damage rect differs (`:100-103`; its decision
+replaces the smooth sampler, `video_capture_oracle.cc:163-176`), until 250ms
+after the locked rect's last damage (`:33`, `:226-227`). The lock-in is on by
+default (`animated_content_sampler.cc:51`), its only switch is the mojo call
+`SetAnimationFpsLockIn`, and neither `devtools_video_consumer.{h,cc}` nor
+`protocol/page_handler.cc` (the screencast path) calls it; no launch flag or
+CDP `Page.startScreencast` parameter that disables it was found. In the benchmark, ~0.9s vertical passes of `main`
+lock the sampler; the horizontal grid scroll right after damages a
+different rect and is refused for its first ~240ms (trace timeline in
+`presented-t1`: `FpsRateLimited` on every presented frame from 70ms to 223ms
+of the window, first capture at 236ms). The invoices sort is preceded by a
+0.7s scroll-up whose lock refuses the tooltip fade the click triggers.
+**Counterfactual:** the same benchmark with 400ms idle after every
+scroll-up (`presented-gap.ts`, runs `pg-gap400-*`) drops refusals in
+`scroll-right` from 30-39 to 0 and in `invoices:sort-asc` from 49-50 to
+4-10; the refusals move into the preceding scroll-up windows (28-31), where
+the idle time now sits. The mechanism is proven causal, and it is a real
+video defect (a horizontal scroll whose first quarter-second is a freeze),
+not a counting artifact.
+
+**Mechanism 4 (open) — frames captured by viz but not in the manifest.**
+Even with the lock released, viz captures 97% of presented frames but only
+84-86% reach the manifest. Candidates, not yet separated:
+DevTools drops a captured frame while more than two are still encoding or
+unacknowledged (`content/browser/devtools/protocol/page_handler.cc:1808-1821`,
+`kMaxScreencastFramesInFlight = 2`), and `captureScreencast` folds
+byte-identical redelivered frames (`src/capture.ts`, 11-42 per session in
+these runs). `dark-mode-toggle` belongs here: viz captured 24-26 of 24-26
+presented frames in every run, 19-21 were delivered.
+
+**Quality does not help either loss.** Quality 85 and 80 delivered 21/21 and
+20/21 dark-mode frames against 21/19/21 at 90, with the same `scroll-right`
+and `invoices:sort-asc` refusals; gate 0.850/0.864 (q85), 0.842/0.853 (q80)
+vs 0.838/0.838 (q90, excluding `pq-q90-r1`). `CAPTURE_QUALITY` stays 90.
+
+**Not verified here:** whether mechanism 4 is the DevTools in-flight limit
+or duplicate folding (needs the raw pre-fold delivery count); these traced
+runs carry tracing overhead and are not acceptance runs (the last
+untraced acceptance is `artifacts/m1-008`); a capture path that bypasses the
+viz oracle (e.g. `HeadlessExperimental.beginFrame` screenshots) is untested.
 
 ## PLAN.md / docs/DEVICES.md divergence (unresolved, flagged for the owner)
 
