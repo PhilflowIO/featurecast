@@ -2,13 +2,26 @@ import { describe, expect, it } from 'vitest'
 
 import { generateMotionPoints, MAX_POINTER_STEP_PX } from '../src/motion.js'
 
-function maxConsecutiveStep(points: { x: number; y: number }[]): number {
+/**
+ * Includes the seam from `from` to the first generated sample — not just
+ * gaps between samples. A prior version of this helper (mirroring a bug in
+ * motion.ts itself) started at index 1 and never checked that seam; tremor
+ * has no fade-in near the start, so it's not automatically safe to skip.
+ * Every `from` used below doubles as a stand-in for wherever a corrective
+ * stretch (src/record.ts's arrival-time re-verification) would actually
+ * start from — an arbitrary current position, not always the previous
+ * move's declared endpoint.
+ */
+function maxConsecutiveStep(
+  from: { x: number; y: number },
+  points: { x: number; y: number }[],
+): number {
   let max = 0
-  for (let index = 1; index < points.length; index += 1) {
-    const previous = points[index - 1]!
-    const current = points[index]!
+  let previous = from
+  for (const current of points) {
     const step = Math.hypot(current.x - previous.x, current.y - previous.y)
     if (step > max) max = step
+    previous = current
   }
   return max
 }
@@ -62,7 +75,7 @@ describe('generateMotionPoints', () => {
         for (const seed of seeds) {
           const points = generateMotionPoints(from, to, seed, 60)
           checked += 1
-          expect(maxConsecutiveStep(points)).toBeLessThanOrEqual(
+          expect(maxConsecutiveStep(from, points)).toBeLessThanOrEqual(
             MAX_POINTER_STEP_PX,
           )
         }
@@ -82,12 +95,10 @@ describe('generateMotionPoints', () => {
   })
 
   it('reproduces the reported seed 18032 case within the cap', () => {
-    const points = generateMotionPoints(
-      { x: 0, y: 0 },
-      { x: 400, y: 150 },
-      18032,
-      60,
+    const from = { x: 0, y: 0 }
+    const points = generateMotionPoints(from, { x: 400, y: 150 }, 18032, 60)
+    expect(maxConsecutiveStep(from, points)).toBeLessThanOrEqual(
+      MAX_POINTER_STEP_PX,
     )
-    expect(maxConsecutiveStep(points)).toBeLessThanOrEqual(MAX_POINTER_STEP_PX)
   })
 })

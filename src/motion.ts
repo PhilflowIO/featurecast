@@ -99,14 +99,14 @@ export function generateMotionPoints(
 
   let guard = 0
   while (
-    maxConsecutiveStep(points) > MAX_POINTER_STEP_PX &&
+    maxConsecutiveStep(points, from) > MAX_POINTER_STEP_PX &&
     guard < MAX_GROWTH_ITERATIONS
   ) {
     samples = Math.ceil(samples * GROWTH_FACTOR) + 1
     points = renderSamples(path, samples, phase, to)
     guard += 1
   }
-  if (maxConsecutiveStep(points) > MAX_POINTER_STEP_PX) {
+  if (maxConsecutiveStep(points, from) > MAX_POINTER_STEP_PX) {
     throw new Error(
       `Unable to keep pointer motion under ${MAX_POINTER_STEP_PX}px per ` +
         `sample after ${String(guard)} growth iterations (distance ` +
@@ -134,13 +134,22 @@ function renderSamples(
   return points
 }
 
-function maxConsecutiveStep(points: MotionPoint[]): number {
+/**
+ * Max step across the *whole* rendered sequence, including the seam from the
+ * real starting point to the first generated sample. That seam is easy to
+ * miss (an earlier version of this function started at index 1 and only
+ * ever compared samples against each other) — the pointer's actual first
+ * hop, from wherever it currently is, is just as real a jump as any two
+ * samples later in the curve, and tremor has no fade-in near the start to
+ * make it safe to skip.
+ */
+function maxConsecutiveStep(points: MotionPoint[], from: MotionPoint): number {
   let max = 0
-  for (let index = 1; index < points.length; index += 1) {
-    const previous = points[index - 1]!
-    const current = points[index]!
+  let previous = from
+  for (const current of points) {
     const step = Math.hypot(current.x - previous.x, current.y - previous.y)
     if (step > max) max = step
+    previous = current
   }
   return max
 }
