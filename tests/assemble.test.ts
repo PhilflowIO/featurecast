@@ -117,7 +117,7 @@ describe('buildFfmpegArguments', () => {
       '-i',
       '/tmp/capture/timeline.ffconcat',
       '-vf',
-      'crop=2560:1440:0:80,scale=1920:1080:flags=lanczos:in_range=full:out_range=tv,fps=60,format=yuv420p',
+      'crop=2560:1440:0:0,scale=1920:1080:flags=lanczos:in_range=full:out_range=tv,fps=60,format=yuv420p',
       '-c:v',
       'libx264',
       '-pix_fmt',

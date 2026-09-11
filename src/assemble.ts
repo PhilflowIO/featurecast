@@ -121,7 +121,19 @@ export function buildFfmpegArguments(
     // black and white points. `in_range=full:out_range=tv` on the scale
     // filter does the actual remap; `-color_range tv` below makes the
     // container metadata match what the pixels now are.
-    `crop=2560:1440:0:80,scale=${OUTPUT_SIZE.width}:${OUTPUT_SIZE.height}:flags=lanczos:in_range=full:out_range=tv,fps=${FRAME_RATE},format=yuv420p`,
+    //
+    // The crop is anchored to the top (`0:0`), not centered (`0:80`): a
+    // centered crop on a 2560x1600 capture removes 80px off both the top
+    // and bottom, and most web app chrome (nav bars, in-content toolbars)
+    // sits right at the top of the viewport — a centered crop sliced
+    // straight through OnlyDash's grid toolbar row. Trimming only the
+    // bottom 160px keeps whatever sits at y=0 fully intact. This assumes
+    // app chrome lives at the top, which holds for OnlyDash and is a
+    // reasonable default for arbitrary target apps, but is not universal;
+    // PLAN.md's 2560x1600-with-1.33x-zoom-reserve default and
+    // docs/DEVICES.md's already-16:9 2560x1440 desktop preset disagree on
+    // whether to over-capture and crop at all — see docs/CAPTURE-CADENCE.md.
+    `crop=2560:1440:0:0,scale=${OUTPUT_SIZE.width}:${OUTPUT_SIZE.height}:flags=lanczos:in_range=full:out_range=tv,fps=${FRAME_RATE},format=yuv420p`,
     '-c:v',
     'libx264',
     '-pix_fmt',
