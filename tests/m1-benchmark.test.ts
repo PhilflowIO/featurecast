@@ -49,10 +49,12 @@ function createHarness(options: { gridRange?: number } = {}) {
     .fn()
     .mockImplementation((role: string, options_?: { name?: string }) => {
       roleCalls.push({ name: options_?.name, role })
-      return {
+      const roleLocator = {
         click: vi.fn().mockResolvedValue(undefined),
+        first: () => roleLocator,
         waitFor: vi.fn().mockResolvedValue(undefined),
       }
+      return roleLocator
     })
   const getByText = vi.fn().mockReturnValue(loadingLocator)
   // `switchToTable` and the dark-mode/expand-owner/search-box clicks all go

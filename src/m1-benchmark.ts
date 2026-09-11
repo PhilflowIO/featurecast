@@ -21,8 +21,13 @@ const DEFAULT_OUTPUT_DIRECTORY = 'artifacts/m1-capture'
 const DENSE_TABLES = ['tasks', 'invoices', 'users', 'expenses'] as const
 const MIN_TABLE_RECORDS = 10
 
-/** Below this, a scroll is not worth claiming as a motion window (see `scrollContainerToEdge`). */
-const MIN_MEANINGFUL_SCROLL_PX = 200
+/**
+ * Below this, a scroll is not worth claiming as a motion window (see
+ * `scrollContainerToEdge`). 150, not 200: measured live, `tasks`'
+ * horizontal range is 180px — real, visible column-scroll — and a 200px
+ * floor made that scroll unreachable for no reason.
+ */
+const MIN_MEANINGFUL_SCROLL_PX = 150
 
 export function resolveM1CaptureArguments(arguments_: readonly string[]): {
   outputDirectory: string
@@ -156,6 +161,33 @@ async function waitForLoadingToClear(page: Page): Promise<void> {
     .first()
     .waitFor({ state: 'hidden', timeout: 2_000 })
     .catch(() => undefined)
+}
+
+/**
+ * Re-sorts the grid by clicking its first column header twice (ascending,
+ * then descending) — a guaranteed row-reorder, independent of scroll
+ * range. Added after a live probe found the grid's scroller grows to fit
+ * all rows once the layout settles (`tasks`: 517px vertical range on
+ * first visit, 2px on a second visit to the same table — the container
+ * itself, not `demo.scroll` or the measurement, since a fresh measurement
+ * runs every time). Scrolling is real motion when it is available (mostly
+ * the first visit to a table); sorting is real motion always, so a later
+ * cycle is not just a sequence of static holds once scroll range runs out.
+ */
+async function sortFirstColumn(
+  windows: MotionWindow[],
+  page: Page,
+  label: string,
+): Promise<void> {
+  const header = page.getByRole('columnheader').first()
+  await withMotionWindow(windows, `${label}:sort-asc`, async () => {
+    await header.click()
+    await page.waitForTimeout(400)
+  })
+  await withMotionWindow(windows, `${label}:sort-desc`, async () => {
+    await header.click()
+    await page.waitForTimeout(400)
+  })
 }
 
 /**
@@ -304,6 +336,7 @@ export async function runOnlyDashMotion(
   })
 
   for (const cycle of [1, 2]) {
+    const windowsBeforeCycle = windows.length
     for (const title of DENSE_TABLES) {
       await switchToTable(
         windows,
@@ -313,9 +346,7 @@ export async function runOnlyDashMotion(
       )
       // Not part of any asserted motion window: this is dwell time so a
       // viewer actually sees the newly-loaded dense table, not scripted
-      // "motion" — the frozen-share budget stays generous (measured 4.9%
-      // of motion-window time on a real run) precisely because this time
-      // isn't claimed against it.
+      // "motion".
       await page.waitForTimeout(700)
       await withMotionWindow(
         windows,
@@ -365,7 +396,20 @@ export async function runOnlyDashMotion(
             -1,
           ),
       )
+      // Scrolling is real motion only while the grid's own scroll range
+      // stays meaningful, which a live probe found shrinks to ~0 once its
+      // layout settles on a repeat visit — not a scroll or measurement
+      // bug, a real property of this content. Sorting is unconditional
+      // motion regardless of scroll range, so a later cycle keeps
+      // producing real, visible change instead of running out of
+      // choreography into a sequence of static holds.
+      await sortFirstColumn(windows, page, `${title}:${String(cycle)}`)
       await page.waitForTimeout(300)
+    }
+    if (windows.length === windowsBeforeCycle) {
+      throw new Error(
+        `runOnlyDashMotion: cycle ${String(cycle)} produced no motion windows at all across ${DENSE_TABLES.join(', ')}`,
+      )
     }
   }
 
