@@ -11,11 +11,6 @@ import {
   type MotionWindow,
 } from '../src/cadence.js'
 import {
-  computeMotionQuality,
-  detectFreezes,
-  validateMotionQuality,
-} from '../src/freeze.js'
-import {
   resolveM1CaptureArguments,
   runOnlyDashMotion,
   warmUpOnlyDash,
@@ -26,6 +21,12 @@ import {
   type RecordPage,
   type RecordRuntime,
 } from '../src/record.js'
+import {
+  computeRepeatedFrameReport,
+  mapOutputFramesToSource,
+  parseTimelineSpans,
+  validateRepeatedFrameReport,
+} from '../src/repeats.js'
 import {
   assertHardwareRenderer,
   detectRenderer,
@@ -111,12 +112,22 @@ try {
   await probeOutput(`${outputDirectory}/output.mp4`, durationSeconds)
 
   // Content-based acceptance gate: ffprobe and adjacent-source-frame
-  // hashing cannot tell 30s of motion from an 11s slideshow padded out to
-  // the right duration. freezedetect can, and computeMotionQuality judges
-  // aggregate frozen share instead of any single window's overlap against
-  // a fixed tolerance (see freeze.ts's doc comment for why a per-window
-  // check cannot fail a slideshow shaped as many short windows).
-  const freezes = await detectFreezes(`${outputDirectory}/output.mp4`)
+  // hashing cannot tell 30s of motion from an 11s slideshow padded to the
+  // right duration. ffmpeg's freezedetect (the previous version of this
+  // gate) cannot either, above a certain grain: it requires >=1s of no
+  // change to register anything, so a video that changes content once per
+  // second sails through regardless of how static each of those seconds
+  // is. `repeats.ts` instead maps every 60fps output frame to its source
+  // frame via the exact `timeline.ffconcat` ffmpeg was fed — exact, not a
+  // perceptual approximation, and with no minimum-duration floor — and
+  // judges the share of output frames that are exact repeats.
+  const timelineText = await readFile(
+    `${outputDirectory}/timeline.ffconcat`,
+    'utf8',
+  )
+  const sourceIndexPerOutputFrame = mapOutputFramesToSource(
+    parseTimelineSpans(timelineText),
+  )
   const motionWindowsSeconds = motionWindows.map((window) => ({
     end: (window.end - manifest.session.startedAt) / 1000,
     label: window.label,
@@ -126,25 +137,25 @@ try {
     manifest,
     motionWindows,
   )
-  const motionQuality = computeMotionQuality(
-    freezes,
+  const repeatedFrameReport = computeRepeatedFrameReport(
+    sourceIndexPerOutputFrame,
     motionWindowsSeconds,
-    durationSeconds,
   )
   await writeFile(
     `${outputDirectory}/motion-windows.json`,
     `${JSON.stringify(
-      { freezes, motionQuality, windows: motionWindowCadence },
+      { repeatedFrameReport, windows: motionWindowCadence },
       null,
       2,
     )}\n`,
   )
   console.log(
-    `motion windows: ${String(motionWindowCadence.length)}, freezes detected: ${String(freezes.length)}, ` +
-      `frozen share of motion windows: ${(motionQuality.frozenShareOfMotionWindows * 100).toFixed(1)}%, ` +
-      `frozen share of run: ${(motionQuality.totalFrozenShareOfRun * 100).toFixed(1)}%`,
+    `motion windows: ${String(motionWindowCadence.length)}, ` +
+      `repeated share inside motion windows: ${(repeatedFrameReport.motionWindowRepeatedShare * 100).toFixed(1)}%, ` +
+      `repeated share of scroll windows: ${(repeatedFrameReport.scrollWindowRepeatedShare * 100).toFixed(1)}%, ` +
+      `repeated share of whole run: ${(repeatedFrameReport.overallRepeatedShare * 100).toFixed(1)}%`,
   )
-  validateMotionQuality(motionQuality)
+  validateRepeatedFrameReport(repeatedFrameReport)
 
   await context.close()
 } finally {
