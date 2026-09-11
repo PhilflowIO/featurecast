@@ -185,7 +185,16 @@ describe('record', () => {
     })
     expect(page.mouse.click).toHaveBeenCalledWith(130, 60)
     expect(page.touchscreen.tap).toHaveBeenCalledWith(130, 60)
-    expect(page.mouse.wheel).toHaveBeenCalledWith(10, 20)
+    // The eased, distance-over-time scroll (issue #15) may now split a
+    // small scroll across more than one 60Hz wheel increment — asserting
+    // on the summed deltas rather than a single call keeps this test
+    // agnostic to that internal step count while still proving the wrapper
+    // dispatches exactly the requested total scroll distance.
+    const wheelCalls = vi.mocked(page.mouse.wheel).mock.calls
+    const totalWheelX = wheelCalls.reduce((sum, [dx]) => sum + dx, 0)
+    const totalWheelY = wheelCalls.reduce((sum, [, dy]) => sum + dy, 0)
+    expect(totalWheelX).toBeCloseTo(10, 9)
+    expect(totalWheelY).toBeCloseTo(20, 9)
   })
 
   it('moves the pointer to the viewport center before the first interaction', async () => {
