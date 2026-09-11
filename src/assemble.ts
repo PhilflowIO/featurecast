@@ -16,7 +16,25 @@ export type AssembleResult = {
   durationSeconds: number
 }
 
-function frameDurationsSeconds(frames: TimestampManifest['frames']): number[] {
+/**
+ * Duration attributed to each source frame in the ffconcat timeline, i.e.
+ * how long it stays on screen before the next frame (or session end)
+ * replaces it.
+ *
+ * `durations[0]` is anchored to `session.startedAt`, not to
+ * `frames[0].timestamp`: the first frame typically arrives some
+ * milliseconds after capture starts (nothing was paintable yet), and that
+ * gap has to be credited to frame 0's dwell time — it is the only image
+ * available for it. The previous version left this gap out of every
+ * frame's duration entirely, so `finalDuration` (session span minus the sum
+ * of inter-frame gaps) silently absorbed it onto the *last* frame instead,
+ * i.e. the very first frame played too briefly and the tail played too
+ * long by the same amount.
+ */
+function frameDurationsSeconds(
+  frames: TimestampManifest['frames'],
+  session: TimestampManifest['session'],
+): number[] {
   const durations: number[] = []
   for (let index = 1; index < frames.length; index += 1) {
     const current = frames[index]
@@ -24,7 +42,8 @@ function frameDurationsSeconds(frames: TimestampManifest['frames']): number[] {
     if (current === undefined || previous === undefined) {
       throw new Error('unreachable: manifest frame array index out of bounds')
     }
-    durations.push((current.timestamp - previous.timestamp) / 1000)
+    const previousStart = index === 1 ? session.startedAt : previous.timestamp
+    durations.push((current.timestamp - previousStart) / 1000)
   }
   return durations
 }
@@ -39,13 +58,23 @@ function frameDurationsSeconds(frames: TimestampManifest['frames']): number[] {
  * `--out`) would otherwise get prefixed twice, e.g. `capture/frames/x.jpg`
  * listed from inside `capture/timeline.ffconcat` resolves to
  * `capture/capture/frames/x.jpg` and ffmpeg fails to open it.
+ *
+ * Each `file` entry also carries `option framerate 1000`. Without it the
+ * mjpeg demuxer assumes 25 fps for every segment regardless of our
+ * `duration` directive, quantizing frame boundaries to 40 ms ticks before
+ * `fps=60` resamples them — reproduced with a synthetic 20-frame probe
+ * (`/tmp 20250911 m1-verify/synth-probe.ts`): 8 of 20 source frames lost,
+ * 12 of 36 output frames showing the wrong source frame, up to 110.7 ms of
+ * content error. `option framerate 1000` gives each segment a 1 ms
+ * timebase, fine enough for our millisecond-resolution durations; the same
+ * probe with it applied shows 0 lost frames and 0 mismatches.
  */
 export function buildCaptureTimeline(
   framesDirectory: string,
   manifest: TimestampManifest,
 ): string {
   validateCaptureManifest(manifest)
-  const durations = frameDurationsSeconds(manifest.frames)
+  const durations = frameDurationsSeconds(manifest.frames, manifest.session)
   const elapsed = durations.reduce((total, duration) => total + duration, 0)
   const finalDuration = Math.max(0, manifest.session.duration / 1000 - elapsed)
   const lines = ['ffconcat version 1.0']
@@ -57,20 +86,24 @@ export function buildCaptureTimeline(
     resolve(join(framesDirectory, file)).replaceAll("'", "'\\\\''")
 
   for (const [index, frame] of manifest.frames.entries()) {
-    lines.push(`file '${framePath(frame.file)}'`)
+    lines.push(`file '${framePath(frame.file)}'`, 'option framerate 1000')
     const duration = durations[index] ?? finalDuration
     if (duration > 0) {
       lines.push(`duration ${duration}`)
     }
   }
-  // The concat demuxer uses the final file's duration only when it is repeated.
-  lines.push(`file '${framePath(lastFrame.file)}'`)
+  // The concat demuxer uses the final file's duration only when it is
+  // repeated; `-t` on the ffmpeg command (not this repeat) is what actually
+  // bounds the output, since this repeated entry has no `duration` of its
+  // own and would otherwise let ffmpeg read a few extra frames past the end.
+  lines.push(`file '${framePath(lastFrame.file)}'`, 'option framerate 1000')
   return `${lines.join('\n')}\n`
 }
 
 export function buildFfmpegArguments(
   timelinePath: string,
   outputPath: string,
+  durationSeconds: number,
 ): string[] {
   return [
     '-hide_banner',
@@ -82,13 +115,27 @@ export function buildFfmpegArguments(
     '-i',
     timelinePath,
     '-vf',
-    `crop=2560:1440:0:80,scale=${OUTPUT_SIZE.width}:${OUTPUT_SIZE.height}:flags=lanczos,fps=${FRAME_RATE}`,
+    // mjpeg decodes full-range (yuvj420p/pc); `-pix_fmt yuv420p` alone only
+    // relabels the pixel format without remapping levels, so playback that
+    // assumes yuv420p's usual limited (tv) range reads crushed/washed-out
+    // black and white points. `in_range=full:out_range=tv` on the scale
+    // filter does the actual remap; `-color_range tv` below makes the
+    // container metadata match what the pixels now are.
+    `crop=2560:1440:0:80,scale=${OUTPUT_SIZE.width}:${OUTPUT_SIZE.height}:flags=lanczos:in_range=full:out_range=tv,fps=${FRAME_RATE},format=yuv420p`,
     '-c:v',
     'libx264',
     '-pix_fmt',
     'yuv420p',
+    '-color_range',
+    'tv',
     '-r',
     String(FRAME_RATE),
+    // Bounds the encoded output to the manifest's own span. The ffconcat
+    // demuxer's repeated trailing `file` line (needed so the true last
+    // frame's `duration` is honored) otherwise lets ffmpeg read a few extra
+    // frames past the intended end (measured: +3 frames without `-t`).
+    '-t',
+    String(durationSeconds),
     outputPath,
   ]
 }
@@ -108,8 +155,12 @@ export async function assembleScreencast(
     buildCaptureTimeline(join(captureDirectory, 'frames'), manifest),
     { flag: 'wx' },
   )
-  await runner('ffmpeg', buildFfmpegArguments(timelinePath, outputPath))
-  return { durationSeconds: manifest.session.duration / 1000 }
+  const durationSeconds = manifest.session.duration / 1000
+  await runner(
+    'ffmpeg',
+    buildFfmpegArguments(timelinePath, outputPath, durationSeconds),
+  )
+  return { durationSeconds }
 }
 
 function runCommand(

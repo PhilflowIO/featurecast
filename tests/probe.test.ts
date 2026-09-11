@@ -88,6 +88,46 @@ describe('validateOutputProbe', () => {
     ).toThrow('must report a stream duration')
   })
 
+  it('rejects a duration off by more than one frame at 60fps', () => {
+    expect(() =>
+      validateOutputProbe(
+        {
+          streams: [
+            {
+              avg_frame_rate: '60/1',
+              duration: '20.05',
+              height: 1080,
+              nb_frames: '1200',
+              r_frame_rate: '60/1',
+              width: 1920,
+            },
+          ],
+        },
+        20,
+      ),
+    ).toThrow('does not match the 20s capture span')
+  })
+
+  it('accepts a duration within one frame at 60fps', () => {
+    expect(() =>
+      validateOutputProbe(
+        {
+          streams: [
+            {
+              avg_frame_rate: '60/1',
+              duration: '20.0166',
+              height: 1080,
+              nb_frames: '1201',
+              r_frame_rate: '60/1',
+              width: 1920,
+            },
+          ],
+        },
+        20,
+      ),
+    ).not.toThrow()
+  })
+
   it('rejects a non-positive frame count', () => {
     expect(() =>
       validateOutputProbe(

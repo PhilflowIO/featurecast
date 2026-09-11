@@ -91,11 +91,21 @@ describe('computeSourceCadence', () => {
     const report = computeSourceCadence(manifestWithTimestamps([1]))
 
     expect(report).toEqual({
+      droppedDuplicateFrameCount: 0,
       frameCount: 1,
       medianIntervalMs: 0,
       p95IntervalMs: 0,
       shareUnderTwentyMs: 0,
     })
+  })
+
+  it('records the caller-supplied dropped-duplicate-frame count', () => {
+    const report = computeSourceCadence(
+      manifestWithTimestamps([0, 16.667, 33.334]),
+      5,
+    )
+
+    expect(report.droppedDuplicateFrameCount).toBe(5)
   })
 })
 

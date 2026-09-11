@@ -5,21 +5,20 @@ import { FRAME_RATE } from './assemble.js'
 /**
  * Tolerance for the assembled video's reported duration versus the
  * manifest span, and for its frame count versus `duration * FRAME_RATE`.
- * Both are `max(floor, expected * relative)`. This is deliberately not a
- * couple of milliseconds: the ffconcat `duration` directive is quantized by
- * the mjpeg demuxer's default 25 fps timebase before `fps=60` resamples it
- * (ffmpeg logs "25 fps, 25 tbr, 25 tbn" for the concat input regardless of
- * the per-file durations we write), so some drift between the requested and
- * assembled duration is expected, not a bug. Measured on a real ~24.6 s,
- * 188-source-frame OnlyDash capture: 7 extra output frames (0.123 s, 0.5%
- * relative). A 2% relative tolerance still fails hard on real regressions —
- * the bug this gate replaced produced an 83 ms clip against a 20 s span, off
- * by orders of magnitude more than 2%.
+ *
+ * A 2% relative tolerance used to live here to absorb drift from the
+ * mjpeg demuxer's default 25 fps timebase quantizing our ffconcat
+ * `duration` directives. That quantization is now fixed at the source
+ * (`option framerate 1000` per entry in `buildCaptureTimeline`, plus `-t`
+ * bounding the encoded output in `buildFfmpegArguments`) — a synthetic
+ * 20-frame probe with both applied shows 0 lost frames and 0 mismatches,
+ * so a ±1-frame tolerance is tight enough without hiding the class of bug
+ * a looser one would: a demuxer/timebase regression that drops or
+ * duplicates real source frames while still landing within a percentage
+ * window of the total duration.
  */
-const DURATION_TOLERANCE_FLOOR_SECONDS = 0.15
-const DURATION_TOLERANCE_RELATIVE = 0.02
-const FRAME_COUNT_TOLERANCE_FLOOR = 2
-const FRAME_COUNT_TOLERANCE_RELATIVE = 0.02
+const DURATION_TOLERANCE_SECONDS = 1 / FRAME_RATE
+const FRAME_COUNT_TOLERANCE = 1
 
 export type CommandOutputRunner = (
   command: string,
@@ -84,22 +83,17 @@ export function validateOutputProbe(
   if (!Number.isFinite(durationSeconds)) {
     throw new Error('Output probe must report a numeric stream duration')
   }
-  const durationTolerance = Math.max(
-    DURATION_TOLERANCE_FLOOR_SECONDS,
-    expectedDurationSeconds * DURATION_TOLERANCE_RELATIVE,
-  )
-  if (Math.abs(durationSeconds - expectedDurationSeconds) > durationTolerance) {
+  if (
+    Math.abs(durationSeconds - expectedDurationSeconds) >
+    DURATION_TOLERANCE_SECONDS
+  ) {
     throw new Error(
-      `Output duration ${String(durationSeconds)}s does not match the ${String(expectedDurationSeconds)}s capture span within ${String(durationTolerance)}s`,
+      `Output duration ${String(durationSeconds)}s does not match the ${String(expectedDurationSeconds)}s capture span within ${String(DURATION_TOLERANCE_SECONDS)}s`,
     )
   }
   const nbFrames = Number(stream.nb_frames)
   const expectedFrames = Math.round(expectedDurationSeconds * FRAME_RATE)
-  const frameCountTolerance = Math.max(
-    FRAME_COUNT_TOLERANCE_FLOOR,
-    Math.round(expectedFrames * FRAME_COUNT_TOLERANCE_RELATIVE),
-  )
-  if (Math.abs(nbFrames - expectedFrames) > frameCountTolerance) {
+  if (Math.abs(nbFrames - expectedFrames) > FRAME_COUNT_TOLERANCE) {
     throw new Error(
       `Output frame count ${String(nbFrames)} does not match the ${String(expectedFrames)} frames expected for a constant ${String(FRAME_RATE)} fps encode of ${String(expectedDurationSeconds)}s`,
     )

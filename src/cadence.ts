@@ -7,13 +7,28 @@ import type { TimestampManifest } from './capture.js'
 const STATIC_INTERVAL_THRESHOLD_MS = 20
 
 export type SourceCadenceReport = {
+  /**
+   * Byte-identical redelivered source frames `captureScreencast` folded
+   * into the previous frame's duration instead of writing to disk (see
+   * `capture.ts`). Recorded here because `validateNoDuplicateAdjacentFrames`
+   * below can no longer observe them by design — it only ever sees the
+   * frames that survived deduplication, so without this field the drop
+   * count would be invisible.
+   */
+  droppedDuplicateFrameCount: number
   frameCount: number
   medianIntervalMs: number
   p95IntervalMs: number
   shareUnderTwentyMs: number
 }
 
-/** Rejects an adjacent pair of source JPEGs with identical SHA-256 hashes. */
+/**
+ * Rejects an adjacent pair of source JPEGs with identical SHA-256 hashes.
+ * This is a post-condition safety net, not the primary defense: real
+ * deduplication happens in `captureScreencast`'s writer before a frame ever
+ * reaches disk (see `droppedDuplicateFrameCount` above), so this should
+ * always pass on output from a working capture.
+ */
 export async function validateNoDuplicateAdjacentFrames(
   framesDirectory: string,
 ): Promise<void> {
@@ -58,6 +73,7 @@ function percentile(sorted: readonly number[], fraction: number): number {
  */
 export function computeSourceCadence(
   manifest: TimestampManifest,
+  droppedDuplicateFrameCount = 0,
 ): SourceCadenceReport {
   const intervals: number[] = []
   for (let index = 1; index < manifest.frames.length; index += 1) {
@@ -71,6 +87,7 @@ export function computeSourceCadence(
 
   if (intervals.length === 0) {
     return {
+      droppedDuplicateFrameCount,
       frameCount: manifest.frames.length,
       medianIntervalMs: 0,
       p95IntervalMs: 0,
@@ -84,6 +101,7 @@ export function computeSourceCadence(
       .length / intervals.length
 
   return {
+    droppedDuplicateFrameCount,
     frameCount: manifest.frames.length,
     medianIntervalMs: percentile(sorted, 0.5),
     p95IntervalMs: percentile(sorted, 0.95),
@@ -95,8 +113,9 @@ export function computeSourceCadence(
 export async function writeCaptureStats(
   captureDirectory: string,
   manifest: TimestampManifest,
+  droppedDuplicateFrameCount = 0,
 ): Promise<SourceCadenceReport> {
-  const cadence = computeSourceCadence(manifest)
+  const cadence = computeSourceCadence(manifest, droppedDuplicateFrameCount)
   await writeFile(
     join(captureDirectory, 'capture-stats.json'),
     `${JSON.stringify(cadence, null, 2)}\n`,

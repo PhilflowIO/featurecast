@@ -27,24 +27,27 @@ afterEach(async () => {
 })
 
 describe('buildCaptureTimeline', () => {
-  it('builds a duration-preserving timeline from source timestamps and session duration', () => {
+  it('builds a duration-preserving timeline anchored to session.startedAt', () => {
+    // frame 0 arrives 20ms after startedAt: that leading gap must be
+    // credited to frame 0's own duration, not silently folded onto the
+    // last frame the way the previous implementation did.
     expect(
       buildCaptureTimeline('/tmp/capture/frames', {
         captureSize: { height: 1600, width: 2560 },
         frames: [
           {
             file: 'frame-000000.jpg',
-            timestamp: 100,
+            timestamp: 1_020,
             viewport: { height: 1600, width: 2560 },
           },
           {
             file: 'frame-000001.jpg',
-            timestamp: 150,
+            timestamp: 1_060,
             viewport: { height: 1600, width: 2560 },
           },
           {
             file: 'frame-000002.jpg',
-            timestamp: 300,
+            timestamp: 1_200,
             viewport: { height: 1600, width: 2560 },
           },
         ],
@@ -52,7 +55,18 @@ describe('buildCaptureTimeline', () => {
         version: 1,
       }),
     ).toBe(
-      "ffconcat version 1.0\nfile '/tmp/capture/frames/frame-000000.jpg'\nduration 0.05\nfile '/tmp/capture/frames/frame-000001.jpg'\nduration 0.15\nfile '/tmp/capture/frames/frame-000002.jpg'\nduration 0.2\nfile '/tmp/capture/frames/frame-000002.jpg'\n",
+      'ffconcat version 1.0\n' +
+        "file '/tmp/capture/frames/frame-000000.jpg'\n" +
+        'option framerate 1000\n' +
+        'duration 0.06\n' +
+        "file '/tmp/capture/frames/frame-000001.jpg'\n" +
+        'option framerate 1000\n' +
+        'duration 0.14\n' +
+        "file '/tmp/capture/frames/frame-000002.jpg'\n" +
+        'option framerate 1000\n' +
+        'duration 0.2\n' +
+        "file '/tmp/capture/frames/frame-000002.jpg'\n" +
+        'option framerate 1000\n',
     )
   })
 
@@ -67,7 +81,7 @@ describe('buildCaptureTimeline', () => {
         frames: [
           {
             file: 'frame-000000.jpg',
-            timestamp: 100,
+            timestamp: 1_020,
             viewport: { height: 1600, width: 2560 },
           },
         ],
@@ -75,15 +89,24 @@ describe('buildCaptureTimeline', () => {
         version: 1,
       }),
     ).toBe(
-      "ffconcat version 1.0\nfile '/tmp/capture/frames/frame-000000.jpg'\nduration 0.25\nfile '/tmp/capture/frames/frame-000000.jpg'\n",
+      'ffconcat version 1.0\n' +
+        "file '/tmp/capture/frames/frame-000000.jpg'\n" +
+        'option framerate 1000\n' +
+        'duration 0.25\n' +
+        "file '/tmp/capture/frames/frame-000000.jpg'\n" +
+        'option framerate 1000\n',
     )
   })
 })
 
 describe('buildFfmpegArguments', () => {
-  it('builds a constant-60-fps 1920x1080 ffmpeg command from a timestamp timeline', () => {
+  it('builds a constant-60-fps 1920x1080 ffmpeg command bounded to the manifest span', () => {
     expect(
-      buildFfmpegArguments('/tmp/capture/timeline.ffconcat', '/tmp/output.mp4'),
+      buildFfmpegArguments(
+        '/tmp/capture/timeline.ffconcat',
+        '/tmp/output.mp4',
+        20,
+      ),
     ).toEqual([
       '-hide_banner',
       '-y',
@@ -94,13 +117,17 @@ describe('buildFfmpegArguments', () => {
       '-i',
       '/tmp/capture/timeline.ffconcat',
       '-vf',
-      'crop=2560:1440:0:80,scale=1920:1080:flags=lanczos,fps=60',
+      'crop=2560:1440:0:80,scale=1920:1080:flags=lanczos:in_range=full:out_range=tv,fps=60,format=yuv420p',
       '-c:v',
       'libx264',
       '-pix_fmt',
       'yuv420p',
+      '-color_range',
+      'tv',
       '-r',
       '60',
+      '-t',
+      '20',
       '/tmp/output.mp4',
     ])
   })
@@ -138,6 +165,7 @@ describe('assembleScreencast', () => {
       buildFfmpegArguments(
         join(captureDirectory, 'timeline.ffconcat'),
         '/tmp/output.mp4',
+        2,
       ),
     )
     expect(result).toEqual({ durationSeconds: 2 })
