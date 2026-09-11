@@ -22,15 +22,54 @@ import {
 
 const ARTIFACTS_ROOT = 'artifacts/m2-001'
 const FIXTURE_HTML =
-  '<!doctype html><html><body style="margin:0;height:2400px;position:relative">' +
+  '<!doctype html><html><body style="margin:0;height:3700px;position:relative">' +
   '<button id="far" style="position:absolute;left:20px;top:20px;width:60px;height:30px;">Far</button>' +
   '<button id="save" style="position:absolute;left:150px;top:300px;width:100px;height:40px;">Save</button>' +
   '<input id="title" style="position:absolute;left:20px;top:400px;width:200px;height:30px;" />' +
   '<button id="a" style="position:absolute;left:60px;top:60px;width:60px;height:30px;">A</button>' +
   '<button id="below" style="position:absolute;left:60px;top:1200px;width:100px;height:40px;" ' +
   'onclick="window.__belowClicked=true">Below</button>' +
+  '<div id="hero" style="position:absolute;left:0;top:1600px;width:2000px;height:2000px;" ' +
+  'onclick="window.__heroClicked=true"></div>' +
+  '<button id="edge" style="position:absolute;left:1270px;top:1610px;width:20px;height:20px;" ' +
+  'onclick="window.__edgeClicked=true">E</button>' +
   '</body></html>'
 const FIXTURE_URL = `data:text/html,${encodeURIComponent(FIXTURE_HTML)}`
+
+/**
+ * A JS-driven inertial scroller (Lenis-style): a `wheel` handler animates an
+ * inner `transform: translateY()` over several requestAnimationFrame ticks.
+ * It never touches `window.scrollX/Y` at all, which is exactly the case a
+ * settle check keyed on the window's own scroll offset would silently miss.
+ */
+const INNER_SCROLL_FIXTURE_HTML =
+  '<!doctype html><html><body style="margin:0;overflow:hidden;height:100vh">' +
+  '<div id="viewport" style="position:relative;overflow:hidden;height:100vh;">' +
+  '<div id="track" style="position:absolute;left:0;top:0;width:100%;">' +
+  '<button id="above" style="position:absolute;left:20px;top:20px;width:60px;height:30px;">Above</button>' +
+  '<button id="below-inner" style="position:absolute;left:20px;top:1200px;width:100px;height:40px;" ' +
+  'onclick="window.__innerBelowClicked=true">Below</button>' +
+  '<div style="height:2000px"></div>' +
+  '</div></div>' +
+  '<script>' +
+  'let offset=0,target=0,raf=null;' +
+  'function animate(){' +
+  'offset+=(target-offset)*0.25;' +
+  "document.getElementById('track').style.transform='translateY('+(-offset)+'px)';" +
+  'if(Math.abs(target-offset)>0.5){raf=requestAnimationFrame(animate)}' +
+  'else{offset=target;' +
+  "document.getElementById('track').style.transform='translateY('+(-offset)+'px)';" +
+  'raf=null}' +
+  '}' +
+  "document.getElementById('viewport').addEventListener('wheel',function(e){" +
+  'e.preventDefault();' +
+  'target+=e.deltaY;' +
+  'target=Math.max(0,Math.min(target,2000));' +
+  'if(!raf){raf=requestAnimationFrame(animate)}' +
+  '},{passive:false});' +
+  '</script>' +
+  '</body></html>'
+const INNER_SCROLL_FIXTURE_URL = `data:text/html,${encodeURIComponent(INNER_SCROLL_FIXTURE_HTML)}`
 
 function roundBox(box: BoundingBox): BoundingBox {
   return {
@@ -124,9 +163,12 @@ describe('record against a real headless Chromium', () => {
       await page.goto(FIXTURE_URL)
       await demo.click('#a')
       await demo.scroll(0, 900)
-      // Independent ground truth captured live, in-page, right after the
-      // scroll our own wrapper considers settled — not recomputed later
-      // from a second, separately loaded page.
+      // scroll() itself no longer waits for the page to settle — that
+      // responsibility moved to target resolution, which is what the click
+      // below actually exercises. So the independent ground truth is read
+      // only *after* the click, once its own settle-on-read polling has
+      // already proven the page stopped moving.
+      await demo.click('#below')
       belowRectAfterScroll = await page.evaluate(() => {
         const element = document.querySelector('#below')
         if (element === null) throw new Error('Fixture is missing #below')
@@ -138,7 +180,6 @@ describe('record against a real headless Chromium', () => {
           height: rect.height,
         }
       })
-      await demo.click('#below')
       belowClicked = await page.evaluate(
         () =>
           (window as unknown as { __belowClicked?: boolean }).__belowClicked,
@@ -181,7 +222,105 @@ describe('record against a real headless Chromium', () => {
       .map((line) => JSON.parse(line) as Record<string, unknown>)
     const tap = events.find((event) => event.type === 'tap')
     expect(tap).toBeDefined()
-    expect(tap).toMatchObject({ bbox: { width: 100, height: 40 } })
+    // Full bbox, including position — not just size, which alone can't
+    // distinguish "tapped the right element" from "tapped the wrong place
+    // that happens to be the same size."
+    expect(tap).toMatchObject({
+      bbox: { x: 150, y: 300, width: 100, height: 40 },
+    })
+  }, 30_000)
+
+  it('clicks a hero bigger than the viewport at its visible, clamped point', async () => {
+    const out = join(ARTIFACTS_ROOT, 'run-hero')
+    await rm(out, { force: true, recursive: true })
+
+    let heroClicked: unknown
+    await record({ out, seed: 1 }, async (page, demo) => {
+      await page.goto(FIXTURE_URL)
+      await demo.scroll(0, 1600)
+      await demo.click('#hero')
+      heroClicked = await page.evaluate(
+        () => (window as unknown as { __heroClicked?: boolean }).__heroClicked,
+      )
+    })
+
+    expect(heroClicked).toBe(true)
+  }, 30_000)
+
+  it('clicks a sliver flush against the viewport edge without missing it', async () => {
+    const out = join(ARTIFACTS_ROOT, 'run-edge')
+    await rm(out, { force: true, recursive: true })
+
+    let edgeClicked: unknown
+    await record({ out, seed: 1 }, async (page, demo) => {
+      await page.goto(FIXTURE_URL)
+      await demo.scroll(0, 1600)
+      await demo.click('#edge')
+      edgeClicked = await page.evaluate(
+        () => (window as unknown as { __edgeClicked?: boolean }).__edgeClicked,
+      )
+    })
+
+    expect(edgeClicked).toBe(true)
+  }, 30_000)
+
+  it('settles and clicks correctly inside a JS-driven inner scroll container, not just the window', async () => {
+    const out = join(ARTIFACTS_ROOT, 'run-inner-scroll')
+    await rm(out, { force: true, recursive: true })
+
+    let expectedRect: BoundingBox | undefined
+    let clicked: unknown
+
+    await record({ out, seed: 5 }, async (page, demo) => {
+      await page.goto(INNER_SCROLL_FIXTURE_URL)
+      await demo.click('#above')
+      // This scroll never touches window.scrollX/Y — it drives a CSS
+      // transform on an inner container via a wheel-triggered rAF loop,
+      // exactly the case a window-scroll-only settle check would miss.
+      await demo.scroll(0, 900)
+      await demo.click('#below-inner')
+      // Captured after the click, once the settle-on-read polling inside
+      // that click's own target resolution has already proven the
+      // transform animation finished.
+      expectedRect = await page.evaluate(() => {
+        const element = document.querySelector('#below-inner')
+        if (element === null) throw new Error('Fixture is missing #below-inner')
+        const rect = element.getBoundingClientRect()
+        return {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        }
+      })
+      clicked = await page.evaluate(
+        () =>
+          (window as unknown as { __innerBelowClicked?: boolean })
+            .__innerBelowClicked,
+      )
+    })
+
+    // Proves the click actually landed on the live element, inside the
+    // inner scroller — not merely that some bbox looked plausible.
+    expect(clicked).toBe(true)
+
+    const log = await readFile(join(out, 'events.jsonl'), 'utf8')
+    const events = log
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+    const belowClick = events.filter((event) => event.type === 'click').at(-1)
+    const logged = (belowClick as { bbox: BoundingBox }).bbox
+    const expected = roundBox(expectedRect!)
+    // The logged bbox and this second, independent read are two different
+    // point-in-time snapshots of a continuous CSS-transform animation; both
+    // individually satisfy their own settle criteria but can still differ
+    // by a rounding pixel. Width/height don't move during a vertical-only
+    // scroll and must match exactly; position gets a tight tolerance.
+    expect(logged.width).toBe(expected.width)
+    expect(logged.height).toBe(expected.height)
+    expect(Math.abs(logged.x - expected.x)).toBeLessThanOrEqual(2)
+    expect(Math.abs(logged.y - expected.y)).toBeLessThanOrEqual(2)
   }, 30_000)
 
   it('rejects an unknown device name with the available names, not a crash', async () => {
