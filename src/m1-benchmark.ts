@@ -65,26 +65,41 @@ async function findLargestScrollElement(
   page: Page,
   axis: 'x' | 'y',
 ): Promise<ElementHandle<Element>> {
-  const handle = await page.evaluateHandle((axisArgument: 'x' | 'y') => {
-    function range(element: Element): number {
-      return axisArgument === 'y'
-        ? element.scrollHeight - element.clientHeight
-        : element.scrollWidth - element.clientWidth
-    }
-    let best: Element = document.scrollingElement ?? document.documentElement
-    let bestRange = range(best)
-    for (const element of document.querySelectorAll('*')) {
-      const style = getComputedStyle(element)
-      const overflow = axisArgument === 'y' ? style.overflowY : style.overflowX
-      if (overflow !== 'auto' && overflow !== 'scroll') continue
-      const elementRange = range(element)
-      if (elementRange > bestRange) {
-        bestRange = elementRange
-        best = element
+  // A raw source string, not a compiled closure: `tsx`/esbuild injects a
+  // `__name(fn, "range")` call for the named local function below (to
+  // preserve `Function.prototype.name` across its own bundling), and that
+  // helper does not exist in the standalone browser-side realm
+  // `evaluateHandle` runs a closure's `toString()` in — see the identical
+  // issue and fix in `src/paint-rate.ts`'s doc comment. `axis` is
+  // interpolated directly (not passed as an `arg`) since Playwright's
+  // string-expression form of `evaluate`/`evaluateHandle` does not thread
+  // an `arg` through the way the closure form does; it is one of exactly
+  // two literal values, never user input.
+  const handle = await page.evaluateHandle(`
+    (function () {
+      var axis = ${JSON.stringify(axis)};
+      function range(element) {
+        return axis === 'y'
+          ? element.scrollHeight - element.clientHeight
+          : element.scrollWidth - element.clientWidth;
       }
-    }
-    return best
-  }, axis)
+      var best = document.scrollingElement || document.documentElement;
+      var bestRange = range(best);
+      var all = document.querySelectorAll('*');
+      for (var i = 0; i < all.length; i++) {
+        var element = all[i];
+        var style = getComputedStyle(element);
+        var overflow = axis === 'y' ? style.overflowY : style.overflowX;
+        if (overflow !== 'auto' && overflow !== 'scroll') continue;
+        var elementRange = range(element);
+        if (elementRange > bestRange) {
+          bestRange = elementRange;
+          best = element;
+        }
+      }
+      return best;
+    })();
+  `)
   const element = handle.asElement()
   if (element === null) {
     throw new Error(
