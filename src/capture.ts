@@ -49,11 +49,27 @@ export type TimestampManifest = {
 }
 
 export type ScreencastCapture = {
+  /** Frames whose CDP timestamp regressed by a few ms and was clamped forward; see `captureScreencast`. */
+  clampedTimestampCount: number
   /** Source frames folded into the previous distinct frame's duration; see `captureScreencast`. */
   droppedDuplicateFrameCount: number
   framesDirectory: string
   timestampsPath: string
 }
+
+type WriterResult = {
+  clampedTimestampCount: number
+  droppedDuplicateFrameCount: number
+}
+
+/**
+ * Above this, a "decreasing" screencast timestamp is treated as real
+ * corruption rather than metadata jitter. Measured directly against
+ * hardware-GL capture on this box: observed regressions of 3-9ms across
+ * several 2s runs; 20ms matches the existing near-60fps threshold used
+ * elsewhere in this codebase.
+ */
+const MAX_TOLERATED_TIMESTAMP_REGRESSION_MS = 20
 
 function frameFileName(index: number): string {
   return `frame-${String(index).padStart(6, '0')}.jpg`
@@ -205,14 +221,33 @@ export async function captureScreencast(
     let previousTimestamp: number | undefined
     let previousWrittenFrameData: Buffer | undefined
     let droppedDuplicateFrameCount = 0
+    let clampedTimestampCount = 0
 
-    const writer = (async (): Promise<number> => {
-      for await (const frame of queue.drain()) {
+    const writer = (async (): Promise<WriterResult> => {
+      for await (const rawFrame of queue.drain()) {
+        // CDP's screencast timestamp is not perfectly monotonic under fast
+        // (hardware-GL, see renderer.ts) capture: measured directly against
+        // this box, ~1-2% of frames report a timestamp 3-9ms *before* the
+        // previous one — small metadata jitter, not out-of-order delivery
+        // (onFrame is still invoked in true display order) and not session
+        // corruption (a real mix-up would show as a large, not few-ms,
+        // regression). Clamping forward keeps the manifest's timestamps
+        // usable for `buildCaptureTimeline`'s duration math while still
+        // hard-failing on a regression bigger than this tolerance, which
+        // would indicate something actually wrong.
+        let frame = rawFrame
         if (
           previousTimestamp !== undefined &&
-          frame.timestamp <= previousTimestamp
+          frame.timestamp < previousTimestamp
         ) {
-          throw new Error('Screencast timestamps must be strictly increasing')
+          const regressionMs = previousTimestamp - frame.timestamp
+          if (regressionMs > MAX_TOLERATED_TIMESTAMP_REGRESSION_MS) {
+            throw new Error(
+              `Screencast timestamp regressed by ${String(regressionMs)}ms, beyond the ${String(MAX_TOLERATED_TIMESTAMP_REGRESSION_MS)}ms jitter tolerance`,
+            )
+          }
+          clampedTimestampCount += 1
+          frame = { ...frame, timestamp: previousTimestamp }
         }
         previousTimestamp = frame.timestamp
 
@@ -250,7 +285,7 @@ export async function captureScreencast(
           },
         })
       }
-      return droppedDuplicateFrameCount
+      return { clampedTimestampCount, droppedDuplicateFrameCount }
     })().catch((error: unknown) => {
       const normalized =
         error instanceof Error ? error : new Error(String(error))
@@ -316,7 +351,7 @@ export async function captureScreencast(
       manifest.session.endedAt - manifest.session.startedAt
     await stop()
     queue.close()
-    const finalDroppedDuplicateFrameCount = await writer
+    const writerResult = await writer
     validateCaptureManifest(manifest)
 
     await writeFile(timestampsPath, `${JSON.stringify(manifest, null, 2)}\n`, {
@@ -324,7 +359,7 @@ export async function captureScreencast(
     })
 
     return {
-      droppedDuplicateFrameCount: finalDroppedDuplicateFrameCount,
+      ...writerResult,
       framesDirectory,
       timestampsPath,
     }
@@ -408,9 +443,9 @@ export function validateCaptureManifest(manifest: TimestampManifest): void {
     }
     if (
       !Number.isFinite(frame.timestamp) ||
-      (previousTimestamp !== undefined && frame.timestamp <= previousTimestamp)
+      (previousTimestamp !== undefined && frame.timestamp < previousTimestamp)
     ) {
-      throw new Error('Capture manifest timestamps must be strictly increasing')
+      throw new Error('Capture manifest timestamps must not decrease')
     }
     previousTimestamp = frame.timestamp
   }

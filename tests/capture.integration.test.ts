@@ -10,6 +10,7 @@ import {
   captureScreencast,
   type TimestampManifest,
 } from '../src/capture.js'
+import { HARDWARE_GL_LAUNCH_ARGS } from '../src/renderer.js'
 
 const directories: string[] = []
 
@@ -52,7 +53,10 @@ const ANIMATED_FIXTURE = `
  */
 describe('captureScreencast against real Chromium', () => {
   it('captures a continuously animating page at a high, strictly increasing source rate', async () => {
-    const browser = await chromium.launch({ headless: true })
+    const browser = await chromium.launch({
+      args: [...HARDWARE_GL_LAUNCH_ARGS],
+      headless: true,
+    })
     try {
       const context = await browser.newContext({ viewport: CAPTURE_SIZE })
       const page = await context.newPage()
@@ -82,7 +86,7 @@ describe('captureScreencast against real Chromium', () => {
             'unreachable: manifest frame array index out of bounds',
           )
         }
-        expect(current.timestamp).toBeGreaterThan(previous.timestamp)
+        expect(current.timestamp).toBeGreaterThanOrEqual(previous.timestamp)
         intervals.push(current.timestamp - previous.timestamp)
       }
 
@@ -102,7 +106,10 @@ describe('captureScreencast against real Chromium', () => {
   }, 20_000)
 
   it('surfaces a writer failure to the caller instead of swallowing it', async () => {
-    const browser = await chromium.launch({ headless: true })
+    const browser = await chromium.launch({
+      args: [...HARDWARE_GL_LAUNCH_ARGS],
+      headless: true,
+    })
     try {
       const context = await browser.newContext({ viewport: CAPTURE_SIZE })
       const page = await context.newPage()

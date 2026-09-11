@@ -337,20 +337,21 @@ describe('captureScreencast', () => {
     await expect(access(outputDirectory)).rejects.toThrow()
   })
 
-  it('rejects non-monotonic screencast timestamps and still stops capture', async () => {
+  it('rejects a screencast timestamp regression beyond the jitter tolerance', async () => {
     const outputDirectory = join(await temporaryDirectory(), 'capture')
     const stop = vi.fn().mockResolvedValue(undefined)
     const start = vi.fn().mockImplementation(async ({ onFrame }) => {
       onFrame({
         data: Buffer.from('first'),
-        timestamp: 2,
-        viewportHeight: 1440,
+        timestamp: 100,
+        viewportHeight: 1600,
         viewportWidth: 2560,
       })
       onFrame({
         data: Buffer.from('second'),
-        timestamp: 1,
-        viewportHeight: 1440,
+        // 79ms regression, well beyond the 20ms jitter tolerance.
+        timestamp: 21,
+        viewportHeight: 1600,
         viewportWidth: 2560,
       })
     })
@@ -358,9 +359,74 @@ describe('captureScreencast', () => {
 
     await expect(
       captureScreencast(page, outputDirectory, async () => undefined),
-    ).rejects.toThrow('Screencast timestamps must be strictly increasing')
+    ).rejects.toThrow('beyond the 20ms jitter tolerance')
     expect(stop).toHaveBeenCalledOnce()
     await expect(access(outputDirectory)).rejects.toThrow()
+  })
+
+  it('clamps a small timestamp regression forward instead of failing', async () => {
+    // Measured directly against hardware-GL capture on this box: ~1-2% of
+    // frames report a timestamp a few ms *before* the previous one (CDP
+    // metadata jitter, not out-of-order delivery or corruption).
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      onFrame({
+        data: Buffer.from('first'),
+        timestamp: 100,
+        viewportHeight: 1600,
+        viewportWidth: 2560,
+      })
+      onFrame({
+        data: Buffer.from('second'),
+        timestamp: 95, // 5ms regression, within the 20ms tolerance.
+        viewportHeight: 1600,
+        viewportWidth: 2560,
+      })
+    })
+
+    const result = await captureScreencast(
+      testPage({ start, stop }),
+      outputDirectory,
+      async () => undefined,
+    )
+
+    expect(result.clampedTimestampCount).toBe(1)
+    const manifest = JSON.parse(await readFile(result.timestampsPath, 'utf8'))
+    expect(manifest.frames[1].timestamp).toBe(100)
+  })
+
+  it('tolerates two distinct frames sharing a millisecond-resolution timestamp', async () => {
+    // Hardware-GL capture (see renderer.ts) delivers frames fast enough
+    // that two genuinely distinct frames can report the same CDP
+    // timestamp; that is a resolution tie, not corruption, and must not
+    // abort the capture.
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      onFrame({
+        data: Buffer.from('first'),
+        timestamp: 5,
+        viewportHeight: 1600,
+        viewportWidth: 2560,
+      })
+      onFrame({
+        data: Buffer.from('second'),
+        timestamp: 5,
+        viewportHeight: 1600,
+        viewportWidth: 2560,
+      })
+    })
+
+    const result = await captureScreencast(
+      testPage({ start, stop }),
+      outputDirectory,
+      async () => undefined,
+    )
+
+    expect(
+      JSON.parse(await readFile(result.timestampsPath, 'utf8')).frames,
+    ).toHaveLength(2)
   })
 
   it('rejects an existing output directory before starting capture', async () => {
@@ -447,6 +513,28 @@ describe('validateCaptureManifest', () => {
     ).not.toThrow()
   })
 
+  it('accepts two frames sharing a millisecond-resolution timestamp', () => {
+    expect(() =>
+      validateCaptureManifest({
+        captureSize: { height: 1600, width: 2560 },
+        frames: [
+          {
+            file: 'frame-000000.jpg',
+            timestamp: 5,
+            viewport: { height: 1600, width: 2560 },
+          },
+          {
+            file: 'frame-000001.jpg',
+            timestamp: 5,
+            viewport: { height: 1600, width: 2560 },
+          },
+        ],
+        session: { duration: 1, endedAt: 1, startedAt: 0 },
+        version: 1,
+      }),
+    ).not.toThrow()
+  })
+
   it.each([
     ['has no frames', []],
     [
@@ -460,7 +548,7 @@ describe('validateCaptureManifest', () => {
       ],
     ],
     [
-      'has non-monotonic timestamps',
+      'has a decreasing timestamp',
       [
         {
           file: 'frame-000000.jpg',
@@ -469,7 +557,7 @@ describe('validateCaptureManifest', () => {
         },
         {
           file: 'frame-000001.jpg',
-          timestamp: 2,
+          timestamp: 1,
           viewport: { height: 1600, width: 2560 },
         },
       ],
