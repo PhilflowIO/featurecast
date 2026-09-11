@@ -125,6 +125,53 @@ const STICKY_OVERLAY_FIXTURE_URL =
       '</body></html>',
   )
 
+/**
+ * A tall target with two fixed overlays leaving only a 30px band free in
+ * its middle — away from its center and from every one of the nine fixed
+ * edge/corner/center probes the point search used before issue #13.
+ */
+const PINCHED_BAND_FIXTURE_URL =
+  'data:text/html,' +
+  encodeURIComponent(
+    '<!doctype html><html><body style="margin:0">' +
+      '<div style="position:fixed;left:0;top:0;width:100%;height:230px;' +
+      'background:#ccc;z-index:9"></div>' +
+      '<div style="position:fixed;left:0;top:260px;width:100%;' +
+      'height:2000px;background:#ccc;z-index:9"></div>' +
+      '<button id="t" style="position:absolute;left:600px;top:0;width:80px;' +
+      'height:300px;" onclick="window.__bandClicked=true">T</button>' +
+      '</body></html>',
+  )
+
+/**
+ * Fully unoccluded at settle time (so the initial point search picks the
+ * target's plain center); 300ms later — well inside the pointer's own
+ * 0.4s+ minimum travel time — two overlays appear and cover exactly that
+ * center, leaving only a middle band free. Only reachable if the
+ * arrival-time re-verification (moveTo's corrective branch) re-runs the
+ * occlusion search against the live, now-occluded page instead of trusting
+ * the point resolved before travel started.
+ */
+const OVERLAY_APPEARS_DURING_TRAVEL_FIXTURE_URL =
+  'data:text/html,' +
+  encodeURIComponent(
+    '<!doctype html><html><body style="margin:0">' +
+      '<button id="t" style="position:absolute;left:500px;top:300px;' +
+      'width:300px;height:50px;" onclick="window.__midTravelClicked=true">T' +
+      '</button>' +
+      '<script>setTimeout(function(){' +
+      "var l=document.createElement('div');" +
+      "l.style.cssText='position:fixed;left:0;top:0;width:680px;" +
+      "height:100vh;background:#ccc;z-index:9';" +
+      'document.body.appendChild(l);' +
+      "var r=document.createElement('div');" +
+      "r.style.cssText='position:fixed;left:750px;top:0;width:530px;" +
+      "height:100vh;background:#ccc;z-index:9';" +
+      'document.body.appendChild(r)' +
+      '},300)</script>' +
+      '</body></html>',
+  )
+
 /** A native `overflow:auto` container, scrolled by our own demo.scroll(). */
 const OVERFLOW_AUTO_FIXTURE_URL =
   'data:text/html,' +
@@ -616,5 +663,39 @@ describe('record against a real headless Chromium', () => {
     })
 
     expect(overflowClicked).toBe(true)
+  }, 30_000)
+
+  it('finds and clicks a free band pinched between two overlays, not just an edge or corner', async () => {
+    const out = join(ARTIFACTS_ROOT, 'run-pinched-band')
+    await rm(out, { force: true, recursive: true })
+
+    let bandClicked: unknown
+    await record({ out, seed: 3 }, async (page, demo) => {
+      await page.goto(PINCHED_BAND_FIXTURE_URL)
+      await demo.click('#t')
+      bandClicked = await page.evaluate(
+        () => (window as unknown as { __bandClicked?: boolean }).__bandClicked,
+      )
+    })
+
+    expect(bandClicked).toBe(true)
+  }, 30_000)
+
+  it('corrects course and finds the still-free band when an overlay appears mid-travel, covering the originally chosen point', async () => {
+    const out = join(ARTIFACTS_ROOT, 'run-overlay-appears-during-travel')
+    await rm(out, { force: true, recursive: true })
+
+    let midTravelClicked: unknown
+    await record({ out, seed: 7 }, async (page, demo) => {
+      await page.goto(OVERLAY_APPEARS_DURING_TRAVEL_FIXTURE_URL)
+      await demo.click('#t')
+      midTravelClicked = await page.evaluate(
+        () =>
+          (window as unknown as { __midTravelClicked?: boolean })
+            .__midTravelClicked,
+      )
+    })
+
+    expect(midTravelClicked).toBe(true)
   }, 30_000)
 })
