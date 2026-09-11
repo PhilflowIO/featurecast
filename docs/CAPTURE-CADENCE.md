@@ -1,9 +1,12 @@
 # Capture cadence: resolution, quality, GPU backend, and content
 
-Measured 2026-09-11, revised the same day after an independent review found
-the first version's methodology and conclusion both wrong. **Corrected
-finding: the 2560×1600 default now sustains ~60fps on a dense page and is
-kept as-is** — the fix was the GPU backend, not the resolution.
+Measured 2026-09-11, revised twice the same day after independent reviews
+each found a methodology error. **Current finding: capture cadence is
+governed by two independent constraints — the GPU backend (fixed, see
+below) and a hard ~80MB/s screencast throughput ceiling (a property of the
+pipe, not fixable by this codebase) — and the 2560×1600/q100 default stays
+because OnlyDash's real frames are small enough to fit inside it, not
+because 2560×1600/q100 is fast in general.**
 
 ## What was wrong the first time
 
@@ -67,33 +70,66 @@ Raw numbers: `table.md` in
 
 (Full table incl. all quality/size combinations: `table.md`.)
 
-**With the hardware GL backend, the dense fixture at the default
-2560×1600/q100 sustains 59.2fps capture / 60.0fps rAF — full rate.** The
-quality effect that looked "noise-level" in the first version (25–29fps
-across q70–q100) was itself an artifact of both the short sample window
-and software rendering; at 10s samples under software rendering it is
-q100=28.5 vs q80=32.5 (+14%), not negligible, but the whole comparison is
-moot once hardware GL is used (q100 and q80 both land at ~57–60fps).
+**Correction (second review, same day): the "59.2fps at 2982KB mean frame"
+row above is not reproducible and violates a real throughput ceiling.**
+59.2fps × 2982KB implies ~176MB/s sustained out of the screencast pipe;
+independently re-measured (own rerun, `matrix.mts`, hardware GL, 8s
+samples, a heavier uniformly-dense 70×18 table so JPEG compression can't
+get lucky on empty space) the actual numbers are:
 
-Real M1 acceptance run (`artifacts/m1-002`, before this fix, OnlyDash live
-dashboard) landed at 314 source frames over 29.75s, median 59.1ms
-(~17fps) — far below even the software-rendering numbers here, because
-`m1-002` additionally suffered from the dead-scroll-pass bug (see the
-main report): frames that never arrived at all during two ~4.7s stretches
-with zero repaints, not just a slow renderer. `artifacts/m1-003` (this
-fix plus the benchmark fix) is the number to compare against this table.
+| capture size | quality | capture fps | rAF fps | mean frame size | implied throughput |
+| ------------ | ------- | ----------- | ------- | --------------- | ------------------ |
+| 2560×1600    | 100     | 25.1        | 60.0    | 3432 KB         | ~86 MB/s           |
+| 2560×1600    | 20      | 59.6        | 60.0    | 443 KB          | ~26 MB/s           |
+| 1920×1200    | 100     | 39.0        | 60.0    | 2518 KB         | ~98 MB/s           |
+| 1280×800     | 100     | 59.9        | 59.9    | 1109 KB         | ~66 MB/s           |
 
-## Is it encoding or layout? (superseded)
+(`implied throughput = mean frame size × capture fps`; "MB/s" here because
+the earlier probe script mislabeled this quantity "KB/s" while computing
+it correctly — `bytes / wall_ms / 1024` is numerically `KB × fps / 1000`,
+i.e. MB/s. Corrected here, not just in the number.)
 
-The first version's "layout, not encoding" conclusion used the same
-detached-rAF methodology and is superseded by the GPU-backend finding
-above: the dominant cost is per-frame surface capture under software
-rasterization at the CSS-viewport resolution, not layout/paint time
-itself (rAF-attached at 2560×1600 dense/software was still 31.4fps —
-consistent with software-rasterized surface readback costing roughly
-CSS-viewport-area time, not with a fundamentally expensive DOM layout,
-since the DOM does not change between the GL backends and the same
-viewport reaches ~60fps once hardware GL handles that readback).
+**There is a hard ceiling around 80-100MB/s on this box, independent of
+resolution or quality individually.** 2560×1600/q100's 3432KB mean frame
+caps capture at ~25fps regardless of the GPU backend being fully warmed
+(rAF is 60fps throughout — the page is never the bottleneck once hardware
+GL is in use; the JPEG-encode-and-transfer pipe is). 1280×800/q100 reaches
+full 60fps because its 1109KB mean frame fits under the ceiling with
+headroom; 2560×1600/q20 reaches 59.6fps for the same reason at a much
+larger resolution, by cutting frame size instead of resolution.
+
+**Practical rule: keep the mean JPEG frame size under ~1.3MB
+(80MB/s ÷ 60fps) to sustain 60fps, regardless of how that frame size is
+reached** — lower resolution, lower quality, or (as with OnlyDash) content
+that simply compresses smaller than a synthetic worst case. OnlyDash's
+real frames average 408KB in the `artifacts/m1-003` acceptance run — well
+under the 1.3MB budget — which is _why_ 2560×1600/q100 reaches ~54fps on
+real OnlyDash content despite this synthetic dense-table probe topping out
+at 25fps at the same size/quality. The earlier "2560×1600/q100 sustains
+60fps" claim was true for OnlyDash specifically and false as a general
+statement about that resolution/quality pair; a denser or more colorful
+target app could still hit this ceiling at the current default.
+
+Real M1 acceptance run (`artifacts/m1-002`, before the GPU-backend fix)
+landed at 314 source frames over 29.75s, median 59.1ms (~17fps) — far
+below even this ceiling, because `m1-002` additionally suffered from the
+dead-scroll-pass bug (see the main report): frames that never arrived at
+all during two ~4.7s stretches with zero repaints, not a throughput
+problem. `artifacts/m1-003`/`m1-004` (GPU-backend fix plus the benchmark
+fix) are the numbers to compare against this table.
+
+## Is it encoding, layout, or throughput?
+
+Layout is ruled out: rAF stayed at 60fps in every configuration once
+hardware GL was in use, including 2560×1600 dense at q100 (the slowest
+capture-fps case, 25.1fps) — the page itself was never waiting on
+anything. What remains is JPEG encode + transfer cost, which scales with
+frame _byte size_, not resolution or quality independently — 2560×1600/q20
+and 1280×800/q100 both reach ~60fps at similar mean frame sizes
+(443KB/1109KB) despite a 4x difference in pixel count, while 2560×1600/q100
+and 1920×1200/q100 both bottleneck around the same ~80-100MB/s regardless
+of their different resolutions. Frame size is the one variable that
+predicts fps across every row in the table above.
 
 ## Sharpness
 
@@ -105,17 +141,29 @@ the same on-screen text size (PLAN.md's 1.33× zoom-reserve reasoning).
 
 ## Recommendation
 
-**Keep 2560×1600/q100.** With the hardware GL backend from `renderer.ts`
-wired into `demo/m1-capture.ts`, it sustains ~60fps on a dense,
-actively-repainting page — there is no cadence reason left to trade away
-resolution. The real lever was the GPU backend, not the capture
-resolution; `assertHardwareRenderer` makes a future regression back to
-software rendering a loud failure instead of a silent 17–30fps capture
-that still passes every duration/frame-count check.
+**Keep 2560×1600/q100 as the default, but on the record that this is a
+content-dependent decision, not a resolution-independent one.** Two
+independent constraints govern cadence: the GPU backend (fixed by
+`renderer.ts` — `assertHardwareRenderer` makes a regression back to
+software rendering a loud failure instead of a silent 17-31fps capture
+that still passes every duration/frame-count check) and a hard ~80MB/s
+screencast throughput ceiling that no backend or resolution choice
+removes. 2560×1600/q100 stays because OnlyDash's real frames (408KB mean)
+fit comfortably under the ~1.3MB budget that ceiling implies at 60fps —
+not because 2560×1600/q100 is fast in general (the synthetic dense-table
+probe above tops out at 25fps at that exact size/quality).
 
-JPEG quality (q80 vs q100) has a small, now-genuinely-negligible effect
-once hardware GL is in use (57.3 vs 59.2fps); q100 stays the default for
-maximum sharpness since cadence is no longer the constraint.
+If a future target app's frames are heavier (more colorful, less
+whitespace, higher-entropy content that compresses worse — the exact
+opposite of what makes OnlyDash's frames small), the same 2560×1600/q100
+default will re-hit this ceiling regardless of the GPU backend. The fix in
+that case is smaller frames, most cheaply via quality (`q20` reaches 60fps
+even at full 2560×1600 in the table above) rather than resolution, since
+quality has no effect on sharpness once downscaled and cropped the way
+`assemble.ts` already does. `capture-stats.json`'s per-run median frame
+size (derivable from `medianIntervalMs` and the known ~80MB/s ceiling, or
+tracked directly in a future revision) is the way to notice this before a
+capture silently degrades to a slideshow-adjacent cadence again.
 
 ## PLAN.md / docs/DEVICES.md divergence (unresolved, flagged for the owner)
 
