@@ -1,12 +1,13 @@
 # Capture cadence: resolution, quality, GPU backend, and content
 
-Measured 2026-09-11, revised twice the same day after independent reviews
-each found a methodology error. **Current finding: capture cadence is
-governed by two independent constraints — the GPU backend (fixed, see
-below) and a hard ~80MB/s screencast throughput ceiling (a property of the
-pipe, not fixable by this codebase) — and the 2560×1600/q100 default stays
-because OnlyDash's real frames are small enough to fit inside it, not
-because 2560×1600/q100 is fast in general.**
+Measured 2026-09-11, revised three times the same day. **Current finding
+(see "Bisection on the AI box" at the end, which supersedes the quality-100
+recommendation and the DOM-churn explanation below): capture is 2560×1600
+at JPEG quality 90, because quality 100 measurably dropped ~9% of a real
+dense UI's frames on the RTX 3090 box; and the M1 benchmark's low scroll
+paint rate was its own timing — scrolling a grid that was still growing
+into its final height — not a capture limit.** The sections below are kept
+as the measurement history that led there.
 
 ## What was wrong the first time
 
@@ -141,8 +142,10 @@ the same on-screen text size (PLAN.md's 1.33× zoom-reserve reasoning).
 
 ## Recommendation
 
-**Keep 2560×1600/q100 as the default, but on the record that this is a
-content-dependent decision, not a resolution-independent one.** Two
+**Superseded 2026-09-11 by the AI-box bisection at the end of this
+document: capture now runs at quality 90.** The original recommendation
+read: keep 2560×1600/q100 as the default, but on the record that this is a
+content-dependent decision, not a resolution-independent one. Two
 independent constraints govern cadence: the GPU backend (fixed by
 `renderer.ts` — `assertHardwareRenderer` makes a regression back to
 software rendering a loud failure instead of a silent 17-31fps capture
@@ -267,6 +270,113 @@ byte size alone** — the measured 45-86% loss during real DOM churn
 (`artifacts/m1-006`/`m1-007`) is therefore not explained by frame size on
 its own; DOM-churn CPU cost and encode CPU cost both draw on the same
 budget and compound. Both are upstream of `capture.ts`.
+
+## Bisection on the AI box: why the benchmark captured 83-89% (added 2026-09-11)
+
+**This section supersedes the "upstream DOM churn" explanation above for
+the M1 benchmark.** The acceptance run `artifacts/m1-007` reported 82.6%
+capture efficiency while an isolated probe on the same box captured
+97.6-99.3%. Walked from that probe to the benchmark one difference at a
+time, serially on GPU1 (RTX 3090, `--use-gl=angle --use-angle=gl-egl`,
+renderer logged every run), real OnlyDash Tasks view, 12s per step.
+Efficiency is captured frames ÷ distinct content changes counted per rAF
+tick in the page (scroll positions of the grid scroller and `main`, plus
+the grid's height).
+
+| step | configuration                                                   | changes/s   | captured/s  | efficiency      |
+| ---- | --------------------------------------------------------------- | ----------- | ----------- | --------------- |
+| 1    | raw `page.screencast` q90, in-page rAF scroll of settled `main` | 58.2        | 57.2        | 0.983           |
+| 1    | same, one `mouse.wheel` per 60Hz slot                           | 58.7        | 57.0        | 0.970           |
+| 1'   | raw q**100** (the product's quality), rAF, three runs           | 58.8-59.7   | 51.3-54.6   | **0.873-0.915** |
+| 1'   | raw q100, wheel, two runs (wheel rate falls to 52/s)            | 51.7-52.4   | 45.0-45.7   | **0.859-0.884** |
+| 2    | q90 rAF + frame writes to container fs / bind mount             | 59.3 / 60.3 | 57.3 / 58.8 | 0.966 / 0.975   |
+| 2    | q100 rAF + frame writes to bind mount                           | 60.1        | 54.3        | 0.904           |
+| 3    | product `captureScreencast` (q100), rAF, container fs / bind    | 60.5 / 60.3 | 54.5 / 53.3 | 0.901 / 0.883   |
+| 3b   | + product `startPaintRateProbe`                                 | 60.0        | 53.9        | 0.899           |
+| 4    | product (q100) + `demo.scroll` legs on settled `main`           | 47.7        | 39.8        | 0.834           |
+| 5    | product (q100) + `demo.scroll` on the **still-growing** grid    | **21.0**    | 20.2        | 0.960           |
+| 6a   | product `runOnlyDashMotion`, clicks/typing/sorts no-op'd        | 31.9        | 28.6        | 0.896           |
+| 6b   | full `runOnlyDashMotion`                                        | 31.0        | 28.6        | 0.922           |
+
+Steps 6a/6b are totals over all scroll windows; the product's own
+`capture-efficiency.json` number for 6b was 0.837. Quality sweep (raw
+pipeline, rAF scroll, bind-mount writes, two runs each): q100 0.912/0.915
+(698KB mean frame), q95 0.952/0.958 (439KB), q90 0.982/0.990 (351KB), q85
+0.986/0.987, q80 0.982/0.987. Write I/O (step 2), the product queue (step 3) and the paint probe (step 3b) each stay within run-to-run noise of the
+step before them.
+
+**Mechanism 1 — capture loss: JPEG quality 100.** The first material drop
+is 1 → 1', and every later step inherits it. Chromium drops a screencast
+frame whose encode misses the frame budget; at quality 100 a real OnlyDash
+frame is twice the bytes of quality 90 and ~9% of changes are never
+delivered. Fix: `CAPTURE_QUALITY = 90` in `src/capture.ts`, the highest
+quality that measured ≥98%.
+
+**Mechanism 2 — too few changes: scrolling a layout that is still
+growing.** After a table switch OnlyDash's DataGrid root starts at the
+height the previous view left and grows by 1px per rendered frame until it
+fits every row (27s for `tasks` after the Projects view; measured with an
+in-page layout log). While it grows, (a) scroll range drains from
+`.MuiDataGrid-virtualScroller` into `main` — their sum stays ~590px — so
+the benchmark's largest-range rule picked whichever held more at that
+instant (the grid at the benchmark's 700ms dwell in 3/3 runs, `main` on a
+direct visit), and (b) the page itself runs at 22-24fps with a 51-57ms
+median wheel round trip, so a 521px `demo.scroll` takes 2.8s instead of
+~0.8s (step 5, and every cycle-1 `tasks`/`invoices` scroll window in step
+6: 21-28 changes/s). Scroll-window time also included 190-260ms of target
+discovery before the first wheel while the page was that busy (30-50ms
+when settled). Fix: `waitForStableScrollGeometry` in `src/m1-benchmark.ts`
+blocks target choice until every scroll range has been unchanged for
+500ms, and each scroll window now spans only the `demo.scroll` call and
+names the element it scrolled. A pointer-anchored alternative (wheel at the
+grid centre, let the browser chain inner → outer) was tried and rejected:
+during growth it covered only 388-399px of 591px in 11.2-11.4s (3/3 runs).
+
+**Reconciling m1-007's 82.6% efficiency with its 57.6% repeated share.**
+Both are consistent once the change rate is measured instead of assumed:
+over m1-007's 13 scroll windows the page produced 35.5 changes/s (not 60)
+and 29.2 were captured, which predicts 1 − 29.2/60 = 51.3% repeated output
+frames. The remaining 6 points come from bunched delivery in the short
+cycle-2 windows (49-62% of frame gaps ≤20ms): two frames inside one 16.7ms
+output slot yield one output frame.
+
+**The product's paint counter agrees on scrolling, not on everything.** In
+a capture configuration with encode headroom (1280×800, q50: rAF scroll
+captured 99.9%), `paint-rate.ts` agreed with the independent counter
+exactly for scrolling in isolation (60.0 vs 60.0 changes/s for rAF scroll,
+54.0 vs 54.0 for `demo.scroll`). Over the full benchmark in that same
+headroom configuration, however, only 92.4% of the ticks it counted
+produced a captured frame, so for clicks, sorts and transitions its
+denominator is not proven to equal frames Chromium could deliver (see the
+open gap below).
+
+## Acceptance after both fixes (`artifacts/m1-008`, three runs)
+
+Three serial acceptance runs on the RTX 3090 box with quality 90 and the
+settle wait (`artifacts/m1-008/runs/accept-r{1,2,3}.json`; run 1's full
+capture is `artifacts/m1-008`, ffprobe h264 1920×1080, 60fps, 3767 frames,
+62.78s):
+
+| run | all scroll windows: distinct changes/s | captured/s | efficiency vs distinct | repeated share | product gate |
+| --- | -------------------------------------- | ---------- | ---------------------- | -------------- | ------------ |
+| 1   | 49.3                                   | 48.8       | 0.990                  | 0.329          | 85.7% FAIL   |
+| 2   | 49.0                                   | 48.1       | 0.982                  | 0.249          | 84.2% FAIL   |
+| 3   | 48.9                                   | 48.4       | 0.990                  | 0.319          | 84.1% FAIL   |
+
+All 12 scroll windows chose the same element in all three runs (`main` for
+vertical passes, `.MuiDataGrid-virtualScroller` for the 180px horizontal
+passes). Counter-examples E and F remain rejected (`tests/repeats.test.ts`).
+Scroll paint rate rose from 31-35 to ~49 changes/s, and scroll capture is
+essentially complete.
+
+**Open (not proven): the remaining gate gap.** It concentrates in the
+same windows in every run: `tasks:scroll-right` (15 scroll ticks, 4-5
+frames, no frame for the first ~240ms), `invoices:sort-asc` (16-17 counted
+ticks, 1-3 frames) and `dark-mode-toggle` (0.73-0.85 at q90 vs 0.96 at
+headroom, i.e. real encode loss on a full-page colour transition). The first
+two under-deliver even with encode headroom while Chromium's renderer
+`DrawFrame` trace events count 13-18 draws, and neither reproduced when the
+interaction was run in isolation, so their mechanism is still unknown.
 
 ## PLAN.md / docs/DEVICES.md divergence (unresolved, flagged for the owner)
 
