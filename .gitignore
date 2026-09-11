@@ -16,6 +16,9 @@ artifacts/
 *.png
 !docs/**/*.png
 
+# Debug logs written by the Playwright MCP server during interactive sessions.
+.playwright-mcp/
+
 # Authenticated sessions, cookies, and browser profiles must never be committed.
 auth/*
 !auth/.gitkeep
