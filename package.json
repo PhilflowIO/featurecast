@@ -1,0 +1,40 @@
+{
+  "name": "featurecast",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "browsers:install": "playwright install chromium",
+    "demo:hello": "tsx demo/hello.ts",
+    "format": "prettier --check .",
+    "lint": "eslint .",
+    "prepare": "simple-git-hooks",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm exec lint-staged && pnpm typecheck"
+  },
+  "lint-staged": {
+    "*": "prettier --check --ignore-unknown",
+    "*.{ts,js}": "eslint --max-warnings=0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^22.19.0",
+    "eslint": "^9.39.1",
+    "globals": "^15.14.0",
+    "lint-staged": "^17.5.1",
+    "playwright": "^1.59.0",
+    "prettier": "^3.6.2",
+    "simple-git-hooks": "^2.14.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.2",
+    "vitest": "^3.2.4"
+  }
+}

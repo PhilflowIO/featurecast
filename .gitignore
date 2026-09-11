@@ -1,22 +1,22 @@
 node_modules/
 dist/
-out/
+test-results/
+playwright-report/
 .env
 .env.*
 !.env.example
 
-# Aufnahme-Artefakte: Rohbilder und Videos gehören nicht ins Repo
+# Recording artifacts: raw frames and videos do not belong in the repository.
 frames/
 recordings/
+artifacts/
 *.webm
 *.mp4
 *.jpg
 *.png
 !docs/**/*.png
 
-# Angemeldete Sitzungen, Cookies, Browser-Profile — niemals committen.
-# Pauschal sperren, nicht einzelne Unterpfade: Profile legen Cookies in
-# SQLite-Dateien ohne verräterische Endung ab.
+# Authenticated sessions, cookies, and browser profiles must never be committed.
 auth/*
 !auth/.gitkeep
 playwright/.auth/
