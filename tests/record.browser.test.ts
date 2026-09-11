@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   record,
+  DEFAULT_SCROLL_SPEED_PX_PER_SECOND,
   type BoundingBox,
   type Demo,
   type RecordPage,
@@ -223,6 +224,60 @@ describe('record against a real headless Chromium', () => {
     } finally {
       await browser.close()
     }
+  }, 30_000)
+
+  /**
+   * P2 (issue #15) acceptance: proves the fix against a real headless
+   * Chromium, not just the pure `computeScrollPositions` property test. The
+   * old 40px wheel-packet splitter drove a 500px+ scroll in a handful of
+   * evenly-spaced giant jumps, which a real recorder measured at 21.6-29.5
+   * fps with most in-window output frames repeated. Sampling `scrollY` from
+   * inside the page (via a `scroll` listener, not polling) is ground truth
+   * for how many distinct on-screen states the scroll actually produced —
+   * independent of anything this wrapper logs about itself.
+   */
+  it('produces at least 50 distinct scroll positions per second in a real browser', async () => {
+    const out = join(ARTIFACTS_ROOT, 'run-scroll-cadence')
+    await rm(out, { force: true, recursive: true })
+
+    const CADENCE_FIXTURE_URL =
+      'data:text/html,' +
+      encodeURIComponent(
+        '<!doctype html><html><body style="margin:0;height:3000px">' +
+          '<script>window.__scrollSamples=[];' +
+          "window.addEventListener('scroll',function(){" +
+          'window.__scrollSamples.push(window.scrollY)},{passive:true});' +
+          '</script>' +
+          '</body></html>',
+      )
+    const SCROLL_DISTANCE_PX = 500
+
+    let samples: number[] = []
+    let elapsedMs = 0
+    await record({ out, seed: 3 }, async (page, demo) => {
+      await page.goto(CADENCE_FIXTURE_URL)
+      const before = Date.now()
+      await demo.scroll(0, SCROLL_DISTANCE_PX)
+      elapsedMs = Date.now() - before
+      samples = await page.evaluate(
+        () =>
+          (window as unknown as { __scrollSamples: number[] }).__scrollSamples,
+      )
+    })
+
+    const distinctPositions = new Set(samples).size
+    const elapsedSeconds = elapsedMs / 1000
+    const positionsPerSecond = distinctPositions / elapsedSeconds
+    expect(positionsPerSecond).toBeGreaterThanOrEqual(50)
+
+    // Wall time should track the intended default speed
+    // (SCROLL_DISTANCE_PX / DEFAULT_SCROLL_SPEED_PX_PER_SECOND). Generous
+    // tolerance covers real scheduling jitter and the rare case where the
+    // per-step cap's growth loop lengthens the scroll slightly.
+    const expectedSeconds =
+      SCROLL_DISTANCE_PX / DEFAULT_SCROLL_SPEED_PX_PER_SECOND
+    expect(elapsedSeconds).toBeGreaterThan(expectedSeconds * 0.7)
+    expect(elapsedSeconds).toBeLessThan(expectedSeconds * 1.6)
   }, 30_000)
 
   it('resolves a fresh bounding box and actually hits the target after a scroll settles', async () => {
