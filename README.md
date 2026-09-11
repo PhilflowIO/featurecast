@@ -20,7 +20,19 @@ await record(
 )
 ```
 
-Stand: M0 ist umgesetzt: TypeScript, Playwright, Formatierung und ein Smoke-Demo sind lauffähig. Die Aufnahme-, Wrapper- und Render-Stufen folgen den Meilensteinen. [PLAN.md](PLAN.md) beschreibt Architektur und belegte Entscheidungen, [MILESTONES.md](MILESTONES.md) die Ziele in Reihenfolge, [docs/DEVICES.md](docs/DEVICES.md) das Geräte-Konzept.
+Stand: M0 und M2 sind umgesetzt: TypeScript, Playwright, Formatierung, ein Smoke-Demo und der `demo`-Wrapper mit Ereignis-Log sind lauffähig. Die Aufnahme- und Render-Stufen folgen den weiteren Meilensteinen. [PLAN.md](PLAN.md) beschreibt Architektur und belegte Entscheidungen, [MILESTONES.md](MILESTONES.md) die Ziele in Reihenfolge, [docs/DEVICES.md](docs/DEVICES.md) das Geräte-Konzept.
+
+## Ereignis-Log v1
+
+`record({ device?, out, seed? }, async (page, demo) => ...)` legt einen `demo`-Wrapper (`point`, `click`, `tap`, `type`, `hold`, `scroll`) um Playwrights Seite und schreibt daneben ein kanonisches, versioniertes `events.jsonl`. Jede Zeile hat eine feste Feldreihenfolge; die Datei endet immer mit einem Zeilenumbruch. Zwei Läufe desselben Skripts mit demselben `seed` erzeugen bitidentische Dateien — bewiesen gegen einen echten headless Chromium in `tests/record.browser.test.ts`.
+
+Jede Bewegung läuft über die übernommene Minimum-Jerk-Kurve aus `matinee` (Anfahren, Abbremsen, leichtes Überschwingen, Zittern) statt über lineare Interpolation, und wird der Seite bei echten 60 Bildern pro Sekunde vorgespielt: jede Zeigerprobe wartet auf ihren absoluten Zeitpunkt (Start + i/60 s), nicht auf eine aufaddierte Pause, damit sich kein Zeitfehler aufsummiert. Zwischen zwei benachbarten Zeigerproben liegen nie mehr als 20 Pixel; die Kurvendauer wird dafür analytisch aus der Distanz hergeleitet (`src/motion.ts`), nicht geschätzt. `hold(ms)` legt die Seite für die angegebene Zeit wirklich still, statt nur das Protokoll weiterzuzählen. `type(target, text)` fährt das Feld mit dem Zeiger an, fokussiert es per Klick oder Tap (je nach Gerät) und tippt dann echte Tasten mit einer seed-abhängigen Verzögerung pro Zeichen.
+
+`tick` bleibt die deterministische Renderer-Zeitbasis bei 60 fps (Stichproben-Index, nicht Echtzeit): Zeigerproben erhöhen ihn um eins, `hold(ms)` um `ceil(ms / 1000 * 60)`. Die Korrelation mit der echten Capture-Uhr ist Sache eines späteren Capture-Meilensteins (#9).
+
+Ein Ziel, dessen Bounding-Box außerhalb des Viewports liegt, lässt `record` mit einer Fehlermeldung abbrechen, die auf `demo.scroll` verweist — ein automatisches Scrollen würde einen unsichtbaren Sprung ins Video einbauen.
+
+`device` wird bereits gegen Playwrights Geräteregistrierung aufgelöst, unter anderem für `hasTouch`, damit `tap` in einem echten Touch-Kontext läuft statt abzustürzen. Ein unbekannter Name bricht mit einer Fehlermeldung ab, die ähnliche oder verfügbare Namen nennt. Die kuratierte Voreinstellungs-Ebene darüber (Aufnahme-/Ausgabeformat, Zeiger-Art) folgt in M5.
 
 ## Entwicklung
 
