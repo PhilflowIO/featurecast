@@ -25,6 +25,8 @@ export type LocatorLike = {
 export type ViewportSize = { height: number; width: number }
 
 export type RecordPage = {
+  /** Runs a page-context function and awaits its (possibly async) result. */
+  evaluate: <T>(pageFunction: () => T | Promise<T>) => Promise<T>
   goto: (url: string) => Promise<void>
   /** Set by the runtime from the resolved device descriptor; false without one. */
   hasTouch: boolean
@@ -199,15 +201,16 @@ export function createRecorder(
         for (const [index, next] of points.entries()) {
           // Real samples land on absolute deadlines (start + i/fps), not
           // accumulated sleeps, so pacing error never compounds across a move.
-          // A held pixel still consumes its deadline even when it is not
-          // re-emitted as a log event just below.
+          // `tick` is the scheduled 60Hz slot index: every generated sample —
+          // including one that rounds to the same pixel as its predecessor
+          // (the pointer briefly "held") — consumes and logs its own slot, so
+          // tick stays a uniform timebase issue #9 can map onto the capture
+          // clock 1:1.
           await sleepUntil(page, start + ((index + 1) / EVENT_LOG_FPS) * 1000)
-          if (next.x !== pointer.x || next.y !== pointer.y) {
-            await page.mouse.move(next.x, next.y, { steps: 1 })
-            pointer = next
-            events.push({ type: 'pointer', tick, x: next.x, y: next.y })
-            tick += 1
-          }
+          await page.mouse.move(next.x, next.y, { steps: 1 })
+          pointer = next
+          events.push({ type: 'pointer', tick, x: next.x, y: next.y })
+          tick += 1
         }
       }
 
@@ -218,6 +221,15 @@ export function createRecorder(
         const destination = {
           x: Math.round(bbox.x + bbox.width / 2),
           y: Math.round(bbox.y + bbox.height / 2),
+        }
+        const viewport = page.viewportSize()
+        if (viewport !== null && !containsPoint(destination, viewport)) {
+          throw new Error(
+            `Interaction point (${String(destination.x)}, ` +
+              `${String(destination.y)}) lies outside the ` +
+              `${String(viewport.width)}x${String(viewport.height)} viewport. ` +
+              'Use demo.scroll to bring it into view before interacting.',
+          )
         }
         await moveToPoint(destination)
         return { bbox, ...destination }
@@ -259,15 +271,25 @@ export function createRecorder(
           } else {
             await page.mouse.click(hit.x, hit.y)
           }
-          for (const [index, character] of [...text].entries()) {
+          // Iterate code points, not UTF-16 code units, so a surrogate-pair
+          // character (e.g. an emoji) counts as one key and doesn't pick up
+          // a spurious trailing delay.
+          const characters = [...text]
+          const startTick = tick
+          let consumedSlots = 0
+          for (const [index, character] of characters.entries()) {
             await page.keyboard.type(character)
-            if (index < text.length - 1) {
-              const delay =
+            if (index < characters.length - 1) {
+              const delayMs =
                 KEY_DELAY_MIN_MS + Math.round(random() * KEY_DELAY_JITTER_MS)
-              await page.waitForTimeout(delay)
+              // Deterministic from the seed, not measured wall time, so the
+              // log stays reproducible even though the real wait varies.
+              consumedSlots += Math.round((delayMs / 1000) * EVENT_LOG_FPS)
+              await page.waitForTimeout(delayMs)
             }
           }
-          events.push({ type: 'type', tick, text, bbox: hit.bbox })
+          events.push({ type: 'type', tick: startTick, text, bbox: hit.bbox })
+          tick += consumedSlots
         },
         hold: async (milliseconds) => {
           if (!Number.isFinite(milliseconds) || milliseconds < 0) {
@@ -284,8 +306,16 @@ export function createRecorder(
           if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
             throw new Error('Scroll deltas must be finite numbers')
           }
-          await paceWheel(page, deltaX, deltaY)
+          const steps = computeScrollSteps(deltaX, deltaY)
           events.push({ type: 'scroll', tick, deltaX, deltaY })
+          await paceWheel(page, deltaX, deltaY, steps)
+          // The wheel dispatch loop above only proves our synthetic input was
+          // sent; Chromium's own scroll (momentum, smooth-scroll) can still be
+          // animating after the last event. Block until the page reports a
+          // stable scroll position so the next target resolution reads
+          // settled geometry, not a mid-scroll snapshot.
+          await waitForScrollSettle(page)
+          tick += steps
         },
       }
 
@@ -408,15 +438,22 @@ function resolveDeviceDescriptor(
   throw new Error(`Unknown device "${name}". Close names: ${suggestions}`)
 }
 
+const MAX_WHEEL_STEP_PX = 40
+
+/** Number of 60Hz increments a scroll of this size is split into. Pure and
+ * deterministic so the tick timebase never depends on measured wall time. */
+function computeScrollSteps(deltaX: number, deltaY: number): number {
+  const magnitude = Math.hypot(deltaX, deltaY)
+  return Math.max(1, Math.ceil(magnitude / MAX_WHEEL_STEP_PX))
+}
+
 /** Splits a scroll into 60 Hz increments paced against absolute deadlines. */
 async function paceWheel(
   page: RecordPage,
   deltaX: number,
   deltaY: number,
+  steps: number,
 ): Promise<void> {
-  const magnitude = Math.hypot(deltaX, deltaY)
-  const maxWheelStep = 40
-  const steps = Math.max(1, Math.ceil(magnitude / maxWheelStep))
   const start = Date.now()
   let sentX = 0
   let sentY = 0
@@ -436,6 +473,43 @@ async function sleepUntil(page: RecordPage, deadline: number): Promise<void> {
   if (remaining > 0) await page.waitForTimeout(remaining)
 }
 
+/**
+ * Blocks until the page's own scroll position has been unchanged for a few
+ * animation frames, so callers never read geometry mid-scroll. Throws (via
+ * the rejected page-context promise) if it never settles within budget.
+ */
+async function waitForScrollSettle(page: RecordPage): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const REQUIRED_STABLE_FRAMES = 3
+        const TIMEOUT_MS = 2000
+        const start = performance.now()
+        let last = { x: window.scrollX, y: window.scrollY }
+        let stableFrames = 0
+        const check = (): void => {
+          const current = { x: window.scrollX, y: window.scrollY }
+          if (current.x === last.x && current.y === last.y) {
+            stableFrames += 1
+          } else {
+            stableFrames = 0
+            last = current
+          }
+          if (stableFrames >= REQUIRED_STABLE_FRAMES) {
+            resolve()
+            return
+          }
+          if (performance.now() - start > TIMEOUT_MS) {
+            reject(new Error('Scroll position did not settle within timeout'))
+            return
+          }
+          requestAnimationFrame(check)
+        }
+        requestAnimationFrame(check)
+      }),
+  )
+}
+
 function intersectsViewport(
   bbox: BoundingBox,
   viewport: ViewportSize,
@@ -445,6 +519,19 @@ function intersectsViewport(
     bbox.x + bbox.width > 0 &&
     bbox.y < viewport.height &&
     bbox.y + bbox.height > 0
+  )
+}
+
+/** Whether an interaction point (e.g. a bbox center) is actually clickable. */
+function containsPoint(
+  point: { x: number; y: number },
+  viewport: ViewportSize,
+): boolean {
+  return (
+    point.x >= 0 &&
+    point.x <= viewport.width &&
+    point.y >= 0 &&
+    point.y <= viewport.height
   )
 }
 

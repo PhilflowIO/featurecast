@@ -36,6 +36,7 @@ function fakePage(viewport = { height: 720, width: 1280 }) {
   const locatorValue = { boundingBox }
   const locator = vi.fn().mockReturnValue(locatorValue)
   return {
+    evaluate: vi.fn().mockResolvedValue(undefined),
     goto: vi.fn().mockResolvedValue(undefined),
     hasTouch: false,
     keyboard: { type: vi.fn().mockResolvedValue(undefined) },
@@ -152,7 +153,13 @@ describe('record', () => {
     expect(click.tick).toBe(pointerEvents.length)
     expect(tap.tick).toBe(click.tick)
     expect(typed.tick).toBe(tap.tick)
-    expect(hold).toMatchObject({ milliseconds: 100, tick: typed.tick })
+    // tick is the scheduled 60Hz slot index: typing's seeded per-key delays
+    // (40-110ms, 10 gaps for 'Featurecast') consume real time and must
+    // advance it by a deterministic, bounded amount before hold's own tick.
+    const typeSlots = Number(hold.tick) - Number(typed.tick)
+    expect(typeSlots).toBeGreaterThanOrEqual(2 * ('Featurecast'.length - 1))
+    expect(typeSlots).toBeLessThanOrEqual(7 * ('Featurecast'.length - 1))
+    expect(hold.milliseconds).toBe(100)
     expect(scroll.tick).toBe(Number(hold.tick) + 6)
     expect(click).toMatchObject({
       bbox: { height: 20, width: 60, x: 100, y: 50 },
@@ -363,5 +370,87 @@ describe('record', () => {
         demo.click('#offscreen'),
       ),
     ).rejects.toThrow(/lies outside the .* viewport.*demo\.scroll/)
+  })
+
+  it('rejects a target whose interaction point falls outside the viewport even when its bounding box overlaps it', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage({ height: 720, width: 1280 })
+    // Overlaps the viewport (x+width = 20 > 0) so the bbox-overlap guard lets
+    // it through, but its center (x = -30) is not a clickable point.
+    page.locator.mockReturnValue({
+      boundingBox: vi
+        .fn()
+        .mockResolvedValue({ height: 40, width: 100, x: -80, y: 100 }),
+    })
+
+    await expect(
+      createRecorder(runtimeFor(page))({ out: output }, async (_page, demo) =>
+        demo.click('#half-offscreen'),
+      ),
+    ).rejects.toThrow(
+      /Interaction point.*lies outside the .* viewport.*demo\.scroll/,
+    )
+  })
+
+  it('waits for the scroll position to settle before resolving', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage()
+
+    await createRecorder(runtimeFor(page))(
+      { out: output },
+      async (_page, demo) => {
+        await demo.scroll(0, 900)
+      },
+    )
+
+    expect(page.evaluate).toHaveBeenCalled()
+  })
+
+  it('propagates a scroll-settle timeout instead of silently continuing', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage()
+    page.evaluate = vi
+      .fn()
+      .mockRejectedValue(
+        new Error('Scroll position did not settle within timeout'),
+      )
+
+    await expect(
+      createRecorder(runtimeFor(page))({ out: output }, async (_page, demo) =>
+        demo.scroll(0, 900),
+      ),
+    ).rejects.toThrow('Scroll position did not settle within timeout')
+  })
+
+  it('types every code point exactly once, even across a surrogate pair', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage()
+    const text = 'a\u{1F600}b' // 'a', an emoji surrogate pair, 'b' — 3 code points
+
+    await createRecorder(runtimeFor(page))(
+      { out: output },
+      async (_page, demo) => {
+        await demo.type('#title', text)
+      },
+    )
+
+    const codePointCount = [...text].length
+    expect(page.keyboard.type).toHaveBeenCalledTimes(codePointCount)
+    // The very last thing the typing loop does must be typing the final code
+    // point, not a trailing inter-key wait — the P3 bug compared the delay
+    // index against the UTF-16 code-unit length instead of the code-point
+    // count, so a surrogate pair picked up a spurious wait after the last char.
+    const lastTypeCallOrder =
+      page.keyboard.type.mock.invocationCallOrder.at(-1)!
+    const lastWaitCallOrder =
+      page.waitForTimeout.mock.invocationCallOrder.at(-1)!
+    expect(lastWaitCallOrder).toBeLessThan(lastTypeCallOrder)
+
+    const events = (await readFile(join(output, 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+    const typed = events.find((event) => event.type === 'type')
+    expect(typed).toMatchObject({ text })
   })
 })
