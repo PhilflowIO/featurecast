@@ -79,7 +79,15 @@ function createHarness(options: { gridRange?: number } = {}) {
   // assertTableIsDense is the only caller left of plain `page.evaluate(fn)`
   // (no arguments) — scroll-target discovery and measurement now go through
   // `evaluateHandle`/the returned handle's own `.evaluate()` below.
-  const evaluate = vi.fn().mockImplementation(async () => {
+  // `waitForStableScrollGeometry` is the one caller that sends a raw source
+  // string; it gets a settle outcome (scriptable via `setGeometrySettles`).
+  let geometrySettles = true
+  const callOrder: string[] = []
+  const evaluate = vi.fn().mockImplementation(async (argument: unknown) => {
+    if (typeof argument === 'string') {
+      callOrder.push('settle')
+      return { elapsedMs: 500, settled: geometrySettles }
+    }
     const title = currentUrl.split('/').pop() ?? ''
     return recordsByPath[title] ?? -1
   })
@@ -100,10 +108,13 @@ function createHarness(options: { gridRange?: number } = {}) {
       .fn()
       .mockImplementation(async (_function_: unknown, axis: 'x' | 'y') => {
         const current = axis === 'x' ? gridCurrentX : gridCurrentY
-        return { current, range: gridRange }
+        return { current, description: 'main.flex-1', range: gridRange }
       }),
   }
-  const evaluateHandle = vi.fn().mockResolvedValue(scrollElementHandle)
+  const evaluateHandle = vi.fn().mockImplementation(async () => {
+    callOrder.push('discover')
+    return scrollElementHandle
+  })
 
   const page = {
     evaluate,
@@ -143,8 +154,12 @@ function createHarness(options: { gridRange?: number } = {}) {
   }
 
   return {
+    callOrder,
     demo,
     demoClick,
+    setGeometrySettles: (settles: boolean) => {
+      geometrySettles = settles
+    },
     demoPoint,
     demoScroll,
     demoType,
@@ -217,6 +232,64 @@ describe('runOnlyDashMotion', () => {
     expect(windows.some((window) => window.label.includes('scroll-down'))).toBe(
       true,
     )
+  })
+
+  it('waits for scroll geometry to settle before discovering any scroll target', async () => {
+    const { callOrder, demo, page } = createHarness({ gridRange: 600 })
+
+    await runOnlyDashMotion(page as never, demo)
+
+    expect(callOrder[0]).toBe('settle')
+    // Every table visit settles once, then discovers a target for each pass;
+    // a discovery is never the first geometry read after a table switch.
+    const settles = callOrder.filter((call) => call === 'settle').length
+    expect(settles).toBe(8)
+    for (const [index, call] of callOrder.entries()) {
+      if (call === 'discover') {
+        expect(callOrder.slice(0, index)).toContain('settle')
+      }
+    }
+  })
+
+  it('fails the run instead of choosing a scroll target on a layout that never settles', async () => {
+    const { demo, page, setGeometrySettles } = createHarness({ gridRange: 600 })
+    setGeometrySettles(false)
+
+    await expect(runOnlyDashMotion(page as never, demo)).rejects.toThrow(
+      'scroll ranges still changing',
+    )
+    expect(demo.scroll).not.toHaveBeenCalled()
+  })
+
+  it('names the scrolled element and opens each scroll window only after target discovery', async () => {
+    const { demo, page } = createHarness({ gridRange: 600 })
+    let clock = 1_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 5))
+    const discoveryTimes: number[] = []
+    const discover = page.evaluateHandle
+    page.evaluateHandle = vi
+      .fn()
+      .mockImplementation(async (...arguments_: unknown[]) => {
+        discoveryTimes.push(Date.now())
+        return discover(...arguments_)
+      })
+    try {
+      const windows = await runOnlyDashMotion(page as never, demo)
+
+      const scrollWindows = windows.filter((window) =>
+        window.label.includes('scroll'),
+      )
+      expect(scrollWindows.length).toBeGreaterThan(0)
+      for (const window of scrollWindows) {
+        expect(window.target).toMatch(/^main\.flex-1 \((x|y) range 600px\)$/)
+        const lastDiscovery = Math.max(
+          ...discoveryTimes.filter((time) => time < window.end),
+        )
+        expect(window.start).toBeGreaterThan(lastDiscovery)
+      }
+    } finally {
+      nowSpy.mockRestore()
+    }
   })
 
   it('only visits tables measured to hold at least the density floor', async () => {

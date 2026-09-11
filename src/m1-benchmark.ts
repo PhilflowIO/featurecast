@@ -43,6 +43,105 @@ export function resolveM1CaptureArguments(arguments_: readonly string[]): {
 type ScrollableMetrics = { current: number; range: number }
 
 /**
+ * How long every scroll range on the page must stay unchanged before a
+ * scroll target may be chosen. Measured live on the AI box (RTX 3090):
+ * after a table switch OnlyDash's DataGrid root starts at the height the
+ * previous view left behind and then grows by exactly 1px per rendered
+ * frame (~24fps while it grows, because every step re-lays-out the whole
+ * grid) until it fits every row — 27s for `tasks` after the Projects view.
+ * While it grows, scroll range drains from the grid's own
+ * `.MuiDataGrid-virtualScroller` into the page's `main` container (their
+ * sum stays ~590px for `tasks`), so "the element with the largest range"
+ * is decided by how far that growth has got at the instant of asking. A
+ * 1px step every ~40ms changes the signature well inside 500ms, so this
+ * window cannot mistake a growing layout for a settled one.
+ */
+export const SCROLL_GEOMETRY_STABLE_MS = 500
+const SCROLL_GEOMETRY_SAMPLE_MS = 50
+/** Upper bound for one settle wait; the longest growth measured was 27s. */
+export const SCROLL_GEOMETRY_TIMEOUT_MS = 45_000
+
+/**
+ * Resolves once the scroll range of every scrollable element on the page
+ * (every `overflow: auto|scroll` element with a non-zero range, plus the
+ * document's own scrolling element) has stayed identical for `stableMs`,
+ * sampled in-page every 50ms; throws if that never happens within
+ * `timeoutMs`. Returns how long the wait took, for the run's report.
+ *
+ * This is what makes scroll-target selection deterministic: choosing
+ * during a layout transient picks whichever nested scroller currently
+ * holds more of the range (see `SCROLL_GEOMETRY_STABLE_MS`), and scrolling
+ * during it also runs against a main thread saturated by the growth
+ * itself (measured: 22-24 rAF ticks/s, 54ms median wheel round trip, a
+ * 503px `demo.scroll` taking 2.7s instead of ~0.8s).
+ */
+export async function waitForStableScrollGeometry(
+  page: Pick<Page, 'evaluate'>,
+  stableMs = SCROLL_GEOMETRY_STABLE_MS,
+  timeoutMs = SCROLL_GEOMETRY_TIMEOUT_MS,
+): Promise<number> {
+  // A raw source string for the same `__name` reason as
+  // `findLargestScrollElement` below; all three numbers are this module's
+  // own finite constants or a caller's number, never user text.
+  const outcome = (await page.evaluate(`
+    new Promise(function (resolve) {
+      var stableMs = ${String(stableMs)};
+      var sampleMs = ${String(SCROLL_GEOMETRY_SAMPLE_MS)};
+      var timeoutMs = ${String(timeoutMs)};
+      var ids = new WeakMap();
+      var nextId = 0;
+      var start = Date.now();
+      var lastSignature = null;
+      var lastChange = start;
+      function idOf(element) {
+        if (!ids.has(element)) ids.set(element, nextId++);
+        return ids.get(element);
+      }
+      function signature() {
+        var root = document.scrollingElement || document.documentElement;
+        var parts = ['root:' + (root.scrollHeight - root.clientHeight) + 'x' + (root.scrollWidth - root.clientWidth)];
+        var all = document.querySelectorAll('*');
+        for (var i = 0; i < all.length; i++) {
+          var element = all[i];
+          var rangeY = element.scrollHeight - element.clientHeight;
+          var rangeX = element.scrollWidth - element.clientWidth;
+          if (rangeY <= 0 && rangeX <= 0) continue;
+          var style = getComputedStyle(element);
+          var scrollable = /auto|scroll/;
+          if (!scrollable.test(style.overflowY) && !scrollable.test(style.overflowX)) continue;
+          parts.push(idOf(element) + ':' + rangeY + 'x' + rangeX);
+        }
+        return parts.join('|');
+      }
+      function sample() {
+        var now = Date.now();
+        var current = signature();
+        if (current !== lastSignature) {
+          lastSignature = current;
+          lastChange = now;
+        }
+        if (now - lastChange >= stableMs) {
+          resolve({ elapsedMs: now - start, settled: true });
+          return;
+        }
+        if (now - start >= timeoutMs) {
+          resolve({ elapsedMs: now - start, settled: false });
+          return;
+        }
+        setTimeout(sample, sampleMs);
+      }
+      sample();
+    })
+  `)) as { elapsedMs: number; settled: boolean }
+  if (!outcome.settled) {
+    throw new Error(
+      `waitForStableScrollGeometry: scroll ranges still changing after ${String(outcome.elapsedMs)}ms (needed ${String(stableMs)}ms unchanged)`,
+    )
+  }
+  return outcome.elapsedMs
+}
+
+/**
  * Finds the element with the largest actual scroll range on `axis`, among
  * every `overflow: auto|scroll` element plus the document's own scrolling
  * element — instead of a hard-coded selector.
@@ -109,14 +208,16 @@ async function findLargestScrollElement(
   return element
 }
 
-/** Measures a scrollable element's remaining range live. */
+/** Measures a scrollable element's remaining range live, plus a short description for the run report. */
 async function measureScrollable(
   element: ElementHandle<Element>,
   axis: 'x' | 'y',
-): Promise<ScrollableMetrics> {
+): Promise<ScrollableMetrics & { description: string }> {
   return element.evaluate((node, axisArgument: 'x' | 'y') => {
+    const classes = String(node.className).split(' ').slice(0, 2).join('.')
     return {
       current: axisArgument === 'y' ? node.scrollTop : node.scrollLeft,
+      description: `${node.tagName.toLowerCase()}${classes ? `.${classes}` : ''}`,
       range:
         axisArgument === 'y'
           ? node.scrollHeight - node.clientHeight
@@ -137,10 +238,13 @@ async function measureScrollable(
  * coalesce delivery, and is already proven at 60Hz on a 105k-move sweep.
  *
  * Measures the live scrollable range first (not a fixed delta) and skips
- * (returns false) if it is below `MIN_MEANINGFUL_SCROLL_PX` — real ranges
- * for the sidebar (~26px) and most grids (~2-71px) at this viewport are not
- * worth claiming as motion. Asserts afterward that the position actually
- * changed when it did attempt to scroll.
+ * (records no window) if it is below `MIN_MEANINGFUL_SCROLL_PX` — real
+ * ranges for the sidebar (~26px) and most grids (~2-71px) at this viewport
+ * are not worth claiming as motion. Otherwise records a motion window that
+ * spans only the `demo.scroll` call and names the scrolled element, then
+ * asserts that the position actually changed. Callers must have waited for
+ * `waitForStableScrollGeometry` first, or the discovered element depends on
+ * layout timing.
  *
  * Hovers the target with a single `boundingBox()` read and jump, not
  * `demo.point`'s verified-hit-test-and-settle machinery: `demo.point`'s
@@ -154,24 +258,39 @@ async function measureScrollable(
  * wheel pacing (`demo.scroll`, still 60Hz) needs to go through the wrapper.
  */
 async function scrollContainerToEdge(
+  windows: MotionWindow[],
   page: Page,
   demo: Demo,
   axis: 'x' | 'y',
   direction: 1 | -1,
-): Promise<boolean> {
+  label: string,
+): Promise<void> {
+  // Discovery, measurement and pointer placement all happen before the
+  // motion window opens: measured on the AI box, they took 30-50ms on a
+  // settled page and 190-260ms while the grid was still growing, all of it
+  // static time that a window wrapped around the whole pass counted as
+  // "motion" (inflating its repeated-frame share and deflating its paint
+  // rate). The window covers the scroll itself and nothing else.
   const target = await findLargestScrollElement(page, axis)
-  const { current, range } = await measureScrollable(target, axis)
+  const { current, description, range } = await measureScrollable(target, axis)
   const scrollTarget = direction > 0 ? range : 0
   const delta = scrollTarget - current
   if (Math.abs(delta) < MIN_MEANINGFUL_SCROLL_PX) {
-    return false
+    return
   }
   const box = await target.boundingBox()
   if (box === null) {
     throw new Error('scrollContainerToEdge: scroll target has no bounding box')
   }
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  const start = Date.now()
   await demo.scroll(axis === 'x' ? delta : 0, axis === 'y' ? delta : 0)
+  windows.push({
+    end: Date.now(),
+    label,
+    start,
+    target: `${description} (${axis} range ${String(range)}px)`,
+  })
 
   const after = await measureScrollable(target, axis)
   if (after.current === current) {
@@ -179,7 +298,6 @@ async function scrollContainerToEdge(
       `scrollContainerToEdge: (${axis}) did not move despite a measured ${String(Math.abs(delta))}px range`,
     )
   }
-  return true
 }
 
 /**
@@ -187,9 +305,10 @@ async function scrollContainerToEdge(
  * `Date.now()`-domain ms, the same clock `capture.ts` uses for
  * `session.startedAt`/`endedAt`) if it reports it produced motion.
  * `action` returning `void` counts as motion unconditionally (a click or
- * type always visibly changes something); returning `false` (as
- * `scrollContainerToEdge` does when it skips a too-small range) means no
- * window is recorded — a skipped pass has nothing to freeze-check.
+ * type always visibly changes something); returning `false` (as the
+ * search-filter pass does) means no window is recorded. Scroll passes do not
+ * go through here: `scrollContainerToEdge` records its own, narrower window
+ * around the scroll alone.
  */
 async function withMotionWindow(
   windows: MotionWindow[],
@@ -397,25 +516,41 @@ export async function runOnlyDashMotion(
       // viewer actually sees the newly-loaded dense table, not scripted
       // "motion".
       await page.waitForTimeout(700)
-      await withMotionWindow(
+      // Also outside every motion window: the grid may still be growing
+      // into its final height (see `SCROLL_GEOMETRY_STABLE_MS`), and no
+      // scroll target is chosen until it has stopped.
+      await waitForStableScrollGeometry(page)
+      await scrollContainerToEdge(
         windows,
+        page,
+        demo,
+        'y',
+        1,
         `${title}:scroll-down:${String(cycle)}`,
-        () => scrollContainerToEdge(page, demo, 'y', 1),
       )
-      await withMotionWindow(
+      await scrollContainerToEdge(
         windows,
+        page,
+        demo,
+        'y',
+        -1,
         `${title}:scroll-up:${String(cycle)}`,
-        () => scrollContainerToEdge(page, demo, 'y', -1),
       )
-      await withMotionWindow(
+      await scrollContainerToEdge(
         windows,
+        page,
+        demo,
+        'x',
+        1,
         `${title}:scroll-right:${String(cycle)}`,
-        () => scrollContainerToEdge(page, demo, 'x', 1),
       )
-      await withMotionWindow(
+      await scrollContainerToEdge(
         windows,
+        page,
+        demo,
+        'x',
+        -1,
         `${title}:scroll-left:${String(cycle)}`,
-        () => scrollContainerToEdge(page, demo, 'x', -1),
       )
       // Scrolling is real motion only while the grid's own scroll range
       // stays meaningful, which a live probe found shrinks to ~0 once its

@@ -32,6 +32,8 @@ export type MotionWindow = {
   end: number
   label: string
   start: number
+  /** For a scroll window: the element that was scrolled, so target choice is auditable across runs. */
+  target?: string
 }
 
 export type MotionWindowCadence = SourceCadenceReport & {
@@ -39,6 +41,7 @@ export type MotionWindowCadence = SourceCadenceReport & {
   end: number
   label: string
   start: number
+  target?: string
 }
 
 /** Per-motion-window cadence, so a slow window is attributable to the action that caused it. */
@@ -61,6 +64,7 @@ export function computeMotionWindowCadence(
       end: window.end,
       label: window.label,
       start: window.start,
+      ...(window.target === undefined ? {} : { target: window.target }),
     }
   })
 }
