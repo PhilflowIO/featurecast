@@ -10,7 +10,8 @@ import {
 } from '../src/cadence.js'
 import {
   resolveM1CaptureArguments,
-  runOnlyDashBenchmark,
+  runOnlyDashMotion,
+  warmUpOnlyDash,
 } from '../src/m1-benchmark.js'
 import { probeOutput } from '../src/probe.js'
 
@@ -25,8 +26,14 @@ try {
   })
   const page = await context.newPage()
 
+  // Signing in and reaching the data grid happens before capture starts:
+  // recording it produced ~0.9s of blank white frames at the head of the
+  // video, which is loading-screen time, not the 20s of dense UI M1 asks
+  // for.
+  await warmUpOnlyDash(page, url)
+
   const capture = await captureScreencast(page, outputDirectory, async () => {
-    await runOnlyDashBenchmark(page, url)
+    await runOnlyDashMotion(page)
   })
   const manifest = JSON.parse(
     await readFile(capture.timestampsPath, 'utf8'),
@@ -37,9 +44,13 @@ try {
   // duration instead of writing it. This is a regression check, not the
   // primary defense.
   await validateNoDuplicateAdjacentFrames(capture.framesDirectory)
-  const cadence = await writeCaptureStats(outputDirectory, manifest)
+  const cadence = await writeCaptureStats(
+    outputDirectory,
+    manifest,
+    capture.droppedDuplicateFrameCount,
+  )
   console.log(
-    `source cadence: ${String(cadence.frameCount)} frames, median ${cadence.medianIntervalMs.toFixed(2)}ms, p95 ${cadence.p95IntervalMs.toFixed(2)}ms, ${(cadence.shareUnderTwentyMs * 100).toFixed(1)}% of gaps <=20ms, ${String(capture.droppedDuplicateFrameCount)} duplicate source frames folded away`,
+    `source cadence: ${String(cadence.frameCount)} frames, median ${cadence.medianIntervalMs.toFixed(2)}ms, p95 ${cadence.p95IntervalMs.toFixed(2)}ms, ${(cadence.shareUnderTwentyMs * 100).toFixed(1)}% of gaps <=20ms, ${String(cadence.droppedDuplicateFrameCount)} duplicate source frames folded away`,
   )
 
   const { durationSeconds } = await assembleScreencast(
