@@ -24,7 +24,9 @@ export type CaptureEfficiencyReport = {
 
 /**
  * Compares, per scripted motion window, how many frames the page actually
- * painted (`paint-rate.ts`'s in-page `requestAnimationFrame` count) against
+ * painted (`paint-rate.ts`'s in-page visual-change-tick count — not a raw
+ * `requestAnimationFrame` count, which fires every vsync regardless of
+ * whether anything actually changed; see that file's doc comment) against
  * how many `captureScreencast` actually received (its own timestamp
  * manifest) — the two counters share the same `Date.now()`-domain clock, so
  * no reconciliation is needed beyond filtering both to `[window.start,
