@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -83,6 +84,22 @@ const MOVES_AFTER_SETTLE_FIXTURE_URL =
       '</body></html>',
   )
 
+/**
+ * Grows around a fixed center 350ms after settling: the interaction point
+ * still hit-tests correctly throughout (same center, before and after), so
+ * the corrective-move branch never fires — the only way to catch a stale
+ * logged bbox here is refreshing it unconditionally after arrival.
+ */
+const GROWS_FIXTURE_URL =
+  'data:text/html,' +
+  encodeURIComponent(
+    '<!doctype html><html><body style="margin:0">' +
+      '<button id="t" style="position:absolute;left:600px;top:300px;width:80px;height:30px;">T</button>' +
+      "<script>setTimeout(function(){var t=document.getElementById('t');" +
+      "t.style.left='560px';t.style.top='285px';t.style.width='160px';t.style.height='60px'},350)</script>" +
+      '</body></html>',
+  )
+
 /** Replaced with a fresh DOM node (not just moved) 250ms after settling. */
 const RERENDER_FIXTURE_URL =
   'data:text/html,' +
@@ -130,6 +147,10 @@ function roundBox(box: BoundingBox): BoundingBox {
     width: Math.round(box.width),
     height: Math.round(box.height),
   }
+}
+
+function sha256(content: string): string {
+  return createHash('sha256').update(content).digest('hex')
 }
 
 /** Independent ground truth: raw DOM geometry, not Playwright's element API. */
@@ -420,6 +441,67 @@ describe('record against a real headless Chromium', () => {
     // it, so this click landed on stale coordinates and the listener
     // never fired even though record() reported success.
     expect(moved).toBe(true)
+  }, 30_000)
+
+  it('stays bit-identical across two runs even when the corrective path fires', async () => {
+    // The determinism test above (produces bit-identical...) only uses a
+    // static fixture, so it never exercises moveTo()'s corrective branch —
+    // exactly the code path whose motion seed must NOT be drawn from the
+    // shared random() stream, or an extra (even zero-length) correction
+    // would shift every later move's curve and break reproducibility on any
+    // page with a chance of triggering it.
+    const runA = join(ARTIFACTS_ROOT, 'run-determinism-corrective-a')
+    const runB = join(ARTIFACTS_ROOT, 'run-determinism-corrective-b')
+    await rm(runA, { force: true, recursive: true })
+    await rm(runB, { force: true, recursive: true })
+
+    const script = async (page: RecordPage, demo: Demo) => {
+      await page.goto(MOVES_AFTER_SETTLE_FIXTURE_URL)
+      await demo.click('#t')
+    }
+
+    await record({ out: runA, seed: 7 }, script)
+    await record({ out: runB, seed: 7 }, script)
+
+    const logA = await readFile(join(runA, 'events.jsonl'), 'utf8')
+    const logB = await readFile(join(runB, 'events.jsonl'), 'utf8')
+    expect(sha256(logB)).toBe(sha256(logA))
+  }, 30_000)
+
+  it('logs the bbox at arrival, not before travel, even when no correction fires', async () => {
+    const out = join(ARTIFACTS_ROOT, 'run-grows-during-travel')
+    await rm(out, { force: true, recursive: true })
+
+    let liveRectAtClick: BoundingBox | undefined
+    await record({ out, seed: 7 }, async (page, demo) => {
+      await page.goto(GROWS_FIXTURE_URL)
+      // The center never moves, so the interaction point keeps hit-testing
+      // '#t' throughout — the corrective-move branch must never fire here.
+      await demo.click('#t')
+      liveRectAtClick = await page.evaluate(() => {
+        const element = document.querySelector('#t')
+        if (element === null) throw new Error('Fixture is missing #t')
+        const rect = element.getBoundingClientRect()
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+      })
+    })
+
+    // Grown to 160x60 by the time of the click; the pre-travel bbox was
+    // still 80x30. A stale-bbox bug logs the latter.
+    expect(roundBox(liveRectAtClick!)).toEqual({
+      x: 560,
+      y: 285,
+      width: 160,
+      height: 60,
+    })
+
+    const log = await readFile(join(out, 'events.jsonl'), 'utf8')
+    const events = log
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+    const click = events.find((event) => event.type === 'click')
+    expect(click).toMatchObject({ bbox: roundBox(liveRectAtClick!) })
   }, 30_000)
 
   it('corrects course and still hits a target replaced with a fresh DOM node during travel', async () => {
