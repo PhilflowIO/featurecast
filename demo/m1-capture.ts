@@ -11,10 +11,16 @@ import {
   type MotionWindow,
 } from '../src/cadence.js'
 import {
+  computeCaptureEfficiencyReport,
+  validateCaptureEfficiencyReport,
+  writeCaptureEfficiencyReport,
+} from '../src/efficiency.js'
+import {
   resolveM1CaptureArguments,
   runOnlyDashMotion,
   warmUpOnlyDash,
 } from '../src/m1-benchmark.js'
+import { readPaintTimestamps, startPaintRateProbe } from '../src/paint-rate.js'
 import { probeOutput } from '../src/probe.js'
 import {
   createRecorder,
@@ -25,7 +31,6 @@ import {
   computeRepeatedFrameReport,
   mapOutputFramesToSource,
   parseTimelineSpans,
-  validateRepeatedFrameReport,
 } from '../src/repeats.js'
 import {
   assertHardwareRenderer,
@@ -78,6 +83,13 @@ try {
   const runInteractions = createRecorder(capturedPageRuntime(page))
   let motionWindows: MotionWindow[] = []
   const capture = await captureScreencast(page, outputDirectory, async () => {
+    // Started right before the scripted motion begins, on the same
+    // Date.now()-domain clock the motion windows below and the capture
+    // manifest already share — see `src/efficiency.ts` for why this,
+    // rather than the source cadence or repeated-frame share, is the
+    // metric that isolates this pipeline's own loss from the app's own
+    // paint rate.
+    await startPaintRateProbe(page)
     await runInteractions(
       { out: outputDirectory, seed: 1, settleTimeoutMs: 10_000 },
       async (_recordPage, demo) => {
@@ -85,6 +97,7 @@ try {
       },
     )
   })
+  const paintTimestamps = await readPaintTimestamps(page)
   const manifest = JSON.parse(
     await readFile(capture.timestampsPath, 'utf8'),
   ) as TimestampManifest
@@ -111,16 +124,21 @@ try {
   )
   await probeOutput(`${outputDirectory}/output.mp4`, durationSeconds)
 
-  // Content-based acceptance gate: ffprobe and adjacent-source-frame
-  // hashing cannot tell 30s of motion from an 11s slideshow padded to the
-  // right duration. ffmpeg's freezedetect (the previous version of this
-  // gate) cannot either, above a certain grain: it requires >=1s of no
-  // change to register anything, so a video that changes content once per
-  // second sails through regardless of how static each of those seconds
-  // is. `repeats.ts` instead maps every 60fps output frame to its source
-  // frame via the exact `timeline.ffconcat` ffmpeg was fed — exact, not a
-  // perceptual approximation, and with no minimum-duration floor — and
-  // judges the share of output frames that are exact repeats.
+  // Reported, not gated: the repeated-output-frame share mixes two
+  // unrelated causes — this pipeline's own loss and the app's own paint
+  // rate (real MUI DataGrid virtualization repaints far below 60fps during
+  // scroll on this content/hardware, proven in docs/CAPTURE-CADENCE.md's
+  // "capture efficiency" section; that is the app's cost, not a defect
+  // here). ffmpeg's freezedetect (the previous version of this gate)
+  // couldn't even see that distinction: it requires >=1s of no change to
+  // register anything, so a video that changes content once per second
+  // sails through regardless of how static each of those seconds is.
+  // `repeats.ts` maps every 60fps output frame to its source frame via the
+  // exact `timeline.ffconcat` ffmpeg was fed — exact, not a perceptual
+  // approximation — and is kept here as a reported slideshow-detection
+  // number (still fails loudly on synthetic slideshow counter-examples, see
+  // `tests/repeats.test.ts`), while `capture-efficiency.json` below is what
+  // M1 acceptance actually gates on.
   const timelineText = await readFile(
     `${outputDirectory}/timeline.ffconcat`,
     'utf8',
@@ -151,11 +169,32 @@ try {
   )
   console.log(
     `motion windows: ${String(motionWindowCadence.length)}, ` +
-      `repeated share inside motion windows: ${(repeatedFrameReport.motionWindowRepeatedShare * 100).toFixed(1)}%, ` +
-      `repeated share of scroll windows: ${(repeatedFrameReport.scrollWindowRepeatedShare * 100).toFixed(1)}%, ` +
-      `repeated share of whole run: ${(repeatedFrameReport.overallRepeatedShare * 100).toFixed(1)}%`,
+      `repeated share inside motion windows: ${(repeatedFrameReport.motionWindowRepeatedShare * 100).toFixed(1)}% (reported, not gated), ` +
+      `repeated share of scroll windows: ${(repeatedFrameReport.scrollWindowRepeatedShare * 100).toFixed(1)}% (reported, not gated), ` +
+      `repeated share of whole run: ${(repeatedFrameReport.overallRepeatedShare * 100).toFixed(1)}% (reported, not gated)`,
   )
-  validateRepeatedFrameReport(repeatedFrameReport)
+
+  // Content-independent acceptance gate: did we capture essentially
+  // everything the page actually painted, regardless of how fast (or slow)
+  // that paint rate was. See `src/efficiency.ts` for the measured evidence
+  // behind the 95% floor and why the app's own paint rate is never gated.
+  const efficiencyReport = computeCaptureEfficiencyReport(
+    manifest,
+    motionWindows,
+    paintTimestamps,
+  )
+  await writeCaptureEfficiencyReport(outputDirectory, efficiencyReport)
+  console.log(
+    `capture efficiency: ${(efficiencyReport.overallEfficiency * 100).toFixed(1)}% ` +
+      `(${String(efficiencyReport.overallCapturedFrameCount)} of ${String(efficiencyReport.overallPaintedFrameCount)} painted frames captured, gated at 95%)`,
+  )
+  for (const window of efficiencyReport.windows) {
+    console.log(
+      `  ${window.label}: painted ${window.paintedFps.toFixed(1)}fps (app's own rate, context only), ` +
+        `efficiency ${(window.efficiency * 100).toFixed(1)}%`,
+    )
+  }
+  validateCaptureEfficiencyReport(efficiencyReport)
 
   await context.close()
 } finally {

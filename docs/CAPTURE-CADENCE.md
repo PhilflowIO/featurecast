@@ -165,6 +165,52 @@ size (derivable from `medianIntervalMs` and the known ~80MB/s ceiling, or
 tracked directly in a future revision) is the way to notice this before a
 capture silently degrades to a slideshow-adjacent cadence again.
 
+## Capture efficiency: a separate question from cadence (added 2026-09-11)
+
+Everything above answers "how fast did the source deliver frames" —
+`shareUnderTwentyMs` and friends. That number mixes two unrelated causes: the
+captured app's own paint rate, and any loss between "the browser painted a
+frame" and "this pipeline received it". `src/efficiency.ts` isolates the
+second one directly: an in-page `requestAnimationFrame` counter
+(`src/paint-rate.ts`) timestamped on the same clock as the capture manifest,
+compared window by window. M1's acceptance pipeline (`demo/m1-capture.ts`)
+now gates on this (95% floor) instead of on the repeated-output-frame share,
+which stays as a reported (not gating) slideshow-detection number.
+
+**Where the loss actually is.** Measured directly against real OnlyDash
+`tasks`-grid scrolling: the page painted ~21fps (in-page rAF, screencast
+attached) while this pipeline only captured ~14fps of it — a real ~69%
+efficiency loss, not a page-paint-rate problem. Isolating the cause with
+synthetic fixtures (no Playwright interaction, a trivial `() => count++`
+`onFrame` with no I/O, so this pipeline's own write queue is provably not
+engaged):
+
+| fixture                                                                     | mechanism                                           | efficiency                   |
+| --------------------------------------------------------------------------- | --------------------------------------------------- | ---------------------------- |
+| light (single sliding div)                                                  | compositor-only transform                           | 100%                         |
+| dense (400 colorful cells)                                                  | compositor-only transform                           | 98.9%                        |
+| layout-thrash (400 cells, forced synchronous layout every frame)            | main-thread layout, no DOM churn                    | 97.8%                        |
+| DOM churn (create/destroy real nodes every frame, MUI-virtualization-style) | main-thread layout **and** node create/destroy      | 45-86% (run-to-run variance) |
+| same DOM-churn fixture, quality lowered 100→20                              | less Chromium-side JPEG-encode CPU cost, same churn | 96.7%                        |
+
+The CDP `Page.screencastFrameAck` round-trip (arrival→ack, instrumented
+directly in playwright-core's `CRPage._onScreencastFrame`) stayed 1-2ms
+median in every row above, including the lossy ones — this pipeline's own
+ack handling and write queue are not the cause. Real DOM node
+creation/destruction (not style/layout mutation alone) reproduces the loss
+in isolation, and reducing JPEG-encode cost (lower quality) recovers it,
+which together point at Chromium's own screencast frame production
+competing with the captured page's own DOM-mutation cost for CPU — genuinely
+upstream of this codebase, not a bug in `capture.ts`.
+
+**Consequence for the quality/size trade-off already described above:**
+lowering quality is not just a throughput lever for the ~80-100MB/s ceiling,
+it is also the one lever that recovered capture efficiency during real DOM
+churn in the measurement above. A future target app whose interactions
+trigger heavy virtualization-style DOM churn may need a lower quality (or
+smaller capture size) specifically to keep capture efficiency — not just
+frame-byte throughput — above the 95% floor.
+
 ## PLAN.md / docs/DEVICES.md divergence (unresolved, flagged for the owner)
 
 Fixing the crop-shears-the-toolbar defect (see the main report, item 5)
