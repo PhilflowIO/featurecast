@@ -1,12 +1,26 @@
 import type { Page } from 'playwright'
 
 /**
- * Starts an in-page paint-timestamp probe: timestamps every vsync tick
+ * Starts an in-page change-tick probe: timestamps every vsync tick
  * (`Date.now()`-domain, the same clock `capture.ts`'s manifest and
  * `m1-benchmark.ts`'s motion windows already use) **during which the page
- * gave evidence of an actual visual change**, so painted-frame counts can be
- * compared against captured-frame counts window-by-window
- * (`src/efficiency.ts` does that comparison).
+ * gave evidence of an actual visual change**.
+ *
+ * **This is context, not a frame count, and it must never be a
+ * denominator again.** It was one until #21, and it was wrong in the
+ * direction that hides failure: the callback runs on the renderer's main
+ * thread, while smooth scrolling is driven by the compositor thread and
+ * keeps presenting frames whether or not the main thread gets a slice. So
+ * during exactly the motion this project exists to record, the count is too
+ * low — measured in one real window, 66 frames presented against 51 ticks
+ * seen. `captured / ticks` therefore rises as the machine degrades, and on
+ * a real acceptance run it reported 100.9% capture efficiency, which the
+ * 95% gate passed. No filter fixes this; the signal simply is not
+ * observable from the main thread. Chromium's own presented-frame count is
+ * (`src/presented.ts`), and that is what `src/efficiency.ts` divides by
+ * now. What this probe still tells you is how much of the page's motion the
+ * page's own JavaScript could see, which is worth reporting beside the
+ * presented count, and nothing more.
  *
  * Deliberately not a raw `requestAnimationFrame` tick count. A registered
  * `requestAnimationFrame` callback fires on every vsync for a visible tab
