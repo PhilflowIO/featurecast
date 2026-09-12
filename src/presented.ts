@@ -359,3 +359,82 @@ function resolveClockSync(events: readonly TraceEvent[]): {
     pid: pid ?? 0,
   }
 }
+
+/**
+ * The display's refresh rate, read out of the presentation instants
+ * themselves rather than assumed.
+ *
+ * The refresh rate is the outer anchor the capture-efficiency denominator is
+ * bounded against (`src/efficiency.ts`), and it was a hard-wired 60 — true
+ * of the machine it was written on and of nothing else. On a 120Hz display
+ * that constant rejects every window longer than 67ms; on 144Hz it rejected
+ * all 38 motion windows of a real run; below about 40Hz it stops binding at
+ * all. A bound that is only correct on one machine is not an outer anchor,
+ * it is a second assumption.
+ *
+ * The rate is in the data: consecutive presentation instants are one refresh
+ * apart whenever the compositor keeps up, so the interval is the median of
+ * the gaps that are plausibly a single refresh. The band spans 33Hz to
+ * 200Hz, which is every display this could plausibly run against, and the
+ * estimator is the median rather than the mode, because the mode of
+ * millisecond-rounded gaps reads 17ms on this hardware — 58.8Hz, 2% low,
+ * enough to make a 0.93s window look like it overran its ceiling. The median
+ * is what makes the wide band safe: real runs carry 25-64 sub-refresh gaps
+ * and 10-43 gaps just above one refresh, and taking them in moves the
+ * estimate by at most 0.03ms. Measured across twelve full runs on the
+ * reference box the median lands between 16.600 and 16.716ms, i.e.
+ * 59.82-60.24Hz, against a nominal 60.
+ *
+ * Refuses rather than guesses when there is too little to read: a handful of
+ * instants cannot establish a refresh interval, and a fabricated one would
+ * silently widen or close the bound built on it.
+ */
+export function resolveRefreshHz(
+  presentedTimestamps: readonly number[],
+): number {
+  const singleRefreshGaps: number[] = []
+  const sorted = [...presentedTimestamps].sort((a, b) => a - b)
+  for (let index = 1; index < sorted.length; index += 1) {
+    const gap = (sorted[index] ?? 0) - (sorted[index - 1] ?? 0)
+    if (
+      gap >= MIN_PLAUSIBLE_REFRESH_GAP_MS &&
+      gap <= MAX_PLAUSIBLE_REFRESH_GAP_MS
+    ) {
+      singleRefreshGaps.push(gap)
+    }
+  }
+  if (singleRefreshGaps.length < MIN_GAPS_FOR_REFRESH_ESTIMATE) {
+    throw new Error(
+      `Cannot read a refresh interval from ${String(presentedTimestamps.length)} presentation instants: only ${String(singleRefreshGaps.length)} of the gaps between them fall in the ${String(MIN_PLAUSIBLE_REFRESH_GAP_MS)}-${String(MAX_PLAUSIBLE_REFRESH_GAP_MS)}ms band a single refresh can occupy, and ${String(MIN_GAPS_FOR_REFRESH_ESTIMATE)} are needed. Without the display's own rate there is no outer bound on the capture-efficiency denominator.`,
+    )
+  }
+  singleRefreshGaps.sort((a, b) => a - b)
+  const middle = Math.floor(singleRefreshGaps.length / 2)
+  const intervalMs =
+    singleRefreshGaps.length % 2 === 1
+      ? (singleRefreshGaps[middle] ?? 0)
+      : ((singleRefreshGaps[middle - 1] ?? 0) +
+          (singleRefreshGaps[middle] ?? 0)) /
+        2
+  return 1000 / intervalMs
+}
+
+/** 200Hz; below this gap a pair of instants is a sub-refresh partial presentation, not a refresh interval. */
+const MIN_PLAUSIBLE_REFRESH_GAP_MS = 5
+/** 33Hz; above this gap the compositor skipped at least one refresh, so the gap is a multiple. */
+const MAX_PLAUSIBLE_REFRESH_GAP_MS = 30
+/**
+ * Below this many single-refresh gaps the median is noise, and noise here
+ * widens or closes the ceiling built on it.
+ *
+ * Measured rather than guessed: over twelve full runs, taking every
+ * contiguous slice of 30 to 900 instants and comparing the slice's estimate
+ * against the whole run's, the worst error is 4.40Hz once 50 in-band gaps
+ * are present, 1.70Hz at 100, **0.84Hz at 150** and 0.54Hz at 200. At 150
+ * the worst case moves a one-second window's ceiling by less than one frame,
+ * which is inside the sub-refresh allowance it is added to. Real recordings
+ * supply 782-888 in-band gaps per 70-second run, so this only rejects inputs
+ * that genuinely cannot answer the question — a 26-instant trace excerpt,
+ * for instance, reads 61.5Hz on hardware that runs at 60.0.
+ */
+const MIN_GAPS_FOR_REFRESH_ESTIMATE = 150

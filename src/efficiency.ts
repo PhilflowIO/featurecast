@@ -3,6 +3,7 @@ import { join } from 'node:path'
 
 import type { TimestampManifest } from './capture.js'
 import type { MotionWindow } from './cadence.js'
+import { resolveRefreshHz } from './presented.js'
 
 export type CaptureEfficiencyWindow = {
   capturedFrameCount: number
@@ -32,6 +33,13 @@ export type CaptureEfficiencyReport = {
   overallEfficiency: number
   overallPaintedFrameCount: number
   overallPresentedFrameCount: number
+  /**
+   * The display's refresh rate as read out of the presentation instants
+   * themselves (`resolveRefreshHz`), not a constant. It is carried in the
+   * report so that the bound built on it is visible in
+   * `capture-efficiency.json` afterwards, next to the counts it bounds.
+   */
+  refreshHz: number
   windows: CaptureEfficiencyWindow[]
 }
 
@@ -142,6 +150,7 @@ export function computeCaptureEfficiencyReport(
       totals.presented > 0 ? totals.captured / totals.presented : 1,
     overallPaintedFrameCount: totals.painted,
     overallPresentedFrameCount: totals.presented,
+    refreshHz: resolveRefreshHz(presentedTimestamps),
     windows,
   }
 }
@@ -173,37 +182,53 @@ const DEFAULT_MIN_CAPTURE_EFFICIENCY = 0.95
 const MAX_BOUNDARY_CARRY_IN_FRAMES = 1
 
 /**
- * The compositor's refresh rate, and therefore the hard ceiling on how many
- * frames it can put on screen per second.
+ * The most presentation instants a window of a given length can physically
+ * contain, before the denominator is treated as broken.
  *
- * This is the one number in this file that does not come from the pipeline
- * being measured. It is the property of the display the browser composites
- * against, so a denominator that claims more presentations than this is
- * wrong no matter how plausible every ratio built on it looks — and that is
- * exactly how the previous denominator failed: it counted Chromium's
- * *reports* of a presentation rather than the presentations, reported 89.8
- * presented frames per second for `invoices:scroll-down:1`, and nothing in
- * the pipeline objected, because a ratio cannot tell "we captured
- * everything" from "we counted the wrong thing" and neither can a second
- * ratio derived from it.
+ * Two things were wrong with the previous version of this bound, and both
+ * made it fail to bind on real runs.
+ *
+ * **It compared against `refreshHz * duration`, which is the wrong count.**
+ * A window of length `d` does not hold `d / period` refreshes, it holds
+ * `floor(d / period) + 1` — both edges can carry one. Measured: `vr3`'s
+ * `tasks:scroll-left:1` holds 18 instants in 0.291s and was read as "61.9
+ * presented frames per second, above a 60Hz ceiling". It is not above
+ * anything: 18 instants need 17 gaps, 17 x 16.655ms = 283ms, and the window
+ * is 291ms long. The fencepost, not a defect. Against the rate line that
+ * window sat 4.46 frames away from tripping the check — the closest any of
+ * 114 real windows came — so the bound was decorative. Against the fencepost
+ * line it sits exactly on the ceiling, and one more instant fails.
+ *
+ * **And it subtracted one more frame on top** (`presentedFrameCount - 1 >`),
+ * which no comment explained and which turned a documented allowance of 4
+ * into an effective 5.
+ *
+ * What remains is a single measured allowance: genuine sub-refresh instants
+ * exist — `STATE_PRESENTED_PARTIAL` frames that really are separate screen
+ * updates less than a refresh apart — and a short window can hold a couple
+ * of them. Across twelve full runs (four sets of three) and every sliding
+ * 0.30s, 0.50s, 0.90s, 1.50s and 3.00s stretch of each, the instant count
+ * exceeds `floor(span * refreshHz) + 1` by at most **2**. Three is one above
+ * the largest honest excursion ever observed and an order of magnitude below
+ * the double-counting defect this guards against, which exceeded the old,
+ * looser line by 35 to 51 frames on every one of nine runs.
  */
-const COMPOSITOR_REFRESH_HZ = 60
+const MAX_SUB_REFRESH_INSTANTS_PER_WINDOW = 3
 
 /**
- * How far above the 60Hz line a window's presented-frame count may sit
- * before the denominator is treated as broken.
- *
- * Measured, not chosen. Across nine full runs (three Chromium builds x three
- * repeats) and every sub-3-second stretch of each, the distinct presentation
- * instants exceed `60 * span` by at most **1.78 frames** — sub-refresh
- * instants do exist (5.4% of gaps are under 12ms, mostly partially presented
- * frames) but they never accumulate. The double-counting defect this guards
- * against exceeds the same line by **35 to 51 frames** in every one of those
- * nine runs. Four sits an order of magnitude below the smallest defect and
- * more than twice above the largest honest excursion, so it separates the
- * two without a judgement call.
+ * The most presentation instants a window of `durationSeconds` may hold at
+ * `refreshHz` before its denominator is not a measurement.
  */
-const MAX_PRESENTED_FRAMES_ABOVE_REFRESH = 4
+function presentedFrameCeiling(
+  durationSeconds: number,
+  refreshHz: number,
+): number {
+  return (
+    Math.floor(durationSeconds * refreshHz) +
+    1 +
+    MAX_SUB_REFRESH_INSTANTS_PER_WINDOW
+  )
+}
 
 /**
  * Gates on capture efficiency only — never on the page's own presented fps
@@ -218,10 +243,17 @@ const MAX_PRESENTED_FRAMES_ABOVE_REFRESH = 4
  * frames for a per-window ratio to be statistically meaningful on its own.
  *
  * **And it gates the denominator itself, twice.** First against physics: no
- * window may report more presentations than a 60Hz compositor can produce
- * in its own duration. Second against the numerator: a capture cannot hold
- * more frames than the browser presented, beyond the one frame of boundary
- * carry-in above.
+ * window may report more presentation instants than the display's own
+ * refresh rate — read from the instants themselves, not assumed — can
+ * produce in that window's own length. Second against the numerator: a
+ * capture cannot hold more frames than the browser presented, beyond the one
+ * frame of boundary carry-in above.
+ *
+ * Neither of those is the denominator's *lower* bound, and the lower bound
+ * is the dangerous direction: a trace that dropped events yields too few
+ * presentations, which moves capture efficiency **towards** the gate. No
+ * ratio can see that, so it is refused one step earlier, where Chromium
+ * reports it — see `TraceCompleteness` in `src/presented.ts`.
  *
  * Both exist because a ratio alone cannot tell "we captured everything"
  * from "we counted the wrong thing", and neither can a second ratio derived
@@ -238,19 +270,18 @@ export function validateCaptureEfficiencyReport(
 ): void {
   const aboveRefresh = report.windows.filter(
     (window) =>
-      window.presentedFrameCount - 1 >
-      window.durationSeconds * COMPOSITOR_REFRESH_HZ +
-        MAX_PRESENTED_FRAMES_ABOVE_REFRESH,
+      window.presentedFrameCount >
+      presentedFrameCeiling(window.durationSeconds, report.refreshHz),
   )
   if (aboveRefresh.length > 0) {
     const detail = aboveRefresh
       .map(
         (window) =>
-          `${window.label} (${String(window.presentedFrameCount)} presented in ${window.durationSeconds.toFixed(3)}s = ${window.presentedFps.toFixed(1)}fps)`,
+          `${window.label} (${String(window.presentedFrameCount)} presented in ${window.durationSeconds.toFixed(3)}s, ceiling ${String(presentedFrameCeiling(window.durationSeconds, report.refreshHz))})`,
       )
       .join(', ')
     throw new Error(
-      `Capture efficiency denominator is not trustworthy: ${detail} exceeds what a ${String(COMPOSITOR_REFRESH_HZ)}Hz compositor can present. The denominator is counting something other than screen updates, and every ratio built on it — including a passing one — is meaningless.`,
+      `Capture efficiency denominator is not trustworthy: ${detail} exceeds what a ${report.refreshHz.toFixed(1)}Hz compositor can present in that time. The denominator is counting something other than screen updates, and every ratio built on it — including a passing one — is meaningless.`,
     )
   }
 

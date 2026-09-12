@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import {
   extractPresentedFrameTimes,
   PRESENTED_FRAME_TRACE_CATEGORIES,
+  resolveRefreshHz,
   type TraceEvent,
 } from '../src/presented.js'
 
@@ -415,16 +416,34 @@ describe('extractPresentedFrameTimes', () => {
       }
     })
 
-    it('stays under what a 60Hz compositor can physically present', () => {
+    it('stays under the refreshes the excerpt spans', () => {
       // The outer anchor: this bound comes from the display refresh rate,
-      // not from the code under test. Over nine full runs the distinct
-      // instants exceed it by at most 1.8 frames and the raw report count by
-      // 35-51, so this separates the two by an order of magnitude.
+      // not from the code under test. A stretch from the first instant to
+      // the last spans `floor(span / refresh) + 1` refreshes — the fencepost
+      // matters, and getting it wrong is what made this bound decorative in
+      // round two. Over twelve full runs the distinct instants exceed it by
+      // at most 2 and the raw report count by 35-51, so this still separates
+      // the two by an order of magnitude.
       const times = extractPresentedFrameTimes(REAL_TRACE_EXCERPT, COMPLETE)
       const first = times[0] as number
       const last = times[times.length - 1] as number
-      expect(times.length - 1).toBeLessThanOrEqual(
-        ((last - first) / 1000) * 60 + 4,
+      const spanSeconds = (last - first) / 1000
+      expect(times.length).toBeLessThanOrEqual(
+        Math.floor(spanSeconds * 60) + 1 + 3,
+      )
+    })
+
+    it('is too short an excerpt to state the display rate, and says so', () => {
+      // Worth pinning because it is tempting to read one off anyway. These
+      // 26 instants are a verbatim slice of a 69.6s recording on a 60.0Hz
+      // box, and the median of their 25 gaps reads 61.5Hz — 2.5% high, which
+      // on a three-second window is two frames of ceiling. The whole run
+      // supplies 782-888 in-band gaps and lands inside 0.5Hz of the truth;
+      // an excerpt is for testing the pairing, not the display.
+      const times = extractPresentedFrameTimes(REAL_TRACE_EXCERPT, COMPLETE)
+      expect(times.length).toBe(26)
+      expect(() => resolveRefreshHz(times)).toThrow(
+        /Cannot read a refresh interval/,
       )
     })
 
@@ -494,5 +513,47 @@ describe('extractPresentedFrameTimes', () => {
         COMPLETE,
       ),
     ).toThrow(/no fcsync: clock marks/)
+  })
+})
+
+describe('resolveRefreshHz', () => {
+  /** `count` instants exactly one refresh apart at `hz`. */
+  function atRate(hz: number, count: number): number[] {
+    return Array.from({ length: count }, (_, index) => (index * 1000) / hz)
+  }
+
+  it('reads the display rate out of the instants rather than assuming 60', () => {
+    // The bound in `src/efficiency.ts` used to have 60 compiled into it. On
+    // a 120Hz display that rejects every window longer than 67ms; at 144Hz
+    // it rejected all 38 motion windows of a real run; below about 40Hz it
+    // stops binding at all. A constant that is only true of one machine is a
+    // second assumption, not an outer anchor.
+    expect(resolveRefreshHz(atRate(60, 200))).toBeCloseTo(60, 6)
+    expect(resolveRefreshHz(atRate(120, 200))).toBeCloseTo(120, 6)
+    expect(resolveRefreshHz(atRate(144, 200))).toBeCloseTo(144, 6)
+  })
+
+  it('is not thrown off by skipped refreshes or sub-refresh instants', () => {
+    // Real runs contain both: gaps of two and three refreshes where the
+    // compositor missed a deadline, and gaps under half a refresh where a
+    // partially presented frame reached the screen between them. The
+    // estimator takes the median of the gaps a single refresh can occupy, so
+    // neither kind moves it.
+    const instants = atRate(60, 200)
+    const withNoise = [
+      ...instants,
+      ...instants.slice(0, 20).map((time) => time + 3),
+      ...atRate(60, 20).map((time) => time * 3 + 50_000),
+    ].sort((a, b) => a - b)
+
+    expect(resolveRefreshHz(withNoise)).toBeCloseTo(60, 1)
+  })
+
+  it('refuses to invent a rate it cannot read', () => {
+    // A handful of instants cannot establish a refresh interval, and a
+    // fabricated one silently widens or closes the ceiling built on it.
+    expect(() => resolveRefreshHz([0, 16.7, 33.3])).toThrow(
+      /Cannot read a refresh interval/,
+    )
   })
 })

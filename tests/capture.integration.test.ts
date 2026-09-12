@@ -89,7 +89,7 @@ describe('captureScreencast against real Chromium', () => {
         page,
         outputDirectory,
         async () => {
-          await page.waitForTimeout(2_000)
+          await page.waitForTimeout(8_000)
         },
       )
       const paintTimestamps = await readPaintTimestamps(page)
@@ -131,10 +131,14 @@ describe('captureScreencast against real Chromium', () => {
         efficiencyReport.windows[0]?.presentedFrameCount ?? 0,
       ).toBeGreaterThan(30)
       // And the denominator must be instants, not Chromium's reports of
-      // them: this fixture animates for ~2s, so a report-counting
-      // denominator lands far above what 60Hz can produce.
+      // them: a report-counting denominator lands far above what the display
+      // can produce. The rate is the one read off this machine's own
+      // presentation instants, not a hard-wired 60 — the recording runs 8s
+      // rather than 2s so there are enough gaps to read it to better than a
+      // frame (`MIN_GAPS_FOR_REFRESH_ESTIMATE`).
+      expect(efficiencyReport.refreshHz).toBeGreaterThan(24)
       expect(efficiencyReport.windows[0]?.presentedFps ?? 0).toBeLessThan(
-        60 + 4,
+        efficiencyReport.refreshHz + 4,
       )
       // 85%, not the production 95% floor (`src/efficiency.ts`): this
       // fixture's window includes screencast start/stop settling time the

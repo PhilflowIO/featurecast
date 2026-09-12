@@ -24,6 +24,26 @@ function manifestWithFrameTimestamps(timestamps: number[]): TimestampManifest {
   }
 }
 
+/**
+ * A stretch of true-refresh-rate presentation instants, far outside every
+ * window under test.
+ *
+ * `computeCaptureEfficiencyReport` reads the display's refresh rate out of
+ * the presentation instants themselves rather than assuming 60 (see
+ * `resolveRefreshHz`), so a fixture carrying only the handful of instants
+ * one window needs cannot state what the display was doing — and a fixture
+ * that cannot answer the question the code asks is not a fixture. A real
+ * 70-second run carries about 1450 instants; 200 is the smallest stretch
+ * that answers the same question to better than a frame, and it sits at 100s
+ * so it falls in none of the windows below and changes none of their counts.
+ */
+function refreshBackdrop(count = 200, startMs = 100_000): number[] {
+  return Array.from(
+    { length: count },
+    (_, index) => startMs + (index * 1000) / 60,
+  )
+}
+
 /** `count` evenly spaced timestamps across `[start, end)`, as a stand-in for a window's presentations. */
 function evenlySpaced(count: number, start: number, end: number): number[] {
   const step = (end - start) / count
@@ -39,7 +59,7 @@ describe('computeCaptureEfficiencyReport', () => {
     const report = computeCaptureEfficiencyReport(
       manifest,
       windows,
-      presented,
+      [...presented, ...refreshBackdrop()],
       [],
     )
 
@@ -58,7 +78,7 @@ describe('computeCaptureEfficiencyReport', () => {
     const report = computeCaptureEfficiencyReport(
       manifest,
       windows,
-      presented,
+      [...presented, ...refreshBackdrop()],
       [],
     )
 
@@ -79,7 +99,7 @@ describe('computeCaptureEfficiencyReport', () => {
     const report = computeCaptureEfficiencyReport(
       manifest,
       windows,
-      presented,
+      [...presented, ...refreshBackdrop()],
       [],
     )
 
@@ -91,7 +111,12 @@ describe('computeCaptureEfficiencyReport', () => {
     const manifest = manifestWithFrameTimestamps([])
     const windows: MotionWindow[] = [{ end: 100, label: 'idle', start: 0 }]
 
-    const report = computeCaptureEfficiencyReport(manifest, windows, [], [])
+    const report = computeCaptureEfficiencyReport(
+      manifest,
+      windows,
+      refreshBackdrop(),
+      [],
+    )
 
     expect(report.windows[0]?.efficiency).toBe(1)
     expect(report.overallEfficiency).toBe(1)
@@ -108,7 +133,7 @@ describe('computeCaptureEfficiencyReport', () => {
     const report = computeCaptureEfficiencyReport(
       manifest,
       windows,
-      presented,
+      [...presented, ...refreshBackdrop()],
       [],
     )
 
@@ -127,7 +152,7 @@ describe('computeCaptureEfficiencyReport', () => {
     const report = computeCaptureEfficiencyReport(
       manifestWithFrameTimestamps(presented),
       [{ end: 3_000, label: 'tasks:scroll-down:long', start: 0 }],
-      presented,
+      [...presented, ...refreshBackdrop()],
       [],
     )
 
@@ -152,7 +177,7 @@ describe('computeCaptureEfficiencyReport', () => {
     const report = computeCaptureEfficiencyReport(
       manifestWithFrameTimestamps(evenlySpaced(53, 0, 1_000)),
       windows,
-      evenlySpaced(66, 0, 1_000),
+      [...evenlySpaced(66, 0, 1_000), ...refreshBackdrop()],
       evenlySpaced(51, 0, 1_000),
     )
 
@@ -167,9 +192,12 @@ describe('computeCaptureEfficiencyReport', () => {
 describe('validateCaptureEfficiencyReport', () => {
   /**
    * Default duration puts the window at 50 presented frames per second —
-   * below the 60Hz refresh ceiling, so these fixtures describe runs that
-   * could physically have happened. A fixture that could not is not a
-   * fixture, and the refresh check below has its own explicit durations.
+   * below the refresh ceiling, so these fixtures describe runs that could
+   * physically have happened. A fixture that could not is not a fixture, and
+   * the refresh check below has its own explicit durations. The reports pass
+   * `refreshHz: 60`, which is what `resolveRefreshHz` reads off the
+   * reference box (16.612-16.734ms median gap over twelve runs, 59.76-60.20
+   * Hz); the ceiling is computed from that field, never from a constant.
    */
   function windowWith(
     captured: number,
@@ -200,6 +228,7 @@ describe('validateCaptureEfficiencyReport', () => {
         overallEfficiency: 0.95,
         overallPaintedFrameCount: 100,
         overallPresentedFrameCount: 100,
+        refreshHz: 60,
         windows: [windowWith(95, 100)],
       }),
     ).not.toThrow()
@@ -212,6 +241,7 @@ describe('validateCaptureEfficiencyReport', () => {
         overallEfficiency: 0.69,
         overallPaintedFrameCount: 100,
         overallPresentedFrameCount: 100,
+        refreshHz: 60,
         windows: [windowWith(69, 100)],
       }),
     ).toThrow('69 of 100 presented frames captured')
@@ -227,6 +257,7 @@ describe('validateCaptureEfficiencyReport', () => {
         overallEfficiency: 1,
         overallPaintedFrameCount: 10,
         overallPresentedFrameCount: 10,
+        refreshHz: 60,
         windows: [windowWith(10, 10, 'slow-real-content')],
       }),
     ).not.toThrow()
@@ -244,6 +275,7 @@ describe('validateCaptureEfficiencyReport', () => {
         overallEfficiency: 8 / 7,
         overallPaintedFrameCount: 7,
         overallPresentedFrameCount: 7,
+        refreshHz: 60,
         windows: [windowWith(8, 7, 'tasks:1:sort-asc')],
       }),
     ).not.toThrow()
@@ -261,6 +293,7 @@ describe('validateCaptureEfficiencyReport', () => {
         overallEfficiency: 53 / 51,
         overallPaintedFrameCount: 51,
         overallPresentedFrameCount: 51,
+        refreshHz: 60,
         windows: [windowWith(53, 51, 'tasks:scroll-up:2')],
       }),
     ).toThrow(
@@ -268,7 +301,7 @@ describe('validateCaptureEfficiencyReport', () => {
     )
   })
 
-  it('refuses a denominator above what a 60Hz compositor can present', () => {
+  it('refuses a denominator above what the display can present', () => {
     // The real window and the real number: `invoices:scroll-down:1` of a
     // product run on the AI box, 1.0245s long, for which the report-counting
     // denominator claimed 92 presented frames — 89.8 per second on a display
@@ -283,11 +316,42 @@ describe('validateCaptureEfficiencyReport', () => {
         overallEfficiency: 61 / 92,
         overallPaintedFrameCount: 61,
         overallPresentedFrameCount: 92,
+        refreshHz: 60,
         windows: [windowWith(61, 92, 'invoices:scroll-down:1', 1.0245)],
       }),
     ).toThrow(
-      'invoices:scroll-down:1 (92 presented in 1.024s = 89.8fps) exceeds what a 60Hz compositor can present',
+      'invoices:scroll-down:1 (92 presented in 1.024s, ceiling 65) exceeds what a 60.0Hz compositor can present in that time',
     )
+  })
+
+  it('reads the ceiling off the display in the report, not off a hard-wired 60', () => {
+    // The same 92 presentations in the same 1.0245s are ordinary content on
+    // a 120Hz display and impossible on a 60Hz one. The old bound had 60
+    // compiled in, so on 120Hz it rejected every window longer than 67ms and
+    // on 144Hz it rejected all 38 motion windows of a real run, while below
+    // about 40Hz it stopped binding at all. The rate now comes from the
+    // presentation instants themselves.
+    const window120 = windowWith(90, 92, 'invoices:scroll-down:1', 1.0245)
+    expect(() =>
+      validateCaptureEfficiencyReport({
+        overallCapturedFrameCount: 90,
+        overallEfficiency: 90 / 92,
+        overallPaintedFrameCount: 90,
+        overallPresentedFrameCount: 92,
+        refreshHz: 120,
+        windows: [window120],
+      }),
+    ).not.toThrow()
+    expect(() =>
+      validateCaptureEfficiencyReport({
+        overallCapturedFrameCount: 90,
+        overallEfficiency: 90 / 92,
+        overallPaintedFrameCount: 90,
+        overallPresentedFrameCount: 92,
+        refreshHz: 60,
+        windows: [window120],
+      }),
+    ).toThrow(/denominator is not trustworthy/)
   })
 
   it('passes the same window once the denominator counts instants', () => {
@@ -302,26 +366,88 @@ describe('validateCaptureEfficiencyReport', () => {
         overallEfficiency: 1,
         overallPaintedFrameCount: 61,
         overallPresentedFrameCount: 61,
+        refreshHz: 60,
         windows: [windowWith(61, 61, 'invoices:scroll-down:1', 1.0245)],
       }),
     ).not.toThrow()
   })
 
-  it('leaves room for the sub-refresh instants real traces do contain', () => {
-    // Partially presented frames land between refreshes: 5.4% of the gaps
-    // in a real run are under 12ms. Measured over nine full runs and every
-    // sub-3s stretch of each, the honest excess over the 60Hz line peaks at
-    // 1.78 frames, so a window sitting 4 above it must still pass — the
-    // defect it has to catch sits 35 to 51 above.
+  /**
+   * The allowance is pinned from both sides, on purpose.
+   *
+   * A one-second window at 60Hz holds `floor(60 * 1) + 1 = 61` refreshes,
+   * and genuine sub-refresh instants — `STATE_PRESENTED_PARTIAL` frames less
+   * than a refresh apart — add a few more. Measured across twelve full runs
+   * and every sliding 0.30/0.50/0.90/1.50/3.00s stretch of each, that excess
+   * never exceeds 2, so the allowance is 3 and the ceiling is 64.
+   *
+   * 64 must pass and 65 must fail. Loosening the allowance by one frame
+   * fails the second of these; tightening it by one fails the first. Round
+   * two's version had neither: the allowance could be loosened from 4 to 5
+   * without a single test objecting, on the one number in this file that is
+   * supposed to be the outer anchor.
+   */
+  it('accepts a window exactly on the sub-refresh allowance', () => {
     expect(() =>
       validateCaptureEfficiencyReport({
         overallCapturedFrameCount: 64,
         overallEfficiency: 1,
         overallPaintedFrameCount: 64,
-        overallPresentedFrameCount: 65,
-        windows: [windowWith(64, 65, 'dense-but-real', 1.0)],
+        overallPresentedFrameCount: 64,
+        refreshHz: 60,
+        windows: [windowWith(64, 64, 'dense-but-real', 1.0)],
       }),
     ).not.toThrow()
+  })
+
+  it('rejects a window one frame past the sub-refresh allowance', () => {
+    expect(() =>
+      validateCaptureEfficiencyReport({
+        overallCapturedFrameCount: 64,
+        overallEfficiency: 64 / 65,
+        overallPaintedFrameCount: 64,
+        overallPresentedFrameCount: 65,
+        refreshHz: 60,
+        windows: [windowWith(64, 65, 'one-too-many', 1.0)],
+      }),
+    ).toThrow(
+      'one-too-many (65 presented in 1.000s, ceiling 64) exceeds what a 60.0Hz compositor can present in that time',
+    )
+  })
+
+  it('counts the refreshes a window spans, not its length times the rate', () => {
+    // `tasks:scroll-left:1` of the run under `~/featurecast-bench/verify-r2/
+    // art/vr3`: 18 distinct presentation instants in 0.291s, which reads as
+    // 61.9 presented frames per second and was called physically impossible.
+    // It is not. 18 instants need 17 gaps, and 17 x 16.655ms is 283ms inside
+    // a 291ms window — the fencepost, not a defect. Round two's bound sat
+    // 4.46 frames away from tripping on this window, the closest any of 114
+    // real windows came to it, because it compared against `60 * duration`
+    // and then subtracted another frame. Counting the refreshes the window
+    // spans puts the same window 3 frames from the line instead of 4.46, and
+    // the line now moves with the display.
+    const scrollLeft = windowWith(18, 18, 'tasks:scroll-left:1', 0.291)
+    expect(scrollLeft.presentedFps).toBeCloseTo(61.9, 1)
+    expect(() =>
+      validateCaptureEfficiencyReport({
+        overallCapturedFrameCount: 18,
+        overallEfficiency: 1,
+        overallPaintedFrameCount: 18,
+        overallPresentedFrameCount: 18,
+        refreshHz: 60.042,
+        windows: [scrollLeft],
+      }),
+    ).not.toThrow()
+    expect(() =>
+      validateCaptureEfficiencyReport({
+        overallCapturedFrameCount: 22,
+        overallEfficiency: 1,
+        overallPaintedFrameCount: 22,
+        overallPresentedFrameCount: 22,
+        refreshHz: 60.042,
+        windows: [windowWith(22, 22, 'tasks:scroll-left:1', 0.291)],
+      }),
+    ).toThrow(/denominator is not trustworthy/)
   })
 
   it('checks the refresh ceiling before the floor, so an impossible fail cannot mislead either', () => {
@@ -335,9 +461,10 @@ describe('validateCaptureEfficiencyReport', () => {
         overallEfficiency: 0.4,
         overallPaintedFrameCount: 40,
         overallPresentedFrameCount: 100,
+        refreshHz: 60,
         windows: [windowWith(40, 100, 'inflated-and-low', 1.0)],
       }),
-    ).toThrow(/exceeds what a 60Hz compositor can present/)
+    ).toThrow(/exceeds what a 60.0Hz compositor can present in that time/)
   })
 
   it('names the refresh ceiling first when a window trips both denominator checks', () => {
@@ -352,9 +479,10 @@ describe('validateCaptureEfficiencyReport', () => {
         overallEfficiency: 2,
         overallPaintedFrameCount: 200,
         overallPresentedFrameCount: 100,
+        refreshHz: 60,
         windows: [windowWith(200, 100, 'both-wrong', 1.0)],
       }),
-    ).toThrow(/exceeds what a 60Hz compositor can present/)
+    ).toThrow(/exceeds what a 60.0Hz compositor can present in that time/)
   })
 
   it('checks the denominator before the floor, so an impossible pass cannot slip through', () => {
@@ -367,6 +495,7 @@ describe('validateCaptureEfficiencyReport', () => {
         overallEfficiency: 1.009,
         overallPaintedFrameCount: 99,
         overallPresentedFrameCount: 99,
+        refreshHz: 60,
         windows: [windowWith(100, 90, 'inflated')],
       }),
     ).toThrow(/denominator is not trustworthy/)
