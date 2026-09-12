@@ -125,6 +125,20 @@ export function buildDecodePlan(listPath: string): FfmpegPlan {
  * scale filter; relabelling alone would crush blacks. Same reasoning as
  * `src/assemble.ts`.
  *
+ * `setparams` is what actually puts that conversion in the file. With a
+ * `rawvideo`/`rgb24` input there is no colour description on the incoming
+ * frames for `-color_range tv` to attach itself to, and the H.264 VUI comes out
+ * empty: `ffprobe` reported `color_range=unknown, color_space=unknown` on every
+ * video this milestone produced, while M1's output of the same material was
+ * tagged. The pixels were right either way — measured, a per-frame fit of the
+ * composed RGB against the decoded video gives slope 0.998-1.009 — but an
+ * untagged `yuv420p` file is read as full range by anything that guesses, and
+ * then the levels get stretched. Labelling the frames in the filter chain is
+ * the fix; the output-side `-colorspace`/`-color_primaries` flags were measured
+ * to tag only part of it on this ffmpeg, so the label belongs here. bt709 and
+ * not M1's bt470bg: this is HD material, and bt470bg is what ffmpeg falls back
+ * to when nobody says.
+ *
  * `-fflags +bitexact -flags +bitexact` keeps libavformat's version string out
  * of the container, so that two renders of the same decision data produce not
  * merely equivalent video but the identical file. That is the determinism
@@ -154,7 +168,9 @@ export function buildEncodePlan(
       '-i',
       '-',
       '-vf',
-      'scale=in_range=full:out_range=tv,format=yuv420p',
+      'scale=in_range=full:out_range=tv,format=yuv420p,' +
+        'setparams=range=tv:colorspace=bt709:color_primaries=bt709:' +
+        'color_trc=bt709',
       '-c:v',
       videoCodec,
       '-crf',

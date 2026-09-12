@@ -257,7 +257,13 @@ type Probed = {
   width: number
 }
 
-/** What the finished file says about itself. */
+/**
+ * What the finished file says about itself. Colour is in here on purpose: the
+ * suite used to check the ffmpeg *argument string* and nothing else, so it kept
+ * passing while `-color_range tv` silently failed to reach the H.264 VUI and
+ * every output shipped untagged. An argument is an intention; `ffprobe` on a
+ * real encode is the result.
+ */
 async function probe(path: string): Promise<Probed> {
   const { stdout } = await run('ffprobe', [
     '-v',
@@ -313,7 +319,14 @@ describe('rendering a recording end to end', () => {
       const probed = await probe(output.outputPath)
       expect(probed.width).toBe(output.width)
       expect(probed.height).toBe(output.height)
+      // Colour, asserted on the file rather than on the command line that made
+      // it. An untagged yuv420p stream is read as full range by anything that
+      // guesses, and the levels get stretched on the way to the viewer.
       expect(probed.pix_fmt).toBe('yuv420p')
+      expect(probed.color_range).toBe('tv')
+      expect(probed.color_space).toBe('bt709')
+      expect(probed.color_primaries).toBe('bt709')
+      expect(probed.color_transfer).toBe('bt709')
     }
   }, 180_000)
 
