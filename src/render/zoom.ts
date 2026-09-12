@@ -201,7 +201,23 @@ export function pointerSamples(events: readonly TimedEvent[]): PointerSample[] {
   return samples
 }
 
-/** One frame at 60Hz, the rate this renderer is built around. */
+/**
+ * One frame at 60Hz — the grid this file measures motion on, deliberately fixed
+ * while `plan.ts` accepts any output rate.
+ *
+ * It is a reference and not a parameter, and that is a decision rather than an
+ * oversight: the shot list must not depend on the frame rate it will be sampled
+ * at. `decisions.json` at 30fps and at 60fps describing the same camera is an
+ * invariant this milestone already holds, and threading the output rate in here
+ * — where it would move the hold floor and the approach floor — would end it.
+ *
+ * What the fixed grid owes in return is evidence that the promise survives a
+ * coarser one, since a 30fps output frame covers two 60Hz steps. Measured over
+ * the whole fixture corpus in three formats at 24, 25, 30, 50, 60 and 120fps:
+ * 8610 frame-to-frame steps, worst 84.6% of the allowance for its own grid, no
+ * cut anywhere (`tests/render/zoom.test.ts`, "never cuts at 24, 25, 30, 50, 60
+ * or 120 fps").
+ */
 const FRAME_MS = 1000 / 60
 
 /**
@@ -213,6 +229,46 @@ const FRAME_MS = 1000 / 60
  */
 const ARRIVAL_FLOOR_MS = FRAME_MS
 
+/**
+ * The shortest stretch the camera may be given to travel a visible distance:
+ * eight frames at 60Hz.
+ *
+ * Without it the crowded branch could shorten an approach to a single frame and
+ * call the resulting teleport a camera move — measured, two taps 50ms apart at
+ * opposite corners crossed 639.5px of a 640px journey in one frame and passed,
+ * because the bound that was supposed to forbid it was computed from the very
+ * window that had been shortened. A floor in time fixes the pace: a fixed path
+ * over a window that cannot shrink below eight frames cannot be traversed
+ * arbitrarily fast, whatever else gives way.
+ *
+ * It never exceeds what the look asked for: a look that deliberately sets a
+ * 130ms `zoomInMs` gets a 130ms floor, not a contradiction.
+ */
+const MIN_APPROACH_MS = 8 * FRAME_MS
+
+/**
+ * A journey shorter than this is not a camera move, in source pixels.
+ *
+ * The smoothness bound below is a *fraction* of the journey, and a fraction of
+ * nothing is a meaningless number: round four refused
+ * `artifacts/m2-001/run-inner-scroll` in all three formats because a 7.1px
+ * journey — a pull-out interrupted one frame in — was "covered entirely in one
+ * frame". No viewer can see seven pixels of a 2560px raster move, so a purely
+ * relative bound needs an absolute floor under it or it fails valid work.
+ *
+ * Sixteen source pixels is below the ±34px the aspect search in
+ * `roundOutward` may already move a crop's width by (`geometry.ts:138-141`), so
+ * a journey under it is inside the framing's own rounding noise. Measured over
+ * `artifacts/m2-001` in all three formats: the journeys this skips are 5.7,
+ * 7.1 and 9.2px, and the shortest journey it still guards is 280px.
+ */
+const INVISIBLE_MOVE_PX = 16
+
+/** The window an approach may never be squeezed below, for a given look. */
+function approachFloorMs(look: ResolvedLook): number {
+  return Math.min(look.zoomInMs, MIN_APPROACH_MS)
+}
+
 /** The ∞-norm distance between two crops: the largest single-axis move. */
 function rectSpan(a: Rect, b: Rect): number {
   return Math.max(
@@ -223,23 +279,27 @@ function rectSpan(a: Rect, b: Rect): number {
   )
 }
 
-/** The smallest box containing both, in source pixels. */
-function unionBox(a: BoundingBox, b: BoundingBox): BoundingBox {
-  const x = Math.min(a.x, b.x)
-  const y = Math.min(a.y, b.y)
-  return {
-    x,
-    y,
-    width: Math.max(a.x + a.width, b.x + b.width) - x,
-    height: Math.max(a.y + a.height, b.y + b.height) - y,
-  }
-}
-
-/** True when the two elements share screen area — the same element included. */
-function boxesOverlap(a: BoundingBox, b: BoundingBox): boolean {
+/**
+ * True when the two interactions landed on the very same rectangle.
+ *
+ * This is deliberately equality and not overlap. A shot that answers two events
+ * at one instant is framed on *one* box, and the only box that is honestly both
+ * of theirs is the one they share exactly — then `frameBoundingBox` of the
+ * shot's box is `frameBoundingBox` of each event's box, bit for bit, and the
+ * milestone's criterion stays an equality rather than a containment.
+ *
+ * Round four merged on overlap and framed the union. For an icon of 120x48
+ * inside a page-filling backdrop the union is the page: the crop came out
+ * 2560x1440 at 1.000x — the camera did not move at all — and the acceptance
+ * test still passed, because it compared the crop against the self-generated
+ * union while the clicked element only had to be *contained*, which a full
+ * frame satisfies for free. Overlap is also not transitive, so three boxes in
+ * one tick merged through a chain in which the third overlapped neither of the
+ * first two.
+ */
+function boxesEqual(a: BoundingBox, b: BoundingBox): boolean {
   return (
-    Math.min(a.x + a.width, b.x + b.width) > Math.max(a.x, b.x) &&
-    Math.min(a.y + a.height, b.y + b.height) > Math.max(a.y, b.y)
+    a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
   )
 }
 
@@ -298,28 +358,32 @@ export function peakStepFraction(
  * literally true: at every event the crop is the framing computed for that
  * event's element.
  *
- * **Two interactions at the same instant on one element are one shot.** The
- * event log has no spacing to give there: `click()` logs at the current tick
- * without advancing it (`src/record.ts:334-346`), and when the pointer already
- * sits on the target there is no travel to advance it either
- * (`src/motion.ts:82`), so a switch toggled twice, a counter pressed twice, or
- * `type(el, 'x')` followed by `click(el)` all arrive 0.0ms apart. That is not a
- * crowded pair of shots, it is one shot with two events in it: the camera
- * frames the element and holds through both. The shot's `box` becomes the union
- * of the merged boxes and `target` stays `frameBoundingBox(box)`, so the
- * acceptance criterion is still an equality against a framing this file
- * computed — for the ordinary case of the same element twice the union *is* the
- * box, bit for bit.
+ * **Two interactions at the same instant on the same element are one shot.**
+ * The event log has no spacing to give there: `click()` logs at the current
+ * tick without advancing it (`src/record.ts:334-346`), and when the pointer
+ * already sits on the target there is no travel to advance it either
+ * (`src/motion.ts:82`), so a switch toggled twice or a counter pressed twice
+ * arrive 0.0ms apart. That is not a crowded pair of shots, it is one shot with
+ * two events in it: the camera frames the element and holds through both. The
+ * shot's `box` is unchanged by the merge, because the two boxes are equal — so
+ * `target` is `frameBoundingBox` of each event's own box, bit for bit, and the
+ * acceptance criterion stays an equality by construction.
  *
  * What stays loud is the pair that no camera can answer: two interactions at
- * one instant on elements that do not overlap. There is no move, no framing and
- * no compromise that has the camera on both at once, so the run fails and names
- * the remedy the author can apply today.
+ * one instant on *different* elements, overlapping or not. Round four merged
+ * those too and framed the union, which for an icon inside a page-filling panel
+ * is the whole page — a 2560x1440 crop at 1.000x, a zoom that does not move,
+ * and an acceptance test that passed because it compared the crop against the
+ * union it had generated itself. There is no move, no framing and no compromise
+ * that has the camera on two different elements at once, so the run fails and
+ * names the remedy the author can apply today.
  *
  * The zero-gap timing itself is a symptom of the event log's counted `tick`,
  * which issue #9 replaces with a reading of the capture clock. Nothing here
  * invents spacing to paper over that: the merge is decided on the logged
- * geometry — do the two elements overlap — and not on a time this file made up.
+ * geometry — are the two boxes the same rectangle — and on a gap of exactly
+ * zero, which is the artefact's own size rather than a tolerance this file
+ * chose.
  */
 export function buildZoomSegments(
   events: readonly TimedEvent[],
@@ -369,20 +433,35 @@ export function buildZoomSegments(
   for (const segment of segments) {
     const previous = kept.at(-1)
     if (previous === undefined) {
+      // An interaction in the opening moments of a recording has less lead than
+      // the look asks for, and below the approach floor there is no honest move
+      // left to make. There is also nothing before it to cut away from, so the
+      // video simply opens on the close-up rather than flicking towards it.
+      if (segment.eventMs - segment.startMs < approachFloorMs(resolved)) {
+        segment.from = segment.target
+        segment.zoomInMs = 0
+      }
       kept.push(segment)
       continue
     }
 
     const gap = segment.eventMs - previous.lastEventMs
-    if (gap < 2 * ARRIVAL_FLOOR_MS) {
-      if (!boxesOverlap(previous.box, segment.box)) {
+    // Exactly the same instant, and nothing wider. The zero-gap case is an
+    // artefact of the event log's counted `tick`, which issue #9 replaces with
+    // a reading of the capture clock; the bound is therefore the artefact's own
+    // size and not a tolerance that might quietly swallow real spacing. Two
+    // interactions one tick apart are two shots, and the crowded branch below
+    // answers them.
+    if (gap === 0) {
+      if (!boxesEqual(previous.box, segment.box)) {
         throw new Error(
-          `Two interactions ${gap.toFixed(1)}ms apart (at ` +
-            `${previous.lastEventMs.toFixed(1)}ms and ` +
-            `${segment.eventMs.toFixed(1)}ms) land on elements that do not ` +
-            `overlap: ${describeBox(previous.box)} and ` +
-            `${describeBox(segment.box)}. No camera is on both at the same ` +
-            `instant, so there is no framing to compute and the renderer ` +
+          `Two interactions at the same instant ` +
+            `(${segment.eventMs.toFixed(1)}ms) land on different elements: ` +
+            `${describeBox(previous.box)} and ${describeBox(segment.box)}. ` +
+            `One shot is framed on one box; framing the two together would ` +
+            `mean framing something neither of them is — for an icon inside a ` +
+            `page-filling panel that is the whole page, a "zoom" that does not ` +
+            `move. No camera is on both at the same instant, so the renderer ` +
             `refuses rather than picking a way-point at one of the two. Put a ` +
             `beat between them in the script: \`await demo.hold(400)\` — the ` +
             `only call in the wrapper that advances the event log's clock on ` +
@@ -390,7 +469,7 @@ export function buildZoomSegments(
             `to make.`,
         )
       }
-      mergeShots(previous, segment, format, resolved)
+      mergeShots(previous, segment)
       continue
     }
 
@@ -401,6 +480,26 @@ export function buildZoomSegments(
       // frame. Round three gave the whole gap to the approach, which left the
       // hold at 16.7ms in all eighteen measured cases and made `minHoldMs`
       // invisible — a 900ms setting that the shipped shot never showed.
+      const floor = approachFloorMs(resolved)
+      const travels =
+        rectSpan(previous.target, segment.target) > INVISIBLE_MOVE_PX
+      if (travels && gap < ARRIVAL_FLOOR_MS + floor) {
+        throw new Error(
+          `Two interactions ${gap.toFixed(1)}ms apart (at ` +
+            `${previous.lastEventMs.toFixed(1)}ms and ` +
+            `${segment.eventMs.toFixed(1)}ms) on ` +
+            `${describeBox(previous.box)} and ${describeBox(segment.box)} ` +
+            `leave the camera no time to travel between them: the first shot ` +
+            `must keep its own element for at least ` +
+            `${ARRIVAL_FLOOR_MS.toFixed(1)}ms and the move to the second ` +
+            `needs at least ${floor.toFixed(1)}ms, which is more than the gap ` +
+            `the log gives. Crossing it anyway would be a cut, not a camera ` +
+            `move. Put a beat between them in the script: ` +
+            `\`await demo.hold(400)\` — the only call in the wrapper that ` +
+            `advances the event log's clock on its own ` +
+            `(\`src/record.ts:377-386\`).`,
+        )
+      }
       const hold = crowdedHoldMs(gap, resolved)
       if (hold < resolved.minHoldMs - 1e-9) {
         previous.clamps = [
@@ -435,6 +534,13 @@ export function buildZoomSegments(
   return kept
 }
 
+function describeRect(rect: Rect): string {
+  return (
+    `${Math.round(rect.width)}x${Math.round(rect.height)} at ` +
+    `(${Math.round(rect.x)},${Math.round(rect.y)})`
+  )
+}
+
 function describeBox(box: BoundingBox): string {
   return (
     `${Math.round(box.width)}x${Math.round(box.height)} at ` +
@@ -443,20 +549,16 @@ function describeBox(box: BoundingBox): string {
 }
 
 /**
- * Two interactions at one instant on overlapping elements, folded into the
+ * Two interactions at one instant on the very same element, folded into the
  * earlier shot: one framing, held through both events.
+ *
+ * The boxes are equal, so there is nothing to recompute — the framing already
+ * on the shot *is* the framing of the second event's box. That is the point of
+ * merging on equality rather than on overlap: the acceptance criterion stays an
+ * equality against `frameBoundingBox` of the logged box by construction,
+ * instead of resting on an argument about unions.
  */
-function mergeShots(
-  previous: ZoomSegment,
-  segment: ZoomSegment,
-  format: ResolvedFormat,
-  look: ResolvedLook,
-): void {
-  const box = unionBox(previous.box, segment.box)
-  const framing = frameBoundingBox(box, format, look)
-  previous.box = box
-  previous.target = framing.rect
-  previous.clamps = framing.clamp === undefined ? [] : [framing.clamp]
+function mergeShots(previous: ZoomSegment, segment: ZoomSegment): void {
   previous.lastEventMs = Math.max(previous.lastEventMs, segment.eventMs)
   // The hold is measured from the last of the merged events, so a `minHoldMs`
   // that could not be honoured around two events separately is honoured once
@@ -471,9 +573,10 @@ function mergeShots(
  * When the gap can pay for both wishes the hold takes everything the approach
  * does not need. When it cannot, the two share it in proportion to what they
  * asked for — with the default look, 900ms of hold against 650ms of approach,
- * the hold gets 58% of the gap. Both are floored at one frame, which is what
- * keeps the earlier shot alive through its own event and the later shot's
- * approach from becoming a cut.
+ * the hold gets 58% of the gap. The hold is floored at one frame, which keeps
+ * the earlier shot alive through its own event; the approach is floored at
+ * `approachFloorMs`, which is what keeps it from becoming a cut. A gap that
+ * cannot pay for both is refused above rather than split into a teleport.
  */
 function crowdedHoldMs(gap: number, look: ResolvedLook): number {
   const wishes = look.minHoldMs + look.zoomInMs
@@ -481,37 +584,111 @@ function crowdedHoldMs(gap: number, look: ResolvedLook): number {
     gap >= wishes ? gap - look.zoomInMs : (gap * look.minHoldMs) / wishes
   return Math.min(
     Math.max(share, ARRIVAL_FLOOR_MS),
-    Math.max(gap - ARRIVAL_FLOOR_MS, ARRIVAL_FLOOR_MS),
+    Math.max(gap - approachFloorMs(look), ARRIVAL_FLOOR_MS),
   )
 }
 
 /**
  * The camera never jumps: in no single output frame does it cover more of a
- * shot's journey than the spring it rides covers in its busiest frame.
+ * shot's journey than the spring covers in its busiest frame over the shortest
+ * approach the shot list is allowed to contain.
  *
- * The threshold is not a taste: it is `peakStepFraction` of the approach's own
- * window, so it reproduces ordinary motion exactly and scales with the time a
- * crowded shot actually has. A shot given 650ms moves at most 9.2% of its path
- * per frame; the same formula allows 15.6% to the 383ms approach in
- * `run-close-taps`, and refuses a hard cut at any duration.
+ * **The bound does not read the quantity it judges.** Round four measured the
+ * motion against `peakStepFraction(min(look.zoomInMs, window))` while `cropAt`
+ * interpolated over `segment.zoomInMs`, which in the crowded branch *is* that
+ * same number — the check compared the motion against itself and passed a
+ * 639.5px step across a 640px journey. The reference here is
+ * `approachFloorMs`, a property of the look alone: a shot that crosses its path
+ * faster than the spring would cross it in eight frames is a cut, whatever its
+ * own `zoomInMs` claims. The window itself is asserted separately, so a shot
+ * list that shortened the approach below the floor fails even where the
+ * interpolation happens to look smooth.
  *
- * It is checked here, against the crops `cropAt` really produces, rather than
+ * **The bound has an absolute floor under it.** A fraction of a journey too
+ * small to see is not evidence of anything: `INVISIBLE_MOVE_PX` is where the
+ * question stops being meaningful.
+ *
+ * **The seam is judged on its own terms.** Round four measured the step in the
+ * frame *before* a shot against that shot's journey — but that frame belongs to
+ * the previous shot pulling out, and the pull-out's pace has nothing to do with
+ * how far the next shot has to travel. On `artifacts/m2-001/run-inner-scroll`,
+ * two clicks on adjacent elements, the ratio was one frame of pull-out against
+ * a 7.1px journey, and `pnpm render` died on all three formats. So the seam
+ * gets two checks of its own instead: the shot must open exactly where the
+ * camera already is, and the step across the seam may be no larger than the
+ * previous shot's own pull-out covers in its busiest frame.
+ *
+ * Everything is checked against the crops `cropAt` really produces, rather than
  * against the `zoomInMs` field — a guard that read the field back would pass
  * any value that field was given.
  */
-function assertSmoothApproach(
+export function assertSmoothApproach(
   segments: readonly ZoomSegment[],
   format: ResolvedFormat,
   look: ResolvedLook,
 ): void {
-  for (const segment of segments) {
+  const floor = approachFloorMs(look)
+  const fraction = peakStepFraction(floor, look.spring)
+  const relax = relaxSpring(look.spring)
+  for (const [index, segment] of segments.entries()) {
+    // A journey too small to see is not evidence of anything, and neither is a
+    // fraction of it. This is the absolute floor under a bound that is
+    // otherwise purely relative.
     const path = rectSpan(segment.from, segment.target)
-    if (path <= 0) continue
+    if (path <= INVISIBLE_MOVE_PX) continue
+
+    // The shot opens where the camera already is. This is an equality and not a
+    // bound, and it is what catches the teleport: a shot given no approach at
+    // all is at its target the instant it opens, while `from` says the camera
+    // was somewhere else. The jump lives exactly on this boundary, so a check
+    // that only watched the frames *inside* the shot would see a camera that
+    // never moves and call it smooth.
+    const opening = cropAt(segment.startMs, segments, format, look)
+    if (rectSpan(opening, segment.from) > 1e-6) {
+      throw new Error(
+        `A shot opens at ${describeRect(opening)} while the camera it ` +
+          `inherits is at ${describeRect(segment.from)}. It arrives by ` +
+          `cutting: that is a cut, not a camera move.`,
+      )
+    }
+
+    // The step across the seam, against the only motion allowed there — the
+    // previous shot's pull-out, riding its own relaxed spring. Nothing before
+    // time zero was ever rendered, so a shot that opens the recording has no
+    // seam to cross.
+    const previous = segments[index - 1]
+    if (previous !== undefined && segment.startMs > 0) {
+      const seam = rectSpan(
+        cropAt(segment.startMs - FRAME_MS, segments, format, look),
+        opening,
+      )
+      const pullOut =
+        rectSpan(previous.target, format.base) *
+        peakStepFraction(previous.zoomOutMs, relax)
+      if (seam > Math.max(INVISIBLE_MOVE_PX, pullOut * 1.001 + 1e-6)) {
+        throw new Error(
+          `The camera moves ${seam.toFixed(1)}px in the single frame where ` +
+            `one shot hands over to the next at ` +
+            `${segment.startMs.toFixed(1)}ms, against the ` +
+            `${pullOut.toFixed(1)}px the previous shot's pull-out covers in ` +
+            `its busiest frame. A shot starts from wherever the camera ` +
+            `actually is; this one starts somewhere else.`,
+        )
+      }
+    }
+
     const window = segment.eventMs - segment.startMs
-    const limit =
-      path * peakStepFraction(Math.min(look.zoomInMs, window), look.spring)
+    if (window < floor - 1e-9) {
+      throw new Error(
+        `A shot with ${path.toFixed(1)}px to travel was given ` +
+          `${window.toFixed(1)}ms to travel it, below the ` +
+          `${floor.toFixed(1)}ms floor. However smoothly that window is ` +
+          `interpolated, the camera arrives by cutting.`,
+      )
+    }
+    const limit = path * fraction
     for (
-      let timeMs = segment.startMs - FRAME_MS;
+      let timeMs = segment.startMs;
       timeMs < segment.eventMs;
       timeMs += FRAME_MS
     ) {
@@ -521,15 +698,15 @@ function assertSmoothApproach(
       )
       // A thousandth of slack for the sampled supremum in `peakStepFraction`,
       // which is a grid over a smooth curve and so sits a hair below the true
-      // peak. Far too small to admit a cut: the mutation this catches moves 95%
-      // of the path in one frame against a 15.6% allowance.
+      // peak. Far too small to admit a cut: the mutation this catches moves
+      // 100% of the path in one frame against a 42.6% allowance.
       if (step > limit * 1.001 + 1e-6) {
         throw new Error(
           `The camera would cover ${step.toFixed(1)}px of a ` +
             `${path.toFixed(1)}px journey in one frame at ` +
             `${timeMs.toFixed(1)}ms, against the ${limit.toFixed(1)}px the ` +
-            `spring covers in its busiest frame over this shot's ` +
-            `${Math.min(look.zoomInMs, window).toFixed(1)}ms approach. That ` +
+            `spring covers in its busiest frame over the ` +
+            `${floor.toFixed(1)}ms an approach is never squeezed below. That ` +
             `is a cut, not a camera move.`,
         )
       }
