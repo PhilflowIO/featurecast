@@ -225,23 +225,47 @@ describe('the zoom frames the hit element at every click', () => {
         // Containment alone is a loose test: a 1920px crop around a 200px
         // button has hundreds of pixels of slack on each side, so a framing
         // that missed by half the picture would still "contain" it. The
-        // element has to be in the middle of the shot, unless the crop is
-        // pinned against the edge of the raster and cannot be.
-        const pinnedX =
-          crop.x <= format.panBounds.x ||
-          crop.x + crop.width >= format.panBounds.x + format.panBounds.width
-        const pinnedY =
-          crop.y <= format.panBounds.y ||
-          crop.y + crop.height >= format.panBounds.y + format.panBounds.height
-        if (!pinnedX) {
-          expect(crop.x + crop.width / 2).toBeCloseTo(box.x + box.width / 2, 0)
-        }
-        if (!pinnedY) {
-          expect(crop.y + crop.height / 2).toBeCloseTo(
-            box.y + box.height / 2,
-            0,
-          )
-        }
+        // element has to be in the middle of the shot — and where the raster
+        // runs out, as far towards the middle as the raster allows.
+        //
+        // Rounds one and two skipped this check whenever the crop sat against
+        // an edge, which inverted it: `run-edge` and `run-hero` never checked
+        // at all, and `run-sticky-overlay` failed at a 20px error but passed at
+        // a 900px one, because a large enough error pushes the crop against the
+        // edge and switched the check off. A test that stops checking as the
+        // error grows is worse than no test, so the pin is now part of the
+        // expectation instead of an excuse to skip it.
+        const centred = (
+          value: number,
+          size: number,
+          low: number,
+          span: number,
+        ): number => Math.min(Math.max(value, low), low + span - size)
+        expect(
+          Math.abs(
+            crop.x -
+              centred(
+                box.x + box.width / 2 - crop.width / 2,
+                crop.width,
+                format.panBounds.x,
+                format.panBounds.width,
+              ),
+          ),
+          // Two pixels of slack for the even-pixel rounding of the crop, which
+          // can move its centre by one pixel on each axis. Sharp enough that
+          // the 20px error of the mutation test below fails it.
+        ).toBeLessThanOrEqual(2)
+        expect(
+          Math.abs(
+            crop.y -
+              centred(
+                box.y + box.height / 2 - crop.height / 2,
+                crop.height,
+                format.panBounds.y,
+                format.panBounds.height,
+              ),
+          ),
+        ).toBeLessThanOrEqual(2)
         framed += 1
       }
       expect(framed).toBeGreaterThan(0)
