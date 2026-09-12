@@ -1,0 +1,1449 @@
+[
+  {
+    "cat": "blink.user_timing",
+    "name": "fcsync:1789211979296",
+    "ph": "I",
+    "pid": 171,
+    "tid": 171,
+    "ts": 1028974847152
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978439216,
+    "id2": {
+      "local": "0x3"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 97,
+    "tid": 97,
+    "ts": 1028978589210,
+    "id2": {
+      "local": "0x1"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978605876,
+    "id2": {
+      "local": "0x4"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 97,
+    "tid": 97,
+    "ts": 1028978617643,
+    "id2": {
+      "local": "0x1"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978622542,
+    "id2": {
+      "local": "0x5"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978622542,
+    "id2": {
+      "local": "0x15c"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 97,
+    "tid": 97,
+    "ts": 1028978639208,
+    "id2": {
+      "local": "0x1"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978639208,
+    "id2": {
+      "local": "0x156"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978672540,
+    "id2": {
+      "local": "0x15d"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978672540,
+    "id2": {
+      "local": "0x15e"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978680981,
+    "id2": {
+      "local": "0x15c"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978680981,
+    "id2": {
+      "local": "0x3"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978689206,
+    "id2": {
+      "local": "0x3"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978689206,
+    "id2": {
+      "local": "0x15c"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978695185,
+    "id2": {
+      "local": "0x156"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 97,
+    "tid": 97,
+    "ts": 1028978695185,
+    "id2": {
+      "local": "0x1"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978695185,
+    "id2": {
+      "local": "0x4"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978705872,
+    "id2": {
+      "local": "0x4"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978711299,
+    "id2": {
+      "local": "0x15e"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978711299,
+    "id2": {
+      "local": "0x5"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978722538,
+    "id2": {
+      "local": "0x5"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978722538,
+    "id2": {
+      "local": "0x156"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978724230,
+    "id2": {
+      "local": "0x15c"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978739204,
+    "id2": {
+      "local": "0x15c"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978739204,
+    "id2": {
+      "local": "0x15e"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978739548,
+    "id2": {
+      "local": "0x4"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978739548,
+    "id2": {
+      "local": "0x15d"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978755870,
+    "id2": {
+      "local": "0x4"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978755870,
+    "id2": {
+      "local": "0x15d"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978756170,
+    "id2": {
+      "local": "0x156"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978756170,
+    "id2": {
+      "local": "0x3"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978772089,
+    "id2": {
+      "local": "0x15e"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978772089,
+    "id2": {
+      "local": "0x5"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978772536,
+    "id2": {
+      "local": "0x3"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978772536,
+    "id2": {
+      "local": "0x5"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978787646,
+    "id2": {
+      "local": "0x15d"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978787646,
+    "id2": {
+      "local": "0x15c"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978789202,
+    "id2": {
+      "local": "0x156"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978789202,
+    "id2": {
+      "local": "0x15c"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978802612,
+    "id2": {
+      "local": "0x5"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978802612,
+    "id2": {
+      "local": "0x4"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978805868,
+    "id2": {
+      "local": "0x4"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978805868,
+    "id2": {
+      "local": "0x5"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978821747,
+    "id2": {
+      "local": "0x15c"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978821747,
+    "id2": {
+      "local": "0x3"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978822534,
+    "id2": {
+      "local": "0x3"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978822534,
+    "id2": {
+      "local": "0x15c"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978836848,
+    "id2": {
+      "local": "0x5"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978836848,
+    "id2": {
+      "local": "0x156"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978839200,
+    "id2": {
+      "local": "0x5"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978839200,
+    "id2": {
+      "local": "0x156"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978851913,
+    "id2": {
+      "local": "0x15c"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978851913,
+    "id2": {
+      "local": "0x4"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978855866,
+    "id2": {
+      "local": "0x4"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978855866,
+    "id2": {
+      "local": "0x15c"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978860375,
+    "id2": {
+      "local": "0x156"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978860375,
+    "id2": {
+      "local": "0x3"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978872532,
+    "id2": {
+      "local": "0x3"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978872532,
+    "id2": {
+      "local": "0x156"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978876416,
+    "id2": {
+      "local": "0x15c"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978876416,
+    "id2": {
+      "local": "0x5"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978889198,
+    "id2": {
+      "local": "0x5"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978889198,
+    "id2": {
+      "local": "0x15c"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978893048,
+    "id2": {
+      "local": "0x156"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978893048,
+    "id2": {
+      "local": "0x4"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978905864,
+    "id2": {
+      "local": "0x4"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978905864,
+    "id2": {
+      "local": "0x156"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978909651,
+    "id2": {
+      "local": "0x15c"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978909651,
+    "id2": {
+      "local": "0x3"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978922530,
+    "id2": {
+      "local": "0x3"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978922530,
+    "id2": {
+      "local": "0x15c"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978926253,
+    "id2": {
+      "local": "0x156"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978926253,
+    "id2": {
+      "local": "0x5"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978939196,
+    "id2": {
+      "local": "0x5"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978939196,
+    "id2": {
+      "local": "0x156"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978942879,
+    "id2": {
+      "local": "0x15c"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978942879,
+    "id2": {
+      "local": "0x4"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978955862,
+    "id2": {
+      "local": "0x4"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978955862,
+    "id2": {
+      "local": "0x15c"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978959587,
+    "id2": {
+      "local": "0x156"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978959587,
+    "id2": {
+      "local": "0x3"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978972528,
+    "id2": {
+      "local": "0x3"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978972528,
+    "id2": {
+      "local": "0x156"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978976294,
+    "id2": {
+      "local": "0x15c"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978976294,
+    "id2": {
+      "local": "0x5"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978989194,
+    "id2": {
+      "local": "0x5"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978989194,
+    "id2": {
+      "local": "0x15c"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978993043,
+    "id2": {
+      "local": "0x156"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028978993043,
+    "id2": {
+      "local": "0x4"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979005860,
+    "id2": {
+      "local": "0x4"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979005860,
+    "id2": {
+      "local": "0x156"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979009614,
+    "id2": {
+      "local": "0x15c"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979009614,
+    "id2": {
+      "local": "0x3"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979022526,
+    "id2": {
+      "local": "0x3"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979022526,
+    "id2": {
+      "local": "0x15c"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979026593,
+    "id2": {
+      "local": "0x156"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979026593,
+    "id2": {
+      "local": "0x5"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979039192,
+    "id2": {
+      "local": "0x5"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_ALL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979039192,
+    "id2": {
+      "local": "0x156"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979042860,
+    "id2": {
+      "local": "0x15c"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979042860,
+    "id2": {
+      "local": "0x4"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "b",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979055858,
+    "id2": {
+      "local": "0x15c"
+    },
+    "args": {
+      "frame_reporter": {
+        "state": "STATE_PRESENTED_PARTIAL"
+      }
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979060244,
+    "id2": {
+      "local": "0x156"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979060244,
+    "id2": {
+      "local": "0x3"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979076210,
+    "id2": {
+      "local": "0x15c"
+    }
+  },
+  {
+    "cat": "cc,benchmark,disabled-by-default-devtools.timeline.frame",
+    "name": "PipelineReporter",
+    "ph": "e",
+    "pid": 171,
+    "tid": 189,
+    "ts": 1028979076210,
+    "id2": {
+      "local": "0x5"
+    }
+  },
+  {
+    "cat": "blink.user_timing",
+    "name": "fcsync:1789212053357",
+    "ph": "I",
+    "pid": 171,
+    "tid": 171,
+    "ts": 1029048907941
+  }
+]

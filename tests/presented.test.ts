@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -67,6 +70,65 @@ function reporter(options: {
     },
     { ...identity, ph: 'e', ts: options.endMicros },
   ]
+}
+
+/**
+ * A verbatim excerpt of a real trace, not a shaped fixture.
+ *
+ * Provenance: `~/featurecast-bench/out/arm-sbpat-r1.trace.json.gz` on the AI
+ * box — the 69.6s product recording of the OnlyDash path against the patched
+ * Chromium build, the same run the numbers in `docs/CAPTURE-CADENCE.md` come
+ * from. The excerpt is the first 400ms stretch of that trace containing both
+ * a partial-only presentation instant and at least four twinned ones, taken
+ * with every `PipelineReporter` record of the renderer process that closes
+ * inside it, two records of the browser's own UI compositor from the same
+ * index range, and the run's two real `fcsync:` clock marks. Only fields
+ * nothing reads were dropped (`display_trace_id`, `frame_sequence`,
+ * `scroll_state`, ...); every `ts`, `pid`, `tid`, `id2.local` and `state`
+ * below is the byte Chromium wrote.
+ *
+ * This exists because the synthetic fixtures above could not fail the way
+ * the shipped code failed: none of them contained two presentation records
+ * sharing an `e` timestamp, which is the case real recordings hit on roughly
+ * every second screen update. A mutation test cannot find a gap that is
+ * missing from the input.
+ */
+const REAL_TRACE_EXCERPT = JSON.parse(
+  readFileSync(
+    fileURLToPath(
+      new URL(
+        './fixtures/presented-arm-sbpat-r1-excerpt.json',
+        import.meta.url,
+      ),
+    ),
+    'utf8',
+  ),
+) as TraceEvent[]
+
+/** Independent of `src/presented.ts`: pairs by `id2.local`+`tid`, LIFO, in this file. */
+function presentedEndMicrosOfExcerpt(pid: number): number[] {
+  const open = new Map<string, TraceEvent[]>()
+  const ends: number[] = []
+  for (const event of REAL_TRACE_EXCERPT) {
+    if (event.name !== 'PipelineReporter' || event.pid !== pid) continue
+    const key = `${event.id2?.local ?? ''}|${String(event.tid ?? '')}`
+    if (event.ph === 'b') {
+      open.set(key, [...(open.get(key) ?? []), event])
+      continue
+    }
+    const stack = open.get(key)
+    const begin = stack?.pop()
+    if (begin === undefined || event.ts === undefined) continue
+    const reporter = begin.args?.['frame_reporter'] as
+      { state?: string } | undefined
+    if (
+      reporter?.state === 'STATE_PRESENTED_ALL' ||
+      reporter?.state === 'STATE_PRESENTED_PARTIAL'
+    ) {
+      ends.push(event.ts)
+    }
+  }
+  return ends
 }
 
 describe('PRESENTED_FRAME_TRACE_CATEGORIES', () => {
@@ -175,10 +237,10 @@ describe('extractPresentedFrameTimes', () => {
     expect(extractPresentedFrameTimes(events)).toEqual([2])
   })
 
-  it('pairs overlapping reporters on the same thread without crossing them', () => {
+  it('pairs overlapping reporters without crossing them', () => {
     // PipelineReporter is an async event and several are open at once; the
-    // pairing keys on `id2.local` plus `tid` and is last-in-first-out within
-    // a key, so a nested pair cannot steal the outer pair's end timestamp.
+    // pairing keys on `id2.local`, so a concurrent reporter cannot steal
+    // another one's end timestamp.
     const events: TraceEvent[] = [
       clockSyncMark(0, 0),
       ...reporter({
@@ -198,6 +260,67 @@ describe('extractPresentedFrameTimes', () => {
     expect(extractPresentedFrameTimes(events)).toEqual([5, 9])
   })
 
+  it('lets a re-opened reporter id replace the record whose end was lost', () => {
+    // The trace buffer drops events under load, so a `b` can arrive for an
+    // `id2.local` that is still open — its `e` never made it. The newer
+    // record wins; the stale one is discarded rather than silently deciding
+    // a nesting order that no real trace ever produces (measured over nine
+    // full runs: no `id2.local` is ever open twice at once).
+    const identity = {
+      cat: FRAME_CATEGORY,
+      id2: { local: '0x3' },
+      name: 'PipelineReporter',
+      pid: RENDERER_PID,
+      tid: 189,
+    }
+    const events: TraceEvent[] = [
+      clockSyncMark(0, 0),
+      {
+        ...identity,
+        args: { frame_reporter: { state: 'STATE_PRESENTED_ALL' } },
+        ph: 'b',
+        ts: 1_000,
+      },
+      {
+        ...identity,
+        args: { frame_reporter: { state: 'STATE_NO_UPDATE_DESIRED' } },
+        ph: 'b',
+        ts: 2_000,
+      },
+      { ...identity, ph: 'e', ts: 3_000 },
+    ]
+
+    // The surviving record is the damage-free one, so nothing is counted.
+    expect(extractPresentedFrameTimes(events)).toEqual([])
+  })
+
+  it('does not let one begin record close twice', () => {
+    // The mirror image of the case above: the `b` of a second reporter was
+    // dropped from the trace buffer, so its `e` arrives alone. Reusing the
+    // already-closed record would invent a presentation at that timestamp —
+    // a phantom frame in the denominator, which reads as capture *loss*.
+    const identity = {
+      cat: FRAME_CATEGORY,
+      id2: { local: '0x3' },
+      name: 'PipelineReporter',
+      pid: RENDERER_PID,
+      tid: 189,
+    }
+    const events: TraceEvent[] = [
+      clockSyncMark(0, 0),
+      {
+        ...identity,
+        args: { frame_reporter: { state: 'STATE_PRESENTED_ALL' } },
+        ph: 'b',
+        ts: 1_000,
+      },
+      { ...identity, ph: 'e', ts: 2_000 },
+      { ...identity, ph: 'e', ts: 18_667 },
+    ]
+
+    expect(extractPresentedFrameTimes(events)).toEqual([2])
+  })
+
   it('averages several clock marks rather than trusting one', () => {
     // Date.now() itself has sub-millisecond noise; two marks taken either
     // side of the recording cancel most of it.
@@ -212,6 +335,85 @@ describe('extractPresentedFrameTimes', () => {
     ]
 
     expect(extractPresentedFrameTimes(events)).toEqual([1_501])
+  })
+
+  it('counts one presented frame per presentation instant, not per report', () => {
+    // Chromium files several PipelineReporter records for one screen update,
+    // all carrying the same `e` timestamp. Summing records inflated a real
+    // run's denominator from 1510 to 2238 and a single window's presented
+    // rate to 89.8fps on a 60Hz compositor.
+    const sameInstant = 4_000
+    const events: TraceEvent[] = [
+      clockSyncMark(0, 0),
+      ...reporter({
+        beginMicros: 1_000,
+        endMicros: sameInstant,
+        local: '0x3',
+        state: 'STATE_PRESENTED_ALL',
+      }),
+      ...reporter({
+        beginMicros: 2_000,
+        endMicros: sameInstant,
+        local: '0x156',
+        state: 'STATE_PRESENTED_PARTIAL',
+      }),
+      ...reporter({
+        beginMicros: 20_000,
+        endMicros: 20_667,
+        local: '0x4',
+        state: 'STATE_PRESENTED_PARTIAL',
+      }),
+    ]
+
+    // Three reports, two instants — and the partial-only one at 20.667ms is
+    // kept, because a partial presentation that has no `ALL` twin is a real,
+    // separate screen update (measured: 83 of them per run, 16.6ms after
+    // their predecessor at the median).
+    expect(extractPresentedFrameTimes(events)).toEqual([4, 20.667])
+  })
+
+  describe('against a verbatim excerpt of a real recording', () => {
+    it('has inputs that actually reach the twinned-report case', () => {
+      // Reachability, asserted before anything is concluded from the
+      // fixture: without twins in the input, every assertion below passes
+      // just as happily on code that counts reports.
+      const ends = presentedEndMicrosOfExcerpt(RENDERER_PID)
+      const distinct = new Set(ends)
+      expect(ends.length).toBe(51)
+      expect(distinct.size).toBe(26)
+      expect(ends.length - distinct.size).toBe(25)
+    })
+
+    it('returns one time per presentation instant', () => {
+      // 26 is not read back out of `src/presented.ts`: it is what the
+      // pairing re-implemented in this file finds, and what the independent
+      // Python extraction on the box reports for the same excerpt.
+      const times = extractPresentedFrameTimes(REAL_TRACE_EXCERPT)
+      expect(times.length).toBe(26)
+      expect(new Set(times).size).toBe(26)
+      for (let index = 1; index < times.length; index += 1) {
+        expect(times[index]).toBeGreaterThan(times[index - 1] as number)
+      }
+    })
+
+    it('stays under what a 60Hz compositor can physically present', () => {
+      // The outer anchor: this bound comes from the display refresh rate,
+      // not from the code under test. Over nine full runs the distinct
+      // instants exceed it by at most 1.8 frames and the raw report count by
+      // 35-51, so this separates the two by an order of magnitude.
+      const times = extractPresentedFrameTimes(REAL_TRACE_EXCERPT)
+      const first = times[0] as number
+      const last = times[times.length - 1] as number
+      expect(times.length - 1).toBeLessThanOrEqual(
+        ((last - first) / 1000) * 60 + 4,
+      )
+    })
+
+    it("still drops the browser UI compositor's own presentations", () => {
+      // The excerpt carries two of them; without the process filter the
+      // count would not be 26.
+      expect(presentedEndMicrosOfExcerpt(BROWSER_UI_PID).length).toBe(2)
+    })
   })
 
   it('refuses a trace with no clock marks instead of inventing an origin', () => {

@@ -30,8 +30,18 @@ const CLOCK_SYNC_MARK_PREFIX = 'fcsync:'
  * the count too small in exactly the windows that matter. Measured on three
  * real runs, counting only `STATE_PRESENTED_ALL` puts captured-over-presented
  * above 1 in 4, 4 and 12 motion windows respectively, peaking at 2.17 — a
- * denominator that the numerator can double is not a denominator. With both
- * states included, no window of the two self-built arms exceeds 1 at all.
+ * denominator that the numerator can double is not a denominator.
+ *
+ * Including `STATE_PRESENTED_PARTIAL` is nevertheless only safe *because*
+ * `extractPresentedFrameTimes` counts instants rather than reports: 669 of
+ * the 752 partial reports in a real run share their presentation timestamp
+ * with an `ALL` report of the same instant, i.e. they are the same screen
+ * update described twice. The 83 that do not are real, separate updates, and
+ * that is measured rather than assumed: over the reference trace their
+ * distance to the nearest `ALL`-bearing instant is 20.8ms at the median and
+ * 4.1ms at the minimum — none is sub-millisecond, 77 of 83 sit a full
+ * refresh interval or more away, and their gap to the *previous* instant is
+ * 16.6ms at the median, exactly one 60Hz refresh.
  *
  * Damage-free frames are a separate state again (`STATE_NO_UPDATE_DESIRED`,
  * ~1400 per run) and are deliberately not counted: nothing changed on screen,
@@ -54,7 +64,7 @@ export type TraceEvent = {
 }
 
 export type PresentedFrameTrace = {
-  /** Ends the trace and returns every presented-frame time in `Date.now()` ms, ascending. */
+  /** Ends the trace and returns every distinct presentation instant in `Date.now()` ms, ascending. */
   stop: () => Promise<number[]>
 }
 
@@ -172,27 +182,54 @@ async function endTraceAndReadEvents(cdp: CDPSession): Promise<TraceEvent[]> {
  *   The frame is bucketed by its `e` timestamp, because that is when the
  *   pixels existed and therefore when the capture could have taken them.
  *   The two are 15-31ms apart at the median.
+ * - **Instants, not reports.** Chromium files *several* `PipelineReporter`
+ *   records for one screen update — one per reporting pipeline in the
+ *   renderer, seven distinct `id2.local` identities over a real run — and
+ *   they all carry the same `e` timestamp, because they describe the same
+ *   presentation. Summing the records inflates the denominator by about
+ *   half: measured on a real product run, 2238 records against 1510 distinct
+ *   presentation instants, with 728 instants reported exactly twice and none
+ *   reported more than twice. So identical `e` timestamps collapse to one
+ *   entry here.
+ *
+ *   The outer check that settles this without reading any of the above: the
+ *   compositor refreshes at 60Hz, so no stretch of a run can contain more
+ *   presentations than 60 per second. Over nine full runs (three arms x three
+ *   repeats) and every sub-3s stretch of each, the distinct instants exceed
+ *   the 60Hz line by at most **1.8 frames**, while the raw record count
+ *   exceeds it by **35 to 51 frames** — a window reporting 89.8 presented
+ *   frames per second, as the un-deduplicated count did, is not a
+ *   measurement, it is double-counting. `validateCaptureEfficiencyReport`
+ *   enforces exactly that bound, so this collapse cannot silently regress.
  */
 export function extractPresentedFrameTimes(
   events: readonly TraceEvent[],
 ): number[] {
   const clock = resolveClockSync(events)
-  const openReporters = new Map<string, TraceEvent[]>()
-  const presented: number[] = []
+  const openReporters = new Map<string, TraceEvent>()
+  const presentedMicros = new Set<number>()
 
   for (const event of events) {
     if (event.name !== 'PipelineReporter' || event.pid !== clock.pid) continue
-    // `id2.local` is unique per compositor, `tid` per thread; neither alone
-    // is unique across a whole trace, so pairing keys on both.
-    const key = `${event.id2?.local ?? ''}|${String(event.tid ?? '')}`
+    // `id2.local` alone, and one open record per key rather than a stack.
+    // Both are measured rather than assumed: over nine full runs (three
+    // arms x three repeats, 8856-10482 renderer `PipelineReporter` events
+    // each) every renderer record sits on a single thread, no `id2.local`
+    // ever appears on two threads, and no `id2.local` is ever open twice at
+    // once. A `tid` component and a LIFO stack are therefore machinery no
+    // real input can exercise — and unexercised machinery is how this
+    // pipeline has repeatedly shipped a defect under a green suite. A second
+    // `b` for a still-open key means the first one's `e` was dropped from
+    // the trace buffer, so the newer record wins and the stale one is
+    // discarded, deterministically and without a guess about nesting order.
+    const key = event.id2?.local ?? ''
     if (event.ph === 'b') {
-      const open = openReporters.get(key) ?? []
-      open.push(event)
-      openReporters.set(key, open)
+      openReporters.set(key, event)
       continue
     }
     if (event.ph !== 'e') continue
-    const begin = openReporters.get(key)?.pop()
+    const begin = openReporters.get(key)
+    openReporters.delete(key)
     if (begin === undefined || event.ts === undefined) continue
     const reporter = begin.args?.['frame_reporter']
     const state =
@@ -200,10 +237,12 @@ export function extractPresentedFrameTimes(
         ? (reporter as { state?: unknown }).state
         : undefined
     if (typeof state !== 'string' || !PRESENTED_STATES.has(state)) continue
-    presented.push(event.ts / 1000 + clock.offsetMs)
+    presentedMicros.add(event.ts)
   }
 
-  return presented.sort((a, b) => a - b)
+  return [...presentedMicros]
+    .sort((a, b) => a - b)
+    .map((micros) => micros / 1000 + clock.offsetMs)
 }
 
 function resolveClockSync(events: readonly TraceEvent[]): {
