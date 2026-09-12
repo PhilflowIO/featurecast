@@ -1,11 +1,11 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
-import { beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { serializeEvent, type RecordEvent } from '../../src/record.js'
 import { createRaster, type Raster } from '../../src/render/compose.js'
@@ -20,6 +20,31 @@ import { aspectSlug, renderRecording } from '../../src/render/render.js'
 import { SpriteCache } from '../../src/render/sprite.js'
 
 const run = promisify(execFile)
+
+/**
+ * A scratch directory that is actually given back.
+ *
+ * These tests made a dozen of them per run and removed none. Over a few hundred
+ * runs — a mutation sweep is exactly that — they filled a 14GB `tmpfs`, and the
+ * suite then failed with `No space left on device` on tests that had nothing to
+ * do with the change under test. A test rig that degrades the machine it runs
+ * on cannot be trusted to report on anything else.
+ */
+const scratchDirectories: string[] = []
+
+async function scratch(prefix: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), prefix))
+  scratchDirectories.push(directory)
+  return directory
+}
+
+afterAll(async () => {
+  await Promise.all(
+    scratchDirectories.map((directory) =>
+      rm(directory, { force: true, recursive: true }),
+    ),
+  )
+})
 
 function sha256(data: Buffer): string {
   return createHash('sha256').update(data).digest('hex')
@@ -73,11 +98,8 @@ function meanAbsoluteDifference(a: Uint8Array, b: Uint8Array): number {
  * the codec fits under it.
  */
 async function composedAsEncoded(raster: Raster): Promise<Buffer> {
-  const scratch = join(
-    await mkdtemp(join(tmpdir(), 'featurecast-rgb-')),
-    'frame.rgb',
-  )
-  await writeFile(scratch, raster.data)
+  const raw = join(await scratch('featurecast-rgb-'), 'frame.rgb')
+  await writeFile(raw, raster.data)
   const { stdout } = await run(
     'ffmpeg',
     [
@@ -91,7 +113,7 @@ async function composedAsEncoded(raster: Raster): Promise<Buffer> {
       '-s',
       `${raster.width}x${raster.height}`,
       '-i',
-      scratch,
+      raw,
       '-vf',
       COLOUR_CHAIN,
       '-f',
@@ -184,7 +206,7 @@ async function hasTool(name: string): Promise<boolean> {
  * encode on a workstation in a second or two.
  */
 async function makeCapture(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), 'featurecast-render-'))
+  const directory = await scratch('featurecast-render-')
   const frames = join(directory, 'frames')
   await mkdir(frames, { recursive: true })
   await run('ffmpeg', [
@@ -311,7 +333,7 @@ describe('rendering a recording end to end', () => {
   it('turns one raw recording into three finished videos, with no browser', async (context) => {
     if (!ffmpegAvailable) context.skip()
     const capture = await makeCapture()
-    const out = await mkdtemp(join(tmpdir(), 'featurecast-out-'))
+    const out = await scratch('featurecast-out-')
     const result = await renderRecording(capture, out)
 
     expect(result.outputs).toHaveLength(3)
@@ -333,7 +355,7 @@ describe('rendering a recording end to end', () => {
   it('compresses the still passage, in the file and not just in the plan', async (context) => {
     if (!ffmpegAvailable) context.skip()
     const capture = await makeCapture()
-    const out = await mkdtemp(join(tmpdir(), 'featurecast-idle-'))
+    const out = await scratch('featurecast-idle-')
     const result = await renderRecording(capture, out, {
       formats: [{ aspect: '16:9', desired: { width: 640, height: 360 } }],
       encoder: { crf: 0, preset: 'ultrafast' },
@@ -377,8 +399,8 @@ describe('rendering a recording end to end', () => {
   it('writes the same decisions twice, byte for byte', async (context) => {
     if (!ffmpegAvailable) context.skip()
     const capture = await makeCapture()
-    const first = await mkdtemp(join(tmpdir(), 'featurecast-a-'))
-    const second = await mkdtemp(join(tmpdir(), 'featurecast-b-'))
+    const first = await scratch('featurecast-a-')
+    const second = await scratch('featurecast-b-')
     await renderRecording(capture, first, { dryRun: true })
     await renderRecording(capture, second, { dryRun: true })
     expect(await readFile(join(first, 'decisions.json'), 'utf8')).toBe(
@@ -389,8 +411,8 @@ describe('rendering a recording end to end', () => {
   it('renders the same video twice, in two separate processes, byte for byte', async (context) => {
     if (!ffmpegAvailable) context.skip()
     const capture = await makeCapture()
-    const first = await mkdtemp(join(tmpdir(), 'featurecast-p1-'))
-    const second = await mkdtemp(join(tmpdir(), 'featurecast-p2-'))
+    const first = await scratch('featurecast-p1-')
+    const second = await scratch('featurecast-p2-')
     // Two processes, not two calls: the defect this replaces was in ffmpeg's
     // dispatch of timed commands, and it varied between invocations rather than
     // within one. Six runs of the old renderer over one command file produced
@@ -421,8 +443,8 @@ describe('rendering a recording end to end', () => {
   it('renders the same video however many threads it is given', async (context) => {
     if (!ffmpegAvailable) context.skip()
     const capture = await makeCapture()
-    const alone = await mkdtemp(join(tmpdir(), 'featurecast-t1-'))
-    const many = await mkdtemp(join(tmpdir(), 'featurecast-t4-'))
+    const alone = await scratch('featurecast-t1-')
+    const many = await scratch('featurecast-t4-')
     // Composition is split by output row across threads, and output rows are
     // independent. A machine with more cores must therefore produce the same
     // file, not merely an equivalent one — otherwise "identical decisions imply
@@ -439,7 +461,7 @@ describe('rendering a recording end to end', () => {
   it('draws what decisions.json says, on the frame it says', async (context) => {
     if (!ffmpegAvailable) context.skip()
     const capture = await makeCapture()
-    const out = await mkdtemp(join(tmpdir(), 'featurecast-follow-'))
+    const out = await scratch('featurecast-follow-')
     // All three formats, not one: the zoomed landscape crop, the 1:1 crop and
     // the portrait strip that is copied 1:1 go through different code paths in
     // the compositor, and only one of them used to be checked.
@@ -507,7 +529,7 @@ describe('rendering a recording end to end', () => {
   it('re-renders a changed look without the capture directory changing', async (context) => {
     if (!ffmpegAvailable) context.skip()
     const capture = await makeCapture()
-    const out = await mkdtemp(join(tmpdir(), 'featurecast-look-'))
+    const out = await scratch('featurecast-look-')
     const before = await renderRecording(capture, out, {
       dryRun: true,
       formats: [{ aspect: '16:9', desired: { width: 640, height: 360 } }],
