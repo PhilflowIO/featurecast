@@ -5,6 +5,8 @@ import { promisify } from 'node:util'
 
 import { describe, expect, it } from 'vitest'
 
+import { assertTsxCli } from './support/tsx-cli.js'
+
 const execFileAsync = promisify(execFile)
 
 /**
@@ -25,7 +27,7 @@ describe('record under the tsx pipeline', () => {
     const out = 'artifacts/tsx-smoke'
     await rm(out, { force: true, recursive: true })
 
-    await execFileAsync('pnpm', ['exec', 'tsx', 'demo/record-smoke.ts', out], {
+    await execFileAsync(assertTsxCli(), ['demo/record-smoke.ts', out], {
       cwd: process.cwd(),
     })
 

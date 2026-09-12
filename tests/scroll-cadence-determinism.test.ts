@@ -5,6 +5,8 @@ import { promisify } from 'node:util'
 
 import { describe, expect, it } from 'vitest'
 
+import { assertTsxCli } from './support/tsx-cli.js'
+
 const execFileAsync = promisify(execFile)
 
 /**
@@ -24,13 +26,13 @@ describe('scroll cadence determinism across processes', () => {
     await rm(runB, { force: true, recursive: true })
 
     await execFileAsync(
-      'pnpm',
-      ['exec', 'tsx', 'demo/scroll-cadence-smoke.ts', runA],
+      assertTsxCli(),
+      ['demo/scroll-cadence-smoke.ts', runA],
       { cwd: process.cwd() },
     )
     await execFileAsync(
-      'pnpm',
-      ['exec', 'tsx', 'demo/scroll-cadence-smoke.ts', runB],
+      assertTsxCli(),
+      ['demo/scroll-cadence-smoke.ts', runB],
       { cwd: process.cwd() },
     )
 
