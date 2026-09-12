@@ -187,11 +187,12 @@ aus `artifacts/m1-008`, 11,8 Sekunden Video, 709 Ausgabebilder, drei Formate:
 | Lanczos-3, naiv                     | 190,2 s  | 82,2 s    | 67,3 s     |
 | **Lanczos-3, mit Wiederverwendung** | —        | 43,4 s    | **38,3 s** |
 
-Das sind **3,2 Sekunden Rechenzeit pro Sekunde Video**. Die Zwei-Minuten-Grenze
-des Meilensteins hält damit für Material bis rund 35 Sekunden; die volle
-m1-008-Aufnahme (47,9 s) braucht hochgerechnet etwa 155 Sekunden statt der 79
-Sekunden, die die bilineare Variante gebraucht hat. **Das ist der bewusst
-bezahlte Preis für die Schärfe** — nicht ein Versehen: die hohe
+Die volle Aufnahme, nicht hochgerechnet sondern gemessen: `artifacts/m1-008`,
+47,9 Sekunden Video, 2873 Ausgabebilder, drei Formate, 14 Threads —
+**136,7 Sekunden**, also 2,9 Sekunden Rechenzeit pro Sekunde Video, gegen 79
+Sekunden mit der bilinearen Variante. Die Zwei-Minuten-Grenze des Meilensteins
+hält damit für Material bis rund 42 Sekunden und wird von dieser Aufnahme um
+14 % überschritten. **Das ist der bewusst bezahlte Preis für die Schärfe** — nicht ein Versehen: die hohe
 Aufnahmeauflösung existiert genau für diesen Filter, und ein weicheres Bild
 wäre ein Verlust am Produkt, während eine längere Wartezeit Bequemlichkeit
 kostet. Wer das anders gewichtet, hat mit ffmpeg-bicubic (31,24 dB gegen 31,60)
