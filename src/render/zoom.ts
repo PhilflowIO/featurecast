@@ -354,14 +354,24 @@ export function buildZoomSegments(
     }
 
     if (previous.endMs > segment.startMs) {
-      // The later shot yields, never the earlier one's arrival: its approach
-      // starts where the earlier shot ends and covers the same distance in
-      // whatever time is left. The earlier shot keeps its own click plus one
-      // frame — everything beyond that is hold, and hold is what gives way.
-      previous.endMs = Math.min(
-        previous.endMs,
-        Math.max(segment.startMs, previous.lastEventMs + ARRIVAL_FLOOR_MS),
-      )
+      // Two shots that crowd each other share the gap between their events, and
+      // both give way: the earlier shot's hold and the later shot's approach
+      // are cut back in proportion to what each asked for, never below one
+      // frame. Round three gave the whole gap to the approach, which left the
+      // hold at 16.7ms in all eighteen measured cases and made `minHoldMs`
+      // invisible — a 900ms setting that the shipped shot never showed.
+      const hold = crowdedHoldMs(gap, resolved)
+      if (hold < resolved.minHoldMs - 1e-9) {
+        previous.clamps = [
+          ...previous.clamps,
+          `A shot was held ${hold.toFixed(0)}ms instead of the ` +
+            `${resolved.minHoldMs.toFixed(0)}ms asked for: the next ` +
+            `interaction follows ${gap.toFixed(0)}ms later, and hold and ` +
+            `approach share that gap in proportion to what each asked for. ` +
+            `Record the two interactions further apart to see the full hold.`,
+        ]
+      }
+      previous.endMs = Math.min(previous.endMs, previous.lastEventMs + hold)
       // Cut straight from one close-up to the next: no pull-out in between.
       segment.from = previous.target
       segment.startMs = Math.max(segment.startMs, previous.endMs)
@@ -403,6 +413,27 @@ function mergeShots(
   // that could not be honoured around two events separately is honoured once
   // around the shot that contains them both.
   previous.endMs = Math.max(previous.endMs, segment.endMs)
+}
+
+/**
+ * How long the earlier of two crowded shots holds, out of the `gap` between the
+ * two events.
+ *
+ * When the gap can pay for both wishes the hold takes everything the approach
+ * does not need. When it cannot, the two share it in proportion to what they
+ * asked for — with the default look, 900ms of hold against 650ms of approach,
+ * the hold gets 58% of the gap. Both are floored at one frame, which is what
+ * keeps the earlier shot alive through its own event and the later shot's
+ * approach from becoming a cut.
+ */
+function crowdedHoldMs(gap: number, look: ResolvedLook): number {
+  const wishes = look.minHoldMs + look.zoomInMs
+  const share =
+    gap >= wishes ? gap - look.zoomInMs : (gap * look.minHoldMs) / wishes
+  return Math.min(
+    Math.max(share, ARRIVAL_FLOOR_MS),
+    Math.max(gap - ARRIVAL_FLOOR_MS, ARRIVAL_FLOOR_MS),
+  )
 }
 
 /**

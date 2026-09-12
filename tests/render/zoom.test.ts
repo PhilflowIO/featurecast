@@ -86,53 +86,70 @@ const FIXTURES = [
 
 /**
  * What each fixture produces, in absolute numbers: how many interactions it
- * contains, how many shots those become, and how many of those shots had to
- * give way to a successor. All three are asserted, not just the last: a "no
- * fixture violates the invariant" that quietly ran over two segments instead of
- * eleven would be a green suite measuring nothing. The counts are absolute so
- * that a change in the corpus shows up as a failure here rather than as a
- * silently smaller denominator.
+ * contains, how many shots those become, how long each shot holds after its
+ * last event, and how many shots had to give way to a successor. All four are
+ * asserted, not just the last: a "no fixture violates the invariant" that
+ * quietly ran over two segments instead of eleven would be a green suite
+ * measuring nothing, and a hold that silently collapses to one frame — which is
+ * what round three shipped in all eighteen crowded cases — is invisible unless
+ * the number itself is written down.
  *
  * `interactions` differing from `segments` is the merge: two interactions at one
  * instant on one element are one shot.
  */
 const SHOTS: Record<
   string,
-  { crowded: number; interactions: number; segments: number }
+  {
+    crowded: number
+    holdMs: readonly number[]
+    interactions: number
+    segments: number
+  }
 > = {
-  'run-a': { crowded: 1, interactions: 2, segments: 2 },
-  'run-b': { crowded: 1, interactions: 2, segments: 2 },
+  'run-a': { crowded: 1, holdMs: [251.6, 900], interactions: 2, segments: 2 },
+  'run-b': { crowded: 1, holdMs: [251.6, 900], interactions: 2, segments: 2 },
   'run-close-taps': {
     crowded: 1,
+    holdMs: [232.3, 1000],
     interactions: 2,
     segments: 2,
   },
-  'run-edge': { crowded: 0, interactions: 1, segments: 1 },
-  'run-hero': { crowded: 0, interactions: 1, segments: 1 },
+  'run-edge': { crowded: 0, holdMs: [900], interactions: 1, segments: 1 },
+  'run-hero': { crowded: 0, holdMs: [900], interactions: 1, segments: 1 },
   'run-interior-button': {
     crowded: 0,
+    holdMs: [900],
     interactions: 1,
     segments: 1,
   },
   'run-interior-taps': {
     crowded: 1,
+    holdMs: [232.3, 900],
     interactions: 2,
     segments: 2,
   },
-  'run-scroll-click': { crowded: 0, interactions: 2, segments: 2 },
+  'run-scroll-click': {
+    crowded: 1,
+    holdMs: [1266.7, 900],
+    interactions: 2,
+    segments: 2,
+  },
   'run-sticky-overlay': {
     crowded: 0,
+    holdMs: [900],
     interactions: 1,
     segments: 1,
   },
   'run-toggle-twice': {
     crowded: 0,
+    holdMs: [900],
     interactions: 2,
     segments: 1,
   },
-  'run-touch': { crowded: 0, interactions: 1, segments: 1 },
+  'run-touch': { crowded: 0, holdMs: [900], interactions: 1, segments: 1 },
   'run-type-then-click': {
     crowded: 0,
+    holdMs: [900],
     interactions: 2,
     segments: 1,
   },
@@ -421,6 +438,13 @@ describe('a shot never ends before its own event', () => {
         expect(cropAt(segment.lastEventMs, segments, format)).toEqual(
           segment.target,
         )
+        // The hold, in milliseconds, written down. Round three's crowded shots
+        // all held for exactly one frame while `minHoldMs` said 900, and no
+        // assertion anywhere said so.
+        expect(segment.endMs - segment.lastEventMs).toBeCloseTo(
+          expected.holdMs[index] ?? -1,
+          1,
+        )
         const successor = segments[index + 1]
         if (successor === undefined) continue
         const ideal = Math.max(
@@ -431,14 +455,21 @@ describe('a shot never ends before its own event', () => {
           // The successor's approach was pushed later, which only happens when
           // it collided with this shot's hold — the guarded path.
           crowded += 1
-          expect(segment.endMs).toBeLessThan(
-            segment.lastEventMs + DEFAULT_ZOOM_LOOK.minHoldMs,
-          )
           expect(successor.from).toEqual(segment.target)
           expect(successor.startMs).toBeGreaterThanOrEqual(segment.endMs)
           expect(successor.zoomInMs).toBeLessThanOrEqual(
             successor.eventMs - successor.startMs,
           )
+          // Hold and approach split the gap between the two events; neither
+          // gets all of it and neither is cut to a single frame.
+          const gap = successor.eventMs - segment.lastEventMs
+          const hold = segment.endMs - segment.lastEventMs
+          const approach = successor.eventMs - successor.startMs
+          expect(hold + approach).toBeCloseTo(gap, 6)
+          expect(hold).toBeGreaterThanOrEqual(
+            Math.min(DEFAULT_ZOOM_LOOK.minHoldMs, gap / 3),
+          )
+          expect(approach).toBeGreaterThan(2 * (1000 / 60))
         }
       }
       expect(crowded).toBe(expected.crowded)
