@@ -163,6 +163,31 @@ describe('computeCaptureEfficiencyReport', () => {
     }).not.toThrow()
   })
 
+  it("carries the display's own rate into the report, not a constant 60", () => {
+    // A 120Hz machine: 60 presentation instants in a 0.5s window are
+    // ordinary there and impossible at 60Hz. The rate the report carries has
+    // to be the one read off these instants, because the ceiling in
+    // `validateCaptureEfficiencyReport` is built from that field — a report
+    // that hard-codes 60 turns this good run into a denominator failure.
+    // Nothing in this fixture tells the estimator to look for 120.
+    const presented = Array.from(
+      { length: 240 },
+      (_, index) => (index * 1000) / 120,
+    )
+    const report = computeCaptureEfficiencyReport(
+      manifestWithFrameTimestamps(presented.slice(0, 60)),
+      [{ end: 500, label: 'tasks:scroll-down:1', start: 0 }],
+      presented,
+      [],
+    )
+
+    expect(report.refreshHz).toBeCloseTo(120, 6)
+    expect(report.windows[0]?.presentedFrameCount).toBe(60)
+    expect(() => {
+      validateCaptureEfficiencyReport(report)
+    }).not.toThrow()
+  })
+
   it('reports the in-page change-tick count as context without letting it set the score', () => {
     // The real numbers from one scroll window of the patched-Chromium
     // acceptance run on the AI box: Chromium presented 66 frames, the
