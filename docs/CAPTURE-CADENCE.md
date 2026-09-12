@@ -512,3 +512,110 @@ anchored top instead of centered. Whether the zoom reserve is worth the
 extra capture height (more pixels to rasterize, though no longer the
 bottleneck per this document) versus DEVICES.md's simpler native-16:9
 capture is an open product decision, not something this fix decided.
+
+## The capture clock and the efficiency denominator (added 2026-09-12, #21)
+
+Two numbers this document relied on were being produced the wrong way. Both
+are fixed; the corrected figures supersede every efficiency percentage above.
+
+### What `metadata.timestamp` on a screencast frame actually is
+
+Not the moment the compositor produced the frame, and not the moment it was
+presented. It is `base::Time::Now()` — plain wall clock — read in the browser
+process when the DevTools handler builds the frame's metadata:
+`content/browser/devtools/protocol/page_handler.cc:178`,
+`.SetTimestamp(base::Time::Now().InSecondsFSinceUnixEpoch())`, called from
+`OnFrameFromVideoConsumer` (same file, 1814-1861). Pinned tree,
+Chromium 153.0.8010.12, under `~/featurecast-bench/chromium-patch/chromium/src`.
+
+A better timebase exists and is one field away. The capturer writes the
+oracle-smoothed presentation time onto the VideoFrame
+(`components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.cc:1511`)
+and ships it over mojo as `info->timestamp` (same file, 1527), where
+`DevToolsVideoConsumer::OnFrameCaptured` puts it back on the frame
+(`content/browser/devtools/devtools_video_consumer.cc:182-185`) — and
+`PageHandler` never reads it. It is not reachable over CDP without a patch.
+Measured cost of using the arrival stamp instead: the lag from presentation
+to arrival is 2.1-8.6 ms at the median and 5.1-11.3 ms at p95 across three
+full runs, so the arrival stamp is a tight proxy and re-basing the timeline
+onto presentation times would recover only 2-7 percentage points of repeated
+output frames — measured by simulation, not assumed.
+
+### Delivery order is not capture order, and the timestamps were the casualty
+
+`ScreencastFrameCaptured` hands the bitmap to `base::ThreadPool` for JPEG
+encoding and the CDP event is emitted from the encode's reply
+(`page_handler.cc:1864-1893`), so frames arrive in encode-completion order
+while their timestamps were assigned strictly in capture order on one
+sequence. `capture.ts` used to treat delivery order as authoritative and
+clamp a regressing timestamp forward onto its predecessor. Measured on
+`artifacts/sbs-patched`: 42 clamps, and 39 inter-frame gaps of **exactly
+0.0 ms** — every zero gap in that run was manufactured by the clamp, none
+was a resolution tie (1415 of its 1416 timestamps carry a fractional
+millisecond). A zero-gap frame gets no `duration` line in the ffconcat
+timeline, so ffmpeg steps past it and its neighbour holds twice as long.
+
+The manifest is now sorted back into capture order instead. On a real run
+with the fix (`wt-clock/artifacts/clock-r1`, patched Chromium, AI box):
+48 frames restored to order, `coincidentTimestampCount` 0, zero-length gaps 0.
+
+### The efficiency denominator was the in-page probe, and it undercounts
+
+`src/paint-rate.ts` runs on the renderer's main thread; smooth scrolling is
+driven by the compositor thread. During exactly the motion this project
+records, the probe therefore sees fewer frames than reach the screen — 51
+against 66 in one measured window. `captured / ticks` consequently rises as
+the machine degrades, and the patched-Chromium arm reported **100.9%**
+capture efficiency, which the 95% gate passed.
+
+The denominator is now Chromium's own presented-frame count, taken from a
+two-category browser trace and computed in-process at the end of the run
+(`src/presented.ts`). Predicate: `PipelineReporter` async events in the
+renderer process whose `b` phase carries state `STATE_PRESENTED_ALL` or
+`STATE_PRESENTED_PARTIAL`, bucketed at the paired `e` timestamp. Counting
+`STATE_PRESENTED_ALL` alone puts captured-over-presented above 1 in 4, 4 and
+12 windows of the three reference runs, peaking at 2.17; including
+`PARTIAL` leaves one window over 1 across all three runs, by one frame, and
+that one is a traced boundary carry-in. The gate now also asserts its own
+denominator: more than one frame of overshoot fails loudly.
+
+Corrected totals over all motion windows of the three reference arms
+(`~/featurecast-bench/out/arm-{stock,sbun,sbpat}-r1`), verified by two
+independent implementations — a Python analysis and `extractPresentedFrameTimes`
+— agreeing frame for frame:
+
+| arm                      | captured / presented | old in-page ratio |
+| ------------------------ | -------------------- | ----------------- |
+| Playwright's Chromium    | 534 / 704 = 75.9%    | 85.3%             |
+| own build, unpatched     | 547 / 789 = 69.3%    | 84.2%             |
+| own build, patched (#17) | 663 / 822 = 80.7%    | **100.9%**        |
+
+### What this did and did not do to the finished video
+
+Measured on `output.mp4` by frame comparison, over all scroll windows, at
+six thresholds from 0.05 to 1.0 mean grey levels:
+
+|                                         | before (`sbs-patched`) | after (`clock-r1`)  |
+| --------------------------------------- | ---------------------- | ------------------- |
+| unchanged output frames, threshold 0.05 | 192/568 = 33.8%        | 149/530 = **28.1%** |
+| unchanged output frames, threshold 0.10 | 235/568 = 41.4%        | 184/530 = **34.7%** |
+
+Better, and **still far above the 10% the ticket asks for** — because the
+remainder is not a clock problem. Accounting for the same run, per scroll
+window and summed:
+
+- **6.4%** of output slots cannot show anything new because Chromium never
+  presented that many frames (horizontal scroll drops to 15 presentations in
+  21 slots — the `AnimatedContentSampler` ceiling of #17).
+- **10.0%** cannot, because the capture received fewer frames than the
+  window has slots. That is capture loss, and 81.3% efficiency is what it
+  looks like from the other side.
+- **22.0%** is what ffmpeg's `fps=60` sampler produces from the real arrival
+  times, because frames arrive unevenly: two inside one 16.7 ms slot means
+  one is never shown and some other slot repeats.
+- **28.1%** is what the finished video actually shows; the last ~6 points are
+  captured frames whose content did not visibly change.
+
+So the honest split is that this ticket removed the manufactured part of the
+stutter and made the measurement trustworthy, and the rest is frame supply,
+which is #17's and #2's question, not the clock's.
