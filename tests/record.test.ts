@@ -50,7 +50,6 @@ async function simulateObservedFrames(
   windowMs: number,
   minFrames: number,
 ) {
-  const start = Date.now()
   const frames: {
     bottom: number
     left: number
@@ -58,20 +57,26 @@ async function simulateObservedFrames(
     t: number
     top: number
   }[] = []
+  let virtualMs = 0
   for (;;) {
     const raw = await boundingBox()
     if (raw === null || raw.width <= 0 || raw.height <= 0) {
       throw new Error('Target must resolve to a visible bounding box')
     }
-    const elapsed = Date.now() - start
     frames.push({
-      t: elapsed,
+      t: virtualMs,
       left: raw.x,
       top: raw.y,
       right: raw.x + raw.width,
       bottom: raw.y + raw.height,
     })
-    if (elapsed >= windowMs && frames.length >= minFrames) return frames
+    if (virtualMs >= windowMs && frames.length >= minFrames) return frames
+    virtualMs += SIMULATED_FRAME_INTERVAL_MS
+    // Real time still has to pass, because the settle loop's own budget is
+    // a wall clock — but the frame timestamps above are virtual, so the
+    // sampled series is the same on a loaded machine as on an idle one.
+    // A unit test asserting on the settled box should fail because the
+    // criterion is wrong, never because the machine was busy.
     await new Promise((resolve) =>
       setTimeout(resolve, SIMULATED_FRAME_INTERVAL_MS),
     )
@@ -625,14 +630,16 @@ describe('record', () => {
     periodMs: number,
     declaredPeriodsMs: number[] = [periodMs],
   ) {
-    const started = Date.now()
-    const boundingBox = vi
-      .fn()
-      .mockImplementation(() =>
-        Promise.resolve(
-          boxAtPhase(((Date.now() - started) % periodMs) / periodMs),
-        ),
-      )
+    // The phase advances one simulated rendering interval per read, not
+    // with the wall clock: the animation a unit test observes is then a
+    // pure function of how many samples were taken, which is what makes
+    // these assertions independent of machine load.
+    let tick = 0
+    const boundingBox = vi.fn().mockImplementation(() => {
+      const phase = ((tick * SIMULATED_FRAME_INTERVAL_MS) % periodMs) / periodMs
+      tick += 1
+      return Promise.resolve(boxAtPhase(phase))
+    })
     const base = hittableLocator(boundingBox)
     return {
       boundingBox,
@@ -772,10 +779,11 @@ describe('record', () => {
     for (const preambleMs of [0, 400]) {
       const output = await temporaryDirectory()
       const page = fakePage()
-      const started = Date.now()
+      let reads = 0
       page.locator.mockReturnValue(
         animatedLocator((phase) => {
-          const elapsed = Date.now() - started
+          reads += 1
+          const elapsed = reads * SIMULATED_FRAME_INTERVAL_MS
           if (elapsed < preambleMs) {
             // Still travelling to its final position: neither still nor
             // periodic, so the settle loop keeps waiting.
@@ -813,17 +821,18 @@ describe('record', () => {
   it('keeps waiting out a target drifting far below any sub-pixel tolerance', async () => {
     const output = await temporaryDirectory()
     const page = fakePage()
-    const startedAt = Date.now()
-    const growForMs = 700
-    const finalWidth = 100 + (growForMs / SIMULATED_FRAME_INTERVAL_MS) * 0.05
+    const growForFrames = 44
+    const finalWidth = 100 + growForFrames * 0.05
+    let reads = 0
     page.locator.mockReturnValue(
       hittableLocator(
         vi.fn().mockImplementation(() => {
-          const elapsed = Math.min(Date.now() - startedAt, growForMs)
+          const frame = Math.min(reads, growForFrames)
+          reads += 1
           return Promise.resolve({
             x: 600,
             y: 300,
-            width: 100 + (elapsed / SIMULATED_FRAME_INTERVAL_MS) * 0.05,
+            width: 100 + frame * 0.05,
             height: 40,
           })
         }),

@@ -88,6 +88,34 @@ const SPIN_FIXTURE_URL = page(
     '<button id="t" onclick="window.__clicked=true">Go</button>',
 )
 
+/**
+ * The target itself declares no animation at all — its *parent* does, and
+ * moves it. `element.getAnimations()` on the target returns an empty list
+ * here, so a period read from the target alone finds nothing.
+ */
+const ANCESTOR_ANIMATED_FIXTURE_URL = page(
+  '<style>@keyframes drift{0%{transform:translateX(0)}' +
+    '50%{transform:translateX(40px)}100%{transform:translateX(0)}}' +
+    '#wrap{position:absolute;left:400px;top:300px;' +
+    'animation:drift 0.5s linear infinite}</style>' +
+    '<div id="wrap"><button id="t" style="width:80px;height:40px;" ' +
+    'onclick="window.__clicked=true">Go</button></div>',
+)
+
+/**
+ * An alternating ping-pong: its declared iteration duration is 400ms, but
+ * one iteration only covers one direction, so the geometry's own period is
+ * 800ms. Averaging over 400ms covers half a cycle and biases the result by
+ * a process-dependent amount.
+ */
+const ALTERNATING_FIXTURE_URL = page(
+  '<style>@keyframes pong{from{transform:translateX(0)}' +
+    'to{transform:translateX(60px)}}' +
+    '#t{position:absolute;left:400px;top:300px;width:80px;height:40px;' +
+    'animation:pong 0.4s linear infinite alternate}</style>' +
+    '<button id="t" onclick="window.__clicked=true">Go</button>',
+)
+
 /** Runs, then freezes mid-animation. The element is genuinely still
  * afterwards, at a geometry that is not its declared start or end. */
 const PAUSED_MID_ANIMATION_FIXTURE_URL = page(
@@ -226,6 +254,8 @@ describe('settle criterion against a real headless Chromium', () => {
     ['off-centre wiggle', WIGGLE_FIXTURE_URL],
     ['spin', SPIN_FIXTURE_URL],
     ['paused mid-animation', PAUSED_MID_ANIMATION_FIXTURE_URL],
+    ['ancestor-animated', ANCESTOR_ANIMATED_FIXTURE_URL],
+    ['alternating ping-pong', ALTERNATING_FIXTURE_URL],
   ])(
     'settles and clicks a %s target',
     async (name, url) => {

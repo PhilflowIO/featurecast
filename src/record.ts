@@ -211,11 +211,17 @@ export function createRecorder(
       const resolveVerifiedTarget = async (
         locator: LocatorLike,
         deadlineAt: number,
-      ): Promise<{ bbox: BoundingBox; point: { x: number; y: number } }> => {
+        knownPeriodMs: number | null = null,
+      ): Promise<{
+        bbox: BoundingBox
+        periodMs: number | null
+        point: { x: number; y: number }
+      }> => {
         const settled = await resolveSettledGeometry(
           locator,
           deadlineAt,
           settleTimeoutMs,
+          knownPeriodMs,
         )
         // The settled centre is the resting box's own centre, already
         // pulled inside the region the target covered at every animation
@@ -231,14 +237,18 @@ export function createRecorder(
             settled.center.y >= 0 &&
             settled.center.y < viewport.height)
         if (centreIsOnScreen && (await hitsTarget(locator, settled.center))) {
-          return { bbox: settled.bbox, point: settled.center }
+          return {
+            bbox: settled.bbox,
+            periodMs: settled.periodMs,
+            point: settled.center,
+          }
         }
         const point = await findVerifiedInteractionPoint(
           locator,
           settled.bbox,
           viewport,
         )
-        return { bbox: settled.bbox, point }
+        return { bbox: settled.bbox, periodMs: settled.periodMs, point }
       }
 
       const moveToPoint = async (
@@ -295,8 +305,8 @@ export function createRecorder(
         // legitimately burn twice the budget the option advertises —
         // measured at 125s against a 60s setting.
         const deadlineAt = Date.now() + settleTimeoutMs
-        const initialPoint = (await resolveVerifiedTarget(locator, deadlineAt))
-          .point
+        const before = await resolveVerifiedTarget(locator, deadlineAt)
+        const initialPoint = before.point
         await moveToPoint(
           initialPoint,
           deriveMotionSeed(seed, thisInteraction, PRIMARY_MOVE_ROLE),
@@ -319,7 +329,11 @@ export function createRecorder(
         // corrective hop the other didn't. Both settles now integrate over
         // the same whole number of the animation's own periods, so they
         // agree by construction rather than by tolerance.
-        const arrived = await resolveVerifiedTarget(locator, deadlineAt)
+        const arrived = await resolveVerifiedTarget(
+          locator,
+          deadlineAt,
+          before.periodMs,
+        )
 
         // Whether to spend a second visible pointer curve is decided by a
         // hit test, not by comparing two coordinates against a threshold.
@@ -815,6 +829,15 @@ type SettledGeometry = {
    * click landing at any moment of the animation still hits.
    */
   center: { x: number; y: number }
+  /**
+   * The verified period the geometry was integrated over, or `null` for a
+   * target that was simply still. Handed back to the caller so the second
+   * settle of the same interaction does not have to re-verify a period it
+   * already established — re-probing two full periods of the same
+   * animation on the same element is pure waste, and for a long period it
+   * is waste the interaction's budget cannot afford.
+   */
+  periodMs: number | null
 }
 
 /**
@@ -1030,7 +1053,11 @@ function boxFromEdges(
  * dominates (a continuous sweep with no rest), the period-aligned time
  * average is the answer instead.
  */
-function restingGeometryOver(frames: Frame[], spanMs: number): SettledGeometry {
+function restingGeometryOver(
+  frames: Frame[],
+  spanMs: number,
+  periodMs: number,
+): SettledGeometry {
   const start = frames[0]!.t
   const inSpan = frames.filter((frame) => frame.t - start < spanMs)
   const weights = inSpan.map((frame, index) => {
@@ -1094,7 +1121,7 @@ function restingGeometryOver(frames: Frame[], spanMs: number): SettledGeometry {
         }
       : { x: Math.round(restingCenter.x), y: Math.round(restingCenter.y) }
 
-  return { bbox, center }
+  return { bbox, center, periodMs }
 }
 
 /** The degenerate case of `restingGeometryOver`: a target that did not
@@ -1108,6 +1135,7 @@ function stillGeometry(frames: Frame[]): SettledGeometry {
       x: Math.round(bbox.x + bbox.width / 2),
       y: Math.round(bbox.y + bbox.height / 2),
     },
+    periodMs: null,
   }
 }
 
@@ -1323,6 +1351,7 @@ async function resolveSettledGeometry(
   locator: LocatorLike,
   deadlineAt: number,
   timeoutMs: number,
+  knownPeriodMs: number | null = null,
 ): Promise<SettledGeometry> {
   // A visibility check before any observation, so an absent or collapsed
   // target fails with the same message it always has.
@@ -1337,7 +1366,11 @@ async function resolveSettledGeometry(
 
     if (Date.now() >= nextPeriodAttemptAt) {
       nextPeriodAttemptAt = Date.now() + PERIOD_RETRY_INTERVAL_MS
-      const settled = await tryPeriodicMeasurement(locator, deadlineAt)
+      const settled = await tryPeriodicMeasurement(
+        locator,
+        deadlineAt,
+        knownPeriodMs,
+      )
       if (settled !== null) return settled
     }
 
@@ -1365,11 +1398,26 @@ async function resolveSettledGeometry(
 async function tryPeriodicMeasurement(
   locator: LocatorLike,
   deadlineAt: number,
+  knownPeriodMs: number | null,
 ): Promise<SettledGeometry | null> {
   const fits = (windowMs: number): boolean =>
     Date.now() + windowMs <= deadlineAt
 
-  for (const periodMs of await candidatePeriodsMs(locator)) {
+  const candidates = await candidatePeriodsMs(locator)
+
+  // A period established earlier in this same interaction, still declared
+  // by the page, needs no second two-period verification pass: the check
+  // that matters — does the geometry actually repeat on it — was already
+  // made against this element, and the page still says the same thing.
+  if (knownPeriodMs !== null && candidates.includes(knownPeriodMs)) {
+    if (
+      fits(knownPeriodMs * measurementPeriods(knownPeriodMs) + STABLE_WINDOW_MS)
+    ) {
+      return measureOverPeriods(locator, knownPeriodMs)
+    }
+  }
+
+  for (const periodMs of candidates) {
     // Two whole periods *plus a margin*: an observation asked for exactly
     // 2P ends on the first frame at or past 2P, so its first-to-last span
     // is 2P minus one frame interval — just short of what `periodHolds`
@@ -1418,7 +1466,7 @@ async function measureOverPeriods(
   // even though the frame that would close it is excluded from the
   // integral.
   const frames = await observeFrames(locator, spanMs + STABLE_WINDOW_MS)
-  return restingGeometryOver(frames, spanMs)
+  return restingGeometryOver(frames, spanMs, periodMs)
 }
 
 async function readValidatedBoundingBox(
