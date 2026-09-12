@@ -19,14 +19,29 @@ const LANDSCAPE: FormatSpec = {
   aspect: '16:9',
   desired: { width: 1920, height: 1080 },
 }
+const PORTRAIT: FormatSpec = {
+  aspect: '9:16',
+  desired: { width: 1080, height: 1920 },
+}
+const SQUARE: FormatSpec = {
+  aspect: '1:1',
+  desired: { width: 1080, height: 1080 },
+}
 const CAPTURE = { width: 2560, height: 1600 }
-const VIEWPORT = { width: 1280, height: 720 }
 
+/**
+ * Every fixture below is a real event log from `artifacts/m2-001`, and every
+ * one of them contains at least one click or tap with a bounding box. That is
+ * the point: the milestone is judged on whether the zoom frames the element
+ * that was hit, so the suite has to be run against logs in which something was
+ * actually hit.
+ */
 const FIXTURES = [
   'run-scroll-click',
   'run-touch',
   'run-sticky-overlay',
   'run-edge',
+  'run-hero',
 ]
 
 function fixture(name: string): RecordEvent[] {
@@ -36,6 +51,32 @@ function fixture(name: string): RecordEvent[] {
       'utf8',
     ),
   )
+}
+
+/**
+ * The fixtures were recorded against a 1280x720 viewport; the capture raster
+ * these tests frame against is 2560x1600. Doubling every coordinate is exactly
+ * what a device-pixel-ratio-2 recording of the same page looks like, and it is
+ * what spreads the elements across the whole raster instead of crowding them
+ * into the top-left corner — where every crop would sit pinned against an edge
+ * and the "is the element in the middle of the shot" assertion would be skipped
+ * for all of them.
+ */
+function atCaptureScale(events: readonly RecordEvent[]): RecordEvent[] {
+  return events.map((event) => {
+    if (event.type === 'header' || !('x' in event)) return event
+    const scaled = { ...event, x: event.x * 2, y: event.y * 2 }
+    if (!('bbox' in scaled)) return scaled
+    return {
+      ...scaled,
+      bbox: {
+        x: scaled.bbox.x * 2,
+        y: scaled.bbox.y * 2,
+        width: scaled.bbox.width * 2,
+        height: scaled.bbox.height * 2,
+      },
+    }
+  })
 }
 
 function intersect(a: Rect, b: Rect): Rect {
@@ -89,44 +130,269 @@ describe('framing a logged bounding box', () => {
   })
 })
 
+/**
+ * The headline acceptance criterion of issue #5, and the one round one could
+ * not fail.
+ *
+ * It ran against `resolveFormat(LANDSCAPE, {1280x720})`, a format whose
+ * `maxZoom` is exactly 1, so every crop came out the full base rectangle and
+ * the assertion reduced to "the picture contains a piece of itself" — true by
+ * construction, for any framing whatsoever. It was weakened a second time by
+ * reducing the target through `intersect`, which returns a zero-width rectangle
+ * for an off-screen element, and a zero-width rectangle is contained by
+ * anything.
+ *
+ * So: the real capture size, which has 1.33x of zoom reserve, and a target that
+ * has to be non-empty before it is allowed to be contained.
+ */
+function visiblePart(box: Rect, format: { base: Rect }): Rect {
+  // An element larger than the picture cannot be contained by a crop of the
+  // picture; what must hold is that every visible part of it is in frame.
+  const visible = intersect(box, format.base)
+  if (visible.width <= 0 || visible.height <= 0) {
+    throw new Error(
+      'The logged element has no visible overlap with the picture at all, ' +
+        'so "the crop contains it" is not a claim about framing. `record` ' +
+        'refuses such a target; a fixture that produced one is a bug in the ' +
+        'fixture, not a passing test.',
+    )
+  }
+  return visible
+}
+
 describe('the zoom frames the hit element at every click', () => {
   for (const name of FIXTURES) {
     it(`${name}: the crop contains the logged bounding box`, () => {
-      const events = toTimedEvents(fixture(name))
-      const format = resolveFormat(LANDSCAPE, VIEWPORT)
+      const events = toTimedEvents(atCaptureScale(fixture(name)))
+      const format = resolveFormat(LANDSCAPE, CAPTURE)
+      expect(format.maxZoom).toBeGreaterThan(1.3)
       const segments = buildZoomSegments(events, format)
       const interactions = events.filter(({ event }) =>
         ['click', 'tap', 'type'].includes(event.type),
       )
       expect(interactions.length).toBeGreaterThan(0)
+      let framed = 0
       for (const { event, timeMs } of interactions) {
         if (!('bbox' in event)) continue
         const crop = cropAt(timeMs, segments, format)
-        // An element larger than the picture cannot be contained by a crop of
-        // the picture; what must hold is that every visible part of it is in
-        // frame.
-        const visible = intersect(boxToRect(event.bbox), format.base)
-        expect(contains(crop, visible, 1)).toBe(true)
+        // The crop has to be the framing computed for *this* element, not some
+        // rectangle that happens to contain it — and for anything smaller than
+        // the capture's reserve that is a genuine close-up rather than the
+        // resting frame.
+        expect(crop).toEqual(frameBoundingBox(event.bbox, format).rect)
+        const padded = event.bbox.width + 2 * DEFAULT_ZOOM_LOOK.paddingPx
+        if (padded < format.output.width) {
+          expect(crop.width).toBe(format.output.width)
+          expect(crop.width).toBeLessThan(format.base.width)
+        }
+        const box = boxToRect(event.bbox)
+        expect(contains(crop, visiblePart(box, format), 1)).toBe(true)
+        // Containment alone is a loose test: a 1920px crop around a 200px
+        // button has hundreds of pixels of slack on each side, so a framing
+        // that missed by half the picture would still "contain" it. The
+        // element has to be in the middle of the shot, unless the crop is
+        // pinned against the edge of the raster and cannot be.
+        const pinnedX =
+          crop.x <= format.panBounds.x ||
+          crop.x + crop.width >= format.panBounds.x + format.panBounds.width
+        const pinnedY =
+          crop.y <= format.panBounds.y ||
+          crop.y + crop.height >= format.panBounds.y + format.panBounds.height
+        if (!pinnedX) {
+          expect(crop.x + crop.width / 2).toBeCloseTo(box.x + box.width / 2, 0)
+        }
+        if (!pinnedY) {
+          expect(crop.y + crop.height / 2).toBeCloseTo(
+            box.y + box.height / 2,
+            0,
+          )
+        }
+        framed += 1
       }
+      expect(framed).toBeGreaterThan(0)
     })
   }
 
+  it('fails when the framing is wrong, which is the point of it', () => {
+    const events = toTimedEvents(atCaptureScale(fixture('run-scroll-click')))
+    const format = resolveFormat(LANDSCAPE, CAPTURE)
+    const segments = buildZoomSegments(events, format)
+    const clicks = events.filter(({ event }) => 'bbox' in event)
+    expect(clicks.length).toBeGreaterThan(0)
+    for (const { event, timeMs } of clicks) {
+      if (!('bbox' in event)) continue
+      const crop = cropAt(timeMs, segments, format)
+      const visible = visiblePart(boxToRect(event.bbox), format)
+      // The same assertion against a crop framed a few hundred pixels beside
+      // the element — "a point beside it", in the milestone's words.
+      const beside = { ...crop, x: crop.x + 400, y: crop.y + 300 }
+      expect(contains(beside, visible, 1)).toBe(false)
+    }
+  })
+
+  it('refuses to call an off-screen element framed', () => {
+    const format = resolveFormat(LANDSCAPE, CAPTURE)
+    const offScreen: Rect = { x: 4000, y: 2000, width: 200, height: 80 }
+    expect(() => visiblePart(offScreen, format)).toThrow(/no visible overlap/)
+  })
+
   it('has arrived on the element before the click, not on the way to it', () => {
     const events = toTimedEvents(fixture('run-scroll-click'))
-    const format = resolveFormat(LANDSCAPE, VIEWPORT)
+    const format = resolveFormat(LANDSCAPE, CAPTURE)
     const segments = buildZoomSegments(events, format)
+    expect(segments.length).toBeGreaterThan(0)
     for (const segment of segments) {
       expect(cropAt(segment.eventMs, segments, format)).toEqual(segment.target)
+      expect(segment.target).not.toEqual(format.base)
     }
   })
 })
 
+describe('a format with no zoom reserve still has pan reserve', () => {
+  // 9:16 out of a 2560x1600 desktop capture: the tallest portrait rectangle in
+  // it is 900x1600, so the output is 900x1600 and maxZoom is exactly 1. Round
+  // one made the crop floor double as the crop's fence, so every portrait frame
+  // was the same centre strip — 900 pixels out of 2560 — and a click on a left
+  // hand nav produced a video of a click on nothing.
+  const format = resolveFormat(PORTRAIT, CAPTURE)
+
+  it('has no zoom left to give, which is the premise', () => {
+    expect(format.maxZoom).toBeCloseTo(1, 6)
+    expect(format.output).toEqual({ width: 900, height: 1600 })
+  })
+
+  it('follows the element sideways instead of freezing on the centre', () => {
+    const left = frameBoundingBox(
+      { x: 120, y: 700, width: 220, height: 60 },
+      format,
+    ).rect
+    const middle = frameBoundingBox(
+      { x: 1180, y: 700, width: 220, height: 60 },
+      format,
+    ).rect
+    const right = frameBoundingBox(
+      { x: 2340, y: 700, width: 200, height: 60 },
+      format,
+    ).rect
+    expect(left.x).toBeLessThan(middle.x)
+    expect(middle.x).toBeLessThan(right.x)
+    for (const [crop, box] of [
+      [left, { x: 120, y: 700, width: 220, height: 60 }],
+      [middle, { x: 1180, y: 700, width: 220, height: 60 }],
+      [right, { x: 2340, y: 700, width: 200, height: 60 }],
+    ] as const) {
+      expect(contains(crop, boxToRect(box), 1)).toBe(true)
+      expect(crop.width).toBe(format.output.width)
+      expect(crop.x).toBeGreaterThanOrEqual(0)
+      expect(crop.x + crop.width).toBeLessThanOrEqual(CAPTURE.width)
+    }
+  })
+
+  it('pans on a spring like everything else, so it does not snap', () => {
+    const events: RecordEvent[] = [
+      { type: 'header', version: 1, fps: 60, seed: 1 },
+    ]
+    for (let tick = 0; tick <= 240; tick += 1) {
+      events.push({ type: 'pointer', tick, x: 230, y: 730 })
+    }
+    events.push({
+      type: 'click',
+      tick: 120,
+      x: 230,
+      y: 730,
+      bbox: { x: 120, y: 700, width: 220, height: 60 },
+    })
+    const timed = toTimedEvents(events)
+    const segments = buildZoomSegments(timed, format)
+    const segment = segments[0]
+    expect(segment).toBeDefined()
+    if (segment === undefined) return
+    const travelled: number[] = []
+    for (
+      let timeMs = segment.startMs;
+      timeMs <= segment.eventMs;
+      timeMs += 1000 / 60
+    ) {
+      travelled.push(cropAt(timeMs, segments, format).x)
+    }
+    expect(travelled.length).toBeGreaterThan(20)
+    const first = travelled[0] ?? 0
+    const last = travelled.at(-1) ?? 0
+    expect(first).toBeCloseTo(format.base.x, 6)
+    expect(last).toBeCloseTo(segment.target.x, 6)
+    // No single step may cover more than a fifth of the journey: that is what
+    // "it slides rather than cuts" means in numbers.
+    for (let i = 1; i < travelled.length; i += 1) {
+      const step = Math.abs((travelled[i] ?? 0) - (travelled[i - 1] ?? 0))
+      expect(step).toBeLessThan(Math.abs(last - first) / 5)
+    }
+  })
+})
+
+describe('landscape is left exactly where it was', () => {
+  // The pan reserve is deliberately horizontal only, and 16:9 spans the
+  // capture's full width already. Its bounds are therefore its resting frame,
+  // which is the same rectangle round one used — there is no behaviour left for
+  // this change to alter. The vertical anchoring that drops the bottom 160
+  // pixels is a decision made on purpose in `baseRect` and stays made.
+  it('bounds 16:9 by its resting frame, as before, because it has no width to spare', () => {
+    const format = resolveFormat(LANDSCAPE, CAPTURE)
+    expect(format.panBounds).toEqual(format.base)
+  })
+
+  it('never lets a 16:9 crop leave the resting frame, on the whole corpus', () => {
+    const format = resolveFormat(LANDSCAPE, CAPTURE)
+    let checked = 0
+    for (const name of FIXTURES) {
+      const events = toTimedEvents(fixture(name))
+      const segments = buildZoomSegments(events, format)
+      for (const segment of segments) {
+        for (const timeMs of [
+          segment.startMs,
+          segment.eventMs,
+          segment.endMs,
+        ]) {
+          expect(
+            contains(format.base, cropAt(timeMs, segments, format), 1),
+          ).toBe(true)
+          checked += 1
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(10)
+  })
+})
+
+describe('the square format has the same defect, milder', () => {
+  // 1:1 out of a 2560x1600 capture rests on the middle 1600 pixels, so 480 on
+  // each side were unreachable for exactly the same reason the portrait strip
+  // was frozen. The fix is the same fix. What does not change is the zoom: 1:1
+  // keeps its 1.48x of reserve and its crop sizes.
+  const format = resolveFormat(SQUARE, CAPTURE)
+
+  it('frames an element the resting frame could already reach exactly as before', () => {
+    const inside = { x: 1180, y: 700, width: 220, height: 60 }
+    const { rect } = frameBoundingBox(inside, format)
+    expect(contains(format.base, rect, 1)).toBe(true)
+  })
+
+  it('now follows an element the resting frame never covered', () => {
+    const leftNav = { x: 120, y: 700, width: 220, height: 60 }
+    const { rect } = frameBoundingBox(leftNav, format)
+    expect(contains(rect, boxToRect(leftNav), 1)).toBe(true)
+    expect(rect.x).toBeLessThan(format.base.x)
+    expect(rect.x).toBeGreaterThanOrEqual(0)
+  })
+})
+
 describe('a bounded-animating target', () => {
-  // The logged box is the element's resting extent — an envelope over an
-  // observation window, not the geometry of the one frame the click landed
-  // on. A pop-in call to action that rests at 400x80 is logged at 400x80 even
-  // if it measured 219x44 at the instant of the click. The camera must
-  // therefore stand perfectly still while the element pulses.
+  // The logged box is the element's resting extent: the geometry it dwells at
+  // longest over an observation window, not the geometry of the one frame the
+  // click landed on, and not an average of the two extremes — on an asymmetric
+  // animation the average is a size the element never has. A pop-in call to
+  // action that rests at 400x80 is logged at 400x80 even if it measured 219x44
+  // at the instant of the click. The camera must therefore stand perfectly
+  // still while the element pulses.
   const RESTING: BoundingBox = { x: 800, y: 500, width: 400, height: 80 }
   const format = resolveFormat(LANDSCAPE, CAPTURE)
 
@@ -193,7 +459,7 @@ describe('a bounded-animating target', () => {
 describe('the shot list', () => {
   it('opens the shot early enough for the camera to arrive', () => {
     const events = toTimedEvents(fixture('run-scroll-click'))
-    const format = resolveFormat(LANDSCAPE, VIEWPORT)
+    const format = resolveFormat(LANDSCAPE, CAPTURE)
     for (const segment of buildZoomSegments(events, format)) {
       expect(segment.eventMs - segment.startMs).toBeGreaterThanOrEqual(
         segment.zoomInMs,
@@ -219,7 +485,7 @@ describe('the shot list', () => {
 
   it('returns to the resting frame after the shot is over', () => {
     const events = toTimedEvents(fixture('run-touch'))
-    const format = resolveFormat(LANDSCAPE, VIEWPORT)
+    const format = resolveFormat(LANDSCAPE, CAPTURE)
     const segments = buildZoomSegments(events, format)
     const last = segments.at(-1)
     expect(last).toBeDefined()

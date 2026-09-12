@@ -3,6 +3,8 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+import type { BoundingBox } from '../../src/record.js'
+import { toTimedEvents } from '../../src/render/clock.js'
 import { parseEventLog } from '../../src/render/events.js'
 import { boxToRect, contains } from '../../src/render/geometry.js'
 import {
@@ -58,27 +60,68 @@ describe('one raw recording, three formats', () => {
       for (const frame of format.frames) {
         expect(frame.crop.width).toBeGreaterThanOrEqual(format.output.width)
         expect(frame.crop.height).toBeGreaterThanOrEqual(format.output.height)
-        expect(frame.crop.x).toBeGreaterThanOrEqual(format.base.x)
+        // Bounded by how much raster there is, which is `panBounds` — not by
+        // where the camera happens to rest. Those were the same rectangle in
+        // round one, and that is what froze the portrait format.
+        expect(frame.crop.x).toBeGreaterThanOrEqual(format.panBounds.x)
+        expect(frame.crop.y).toBeGreaterThanOrEqual(format.panBounds.y)
         expect(frame.crop.x + frame.crop.width).toBeLessThanOrEqual(
-          format.base.x + format.base.width,
+          format.panBounds.x + format.panBounds.width,
+        )
+        expect(frame.crop.y + frame.crop.height).toBeLessThanOrEqual(
+          format.panBounds.y + format.panBounds.height,
         )
       }
     }
   })
 
-  it('frames the hit element in every format, not only the landscape one', () => {
+  it('derives the crop’s height from its width, not from a second rounding', () => {
+    // Whole even pixels cannot hit an arbitrary ratio exactly. What they can do
+    // is fail it in one place instead of two: rounding both axes on their own
+    // let the crop drift off-ratio by up to two pixels on each, and an
+    // off-ratio crop in a chain that only crops and scales is a small
+    // non-uniform stretch. Here the height follows from the rounded width, so
+    // there is a single rounding and it is the smallest one available.
     const plan = planRender(input, events)
+    const evenUp = (value: number): number => {
+      const ceiling = Math.ceil(value)
+      return ceiling + (ceiling % 2)
+    }
+    for (const format of plan.formats) {
+      const aspect = format.output.width / format.output.height
+      for (const frame of format.frames) {
+        expect(frame.crop.height).toBe(evenUp(frame.crop.width / aspect))
+      }
+    }
+  })
+
+  it('frames the hit element in every format, not only the landscape one', () => {
+    // Against the element's own logged box, not against the segment's target.
+    // Comparing a crop with the framing it was computed from is self-consistent
+    // by construction and cannot fail, whatever the framing does.
+    const boxes = new Map<number, BoundingBox>()
+    for (const { event, timeMs } of toTimedEvents(events)) {
+      if ('bbox' in event) boxes.set(Math.round(timeMs), event.bbox)
+    }
+    expect(boxes.size).toBeGreaterThan(0)
+
+    const plan = planRender(input, events)
+    let checked = 0
     for (const format of plan.formats) {
       for (const segment of format.segments) {
+        const box = boxes.get(Math.round(segment.eventMs))
+        expect(box).toBeDefined()
+        if (box === undefined) continue
         const frame = format.frames.find(
           (candidate) => candidate.timeMs >= segment.eventMs,
         )
         expect(frame).toBeDefined()
         if (frame === undefined) continue
-        const box = boxToRect(segment.target)
-        expect(contains(frame.crop, box, 2)).toBe(true)
+        expect(contains(frame.crop, boxToRect(box), 2)).toBe(true)
+        checked += 1
       }
     }
+    expect(checked).toBe(plan.formats.length * boxes.size)
   })
 })
 
