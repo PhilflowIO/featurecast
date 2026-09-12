@@ -112,10 +112,11 @@ try {
     manifest,
     capture.droppedDuplicateFrameCount,
     rendererInfo,
-    capture.clampedTimestampCount,
+    capture.outOfDeliveryOrderFrameCount,
+    capture.coincidentTimestampCount,
   )
   console.log(
-    `source cadence: ${String(cadence.frameCount)} frames, median ${cadence.medianIntervalMs.toFixed(2)}ms, p95 ${cadence.p95IntervalMs.toFixed(2)}ms, ${(cadence.shareUnderTwentyMs * 100).toFixed(1)}% of gaps <=20ms, ${String(cadence.droppedDuplicateFrameCount)} duplicate source frames folded away`,
+    `source cadence: ${String(cadence.frameCount)} frames, median ${cadence.medianIntervalMs.toFixed(2)}ms, p95 ${cadence.p95IntervalMs.toFixed(2)}ms, ${(cadence.shareUnderTwentyMs * 100).toFixed(1)}% of gaps <=20ms, ${String(cadence.droppedDuplicateFrameCount)} duplicate source frames folded away, ${String(cadence.outOfDeliveryOrderFrameCount)} frames restored to capture order`,
   )
 
   const { durationSeconds } = await assembleScreencast(

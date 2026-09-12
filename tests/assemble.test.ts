@@ -70,6 +70,69 @@ describe('buildCaptureTimeline', () => {
     )
   })
 
+  it('refuses to build a timeline in which a frame gets no time on screen', () => {
+    // The counter-example for #21's acceptance, at the place where the harm
+    // is done. `capture.ts` used to clamp a delivery-order inversion by
+    // moving the regressing timestamp onto its predecessor's; measured on a
+    // real acceptance run that produced 42 clamps and 39 gaps of exactly
+    // 0.0ms in 1416 frames. A zero gap means no `duration` line, ffmpeg
+    // steps straight past that frame, and its predecessor holds for twice as
+    // long — a visible stutter. If clamping (or anything else that flattens
+    // two capture times onto each other) ever comes back, this throws.
+    expect(() =>
+      buildCaptureTimeline('/tmp/capture/frames', {
+        captureSize: { height: 1600, width: 2560 },
+        frames: [
+          {
+            file: 'frame-000000.jpg',
+            timestamp: 1_020,
+            viewport: { height: 1600, width: 2560 },
+          },
+          {
+            file: 'frame-000001.jpg',
+            timestamp: 1_060,
+            viewport: { height: 1600, width: 2560 },
+          },
+          {
+            file: 'frame-000002.jpg',
+            timestamp: 1_060,
+            viewport: { height: 1600, width: 2560 },
+          },
+        ],
+        session: { duration: 400, endedAt: 1_400, startedAt: 1_000 },
+        version: 1,
+      }),
+    ).toThrow(/timestamps must strictly increase/)
+  })
+
+  it('credits the leading gap to frame 0 even when it arrived before startedAt', () => {
+    // `session.startedAt` is read after `screencast.start()` resolves, so a
+    // frame can carry a capture timestamp from before it. Anchoring frame
+    // 0's duration to `startedAt` unconditionally would then make that
+    // duration negative or zero and drop the frame. The anchor is the
+    // earlier of the two, so frame 0 keeps exactly the time between itself
+    // and frame 1.
+    expect(
+      buildCaptureTimeline('/tmp/capture/frames', {
+        captureSize: { height: 1600, width: 2560 },
+        frames: [
+          {
+            file: 'frame-000000.jpg',
+            timestamp: 980,
+            viewport: { height: 1600, width: 2560 },
+          },
+          {
+            file: 'frame-000001.jpg',
+            timestamp: 1_000,
+            viewport: { height: 1600, width: 2560 },
+          },
+        ],
+        session: { duration: 400, endedAt: 1_400, startedAt: 1_000 },
+        version: 1,
+      }),
+    ).toContain('duration 0.02\n')
+  })
+
   // Regression test for the TS2532 fix: a single-frame manifest has no
   // frame-to-frame gaps at all, which is exactly the array-index edge case
   // that crashed `manifest.frames[index].timestamp` under

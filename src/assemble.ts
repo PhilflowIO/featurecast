@@ -21,6 +21,16 @@ export type AssembleResult = {
  * how long it stays on screen before the next frame (or session end)
  * replaces it.
  *
+ * Every duration here is strictly positive, and that is load-bearing rather
+ * than incidental: a frame with a zero-length slot gets no `duration` line,
+ * ffmpeg's concat demuxer steps straight past it, and its predecessor holds
+ * for twice as long — a visible stutter, not a rounding detail. The
+ * guarantee comes from `validateCaptureManifest`, which both entry points
+ * into this file run first and which requires strictly increasing capture
+ * timestamps. Repeating the check here would be unreachable code, so it is
+ * deliberately not repeated; `tests/assemble.test.ts` pins the property from
+ * the outside instead.
+ *
  * `durations[0]` is anchored to `session.startedAt`, not to
  * `frames[0].timestamp`: the first frame typically arrives some
  * milliseconds after capture starts (nothing was paintable yet), and that
@@ -42,7 +52,10 @@ function frameDurationsSeconds(
     if (current === undefined || previous === undefined) {
       throw new Error('unreachable: manifest frame array index out of bounds')
     }
-    const previousStart = index === 1 ? session.startedAt : previous.timestamp
+    const previousStart =
+      index === 1
+        ? Math.min(session.startedAt, previous.timestamp)
+        : previous.timestamp
     durations.push((current.timestamp - previousStart) / 1000)
   }
   return durations
