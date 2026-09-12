@@ -75,11 +75,23 @@ steckt kein scharfes 1080×1920-Hochformat. Das größte 9:16-Rechteck darin ist
 der Ausgabe, statt hochzuskalieren. Ein scharfes Hochformat entsteht durch eine
 Aufnahme im Hochformat, das ist M3.
 
+Kein Zoom heißt aber nicht kein Schwenk. Ein 900 Pixel breites Fenster kann
+überall in einer 2560 Pixel breiten Aufnahme stehen, und dieses Verschieben
+kostet nichts — es ist immer noch derselbe Ausschnitt aus dem Original. Das
+Hochformat folgt dem angeklickten Element deshalb seitlich, mit derselben Feder
+wie alles andere, statt als eingefrorener Mittelstreifen 65 % der Oberfläche nie
+zu zeigen. Für 1:1 gilt dasselbe. 16:9 füllt die Breite der Aufnahme ohnehin
+schon aus und ändert sich dadurch nicht; dass dort oben angeschnitten wird und
+nicht mittig, bleibt eine bewusste Entscheidung — Navigationsleisten und
+Werkzeugleisten wohnen genau dort.
+
 Der Zoom rahmt beim Klick die Bounding-Box des getroffenen Elements. Diese Box
 ist die **Ruhelage** des Elements, nicht seine Geometrie im Bild, in dem der
-Klick landete — ein Element, das einblendet oder pulsiert, wird oben über ein
-Beobachtungsfenster eingehüllt. Der Ausschnitt steht deshalb still, während das
-Element atmet, und wird nie nachträglich aufgeweitet.
+Klick landete: bei einem Element, das einblendet oder pulsiert, die Geometrie,
+in der es sich am längsten aufhält — nicht der Mittelwert seiner Extreme, denn
+bei einer unsymmetrischen Animation ist der Mittelwert eine Größe, die das
+Element in keinem einzigen Bild hat. Der Ausschnitt steht deshalb still, während
+das Element atmet, und wird nie nachträglich aufgeweitet.
 
 Zeiger und Klick-Ripple werden hier gezeichnet, nicht aufgenommen: Headless
 Chromium rendert überhaupt keinen Zeiger, das Log ist die einzige Quelle. Größe,
@@ -95,11 +107,60 @@ und Ereignisse gemeinsam laufen; sie können deshalb nicht auseinanderdriften.
 Das Kernstück ist eine reine Funktion von (Ereignissen mit einer Zeit in
 Millisekunden, Bild-Zeitstempeln in Millisekunden) auf Ausschnitt-Rechteck und
 Zeiger-Zeichenliste je Bild. Diese Entscheidungsdaten landen als
-`decisions.json` neben dem Video und sind das, was exakt reproduzierbar ist:
-zwei Läufe derselben Eingabe erzeugen die Datei bitgleich. Die Umrechnung von
-`tick` in Millisekunden steckt in genau einem kleinen Modul am Rand
-(`src/render/clock.ts`) — das ist das Stück, das Issue #9 löscht, sobald die
-Ereignisse echte Zeitstempel derselben Uhr tragen.
+`decisions.json` neben dem Video.
+
+**Gleiche Entscheidungsdaten, gleiches Video — Byte für Byte.** Das Zuschneiden,
+Skalieren und Zeichnen des Zeigers passiert Bild für Bild in eigenem Code, nicht
+in ffmpegs Filtergraph. ffmpeg behält die Aufgaben, die es gut kann — dekodieren,
+kodieren, Zeitbasis — und verliert die, bei der es unzuverlässig war: pro Bild
+eine andere Geometrie zu setzen. Über einen zeitgesteuerten Kommandokanal
+(`sendcmd`) war das nicht reproduzierbar: sechs identische Läufe über dieselbe
+Kommandodatei erzeugten vier verschiedene Videos, mit falsch gerahmten
+Einzelbildern und einem Zeiger, der nicht dem folgte, was in `decisions.json`
+steht. Jetzt ist zwischen Entscheidung und Pixel nichts mehr, das von Lauf zu
+Lauf anders ausfallen könnte; sechs Läufe in sechs Prozessen ergeben pro Format
+genau eine Prüfsumme.
+
+Das Hochformat zahlt dafür nicht mit Schärfe, im Gegenteil: ein 9:16-Ausschnitt
+ist genauso groß wie das Ausgabebild, wird also gar nicht skaliert, sondern
+1:1 aus dem Original kopiert.
+
+Das Zuschneiden und Skalieren ist die gesamte Rechenarbeit des Renderers und
+läuft deshalb auf mehreren Threads: aufgeteilt nach Bildzeilen über alle Formate
+hinweg, gewichtet nach Zeilenbreite. Auf einem Thread hätte ein 48-Sekunden-Video
+146 Sekunden gebraucht — über der Zwei-Minuten-Grenze des Meilensteins — und
+nebenbei den Dekoder ausgehungert, weil derselbe Thread, der skaliert, auch die
+Einzelbilder abholen muss. Verteilt sind es **79 Sekunden** (gemessen auf der
+Workstation, `artifacts/m1-008`, 47,9 s Video, 2873 Ausgabebilder, drei Formate).
+Bildzeilen sind voneinander unabhängig, deshalb hängt das Ergebnis nicht an der
+Kernzahl: derselbe Lauf mit einem und mit sechs Threads erzeugt dieselbe Datei,
+Byte für Byte. `--threads <n>` stellt es ein, ändert aber nur die Dauer.
+
+### Cursor- und Zoom-Zeitpunkte sind noch falsch — bis Issue #9
+
+Das Ereignis-Log trägt heute **keine Uhrzeit**, sondern einen Zähler: er läuft
+weiter für alles, was das Skript selbst tut (Zeigerbewegung, Tippen, `hold`), und
+bleibt stehen für alles, was echte Zeit kostet, ohne geplant zu sein — Seiten
+laden, auf stabile Geometrie warten, der Umlauf eines Klicks. **Zeiger und Zoom
+sitzen deshalb nur bei Aufnahmen richtig, in denen nirgends gewartet wird.**
+
+Der Fehler ist keine gleichmäßige Abweichung, die man mit einem Faktor
+geradeziehen könnte, sondern eine Treppe: innerhalb eines Blocks geplanter
+Aktionen liegt er bei 11–15 %, zwischen zwei Blöcken springt er in Stufen. In der
+Aufnahme `m1-008` sind das nacheinander +25,8 s, +3,2 s, +8,6 s und +2,9 s — nach
+62 Sekunden Aufnahme summiert sich der Versatz auf **42,6 Sekunden**. Sichtbar
+wird das so: der einzige Zoom dieser Aufnahme rahmt ein leeres Suchfeld 1,64
+Sekunden bevor dort etwas passiert, und ist wieder herausgefahren, bevor der
+getippte Text erscheint.
+
+Wer ein gerendertes Video sieht und den Zoom an der falschen Stelle findet: das
+ist kein Fehler im Zoom, sondern diese fehlende Uhr. [Issue
+#9](https://forgejo.philflow.me/Phil/featurecast/issues/9) legt das Log auf die
+Uhr der Einzelbilder und räumt es aus dem Weg; die Umrechnung steckt bis dahin in
+genau einem kleinen Modul am Rand (`src/render/clock.ts`), das dabei ersatzlos
+verschwindet. Die zwei Stellschrauben darin (`originMs`, `rateScale`) verschieben
+und kippen eine Gerade — gegen eine Treppe hilft keine von beiden, und eine
+dritte kommt nicht dazu.
 
 ## Ein Kommando für die ganze Kette
 

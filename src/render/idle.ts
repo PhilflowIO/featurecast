@@ -13,6 +13,14 @@
  * to output time. Both the frames and the events are put through that one map,
  * so they cannot drift apart: there is only one clock, and trimming bends it
  * for everybody at once.
+ *
+ * Known limit, untested at runtime: the signal is byte-equality of consecutive
+ * frames, and there is no floor under it. One changed pixel per frame — a
+ * spinner in a corner, a blinking caret, a clock in the page — defeats the
+ * capture's duplicate fold, every frame survives, no gap opens, and nothing is
+ * ever trimmed on that page. The fix is a tolerance rather than equality, which
+ * means measuring how much change is "nothing happened"; that measurement has
+ * not been made, so the floor is deliberately absent rather than guessed.
  */
 
 export type IdleOptions = {

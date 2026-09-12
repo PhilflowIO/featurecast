@@ -96,6 +96,22 @@ export type RenderPlan = {
   version: typeof PLAN_VERSION
 }
 
+/**
+ * The moments idle trimming must not cut near.
+ *
+ * These times inherit the clock defect described in `src/render/clock.ts`:
+ * they come from the event log's tick counter, which does not advance for real
+ * but unplanned time, while the stretches being trimmed come from the capture's
+ * own frame timestamps, which do. The two are on different clocks and the
+ * offset between them grows in steps. In the m1-008 recording the `type`
+ * event's 250 ms protection window sits at 5967 ms while the interaction it is
+ * meant to protect happened at 7611 ms — it guards the wrong second.
+ *
+ * No harm has been reproduced, because no trimmable stillness happens to sit
+ * there. It becomes a real defect the moment one does, and it dies with the
+ * same change: issue #9 puts the events on the frame clock, after which these
+ * times and the frame times are the same clock and the mismatch cannot exist.
+ */
 function interactionTimes(events: readonly TimedEvent[]): number[] {
   const times: number[] = []
   for (const { event, timeMs } of events) {
