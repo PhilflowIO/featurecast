@@ -94,14 +94,34 @@ Element in keinem einzigen Bild hat. Der Ausschnitt steht deshalb still, währen
 das Element atmet, und wird nie nachträglich aufgeweitet.
 
 Folgen zwei Interaktionen dichter aufeinander, als die Kamera zum Anfahren
-braucht, gibt die **spätere** nach: ihre Anfahrt beginnt später und legt
-denselben Weg schneller zurück. Die frühere Einstellung wird dagegen nie vor
-ihrem eigenen Klick beendet — sonst zeigte das Bild im Moment des Klicks einen
-Punkt auf dem Weg zum nächsten Element statt das Element, das geklickt wurde,
-und bei zwei Zielen auf gegenüberliegenden Seiten wäre das geklickte Element
-überhaupt nicht im Bild. Liegen zwei Interaktionen so dicht beieinander, dass
-zwischen ihnen keine ehrliche Kamerabewegung mehr passt — weniger als zwei
-Bilder —, bricht der Renderer mit einer Meldung ab, statt leise danebenzuzielen.
+braucht, teilen sich **Halten und Anfahrt** die Zeit zwischen den beiden
+Ereignissen: reicht sie für beide Wünsche, bekommt jeder seinen, sonst geben
+beide anteilig nach — mit den Standardwerten (900 ms halten, 650 ms anfahren)
+58 % der Lücke an das Halten. Die frühere Einstellung wird dabei nie vor ihrem
+eigenen Klick beendet — sonst zeigte das Bild im Moment des Klicks einen Punkt
+auf dem Weg zum nächsten Element statt das Element, das geklickt wurde, und bei
+zwei Zielen auf gegenüberliegenden Seiten wäre das geklickte Element überhaupt
+nicht im Bild. Musste das Halten gekürzt werden, sagt der Renderer es in seiner
+Ausgabe, statt die Einstellung still auf ein Bild zusammenzuschrumpfen.
+
+Zwei Interaktionen im **selben Augenblick** auf demselben oder auf zwei sich
+überlappenden Elementen sind eine einzige Einstellung: die Kamera rahmt das
+Element und hält über beide Ereignisse hinweg. Das ist der Normalfall, kein
+Sonderfall — ein zweimal umgelegter Schalter, ein zweimal gedrückter Zähler,
+ein `type` gefolgt von einem `click` auf dasselbe Feld landen im Ereignis-Log
+alle auf demselben Zeitschlitz, weil `click` den Zähler nicht weiterstellt und
+eine Bewegung auf ein Ziel, auf dem der Zeiger schon steht, keine Proben
+erzeugt. Nur zwei Interaktionen im selben Augenblick auf Elementen, die sich
+**nicht** überlappen, bricht der Renderer ab — dafür gibt es keine Kamera —,
+und nennt dabei das Mittel, das heute hilft: ein `demo.hold(…)` zwischen den
+beiden.
+
+Die Kamera schneidet nie: in keinem einzelnen Ausgabebild legt sie mehr ihres
+Wegs zurück, als die Feder, auf der sie fährt, in ihrem schnellsten Bild
+zurücklegt — bei einer gewöhnlichen Anfahrt 9,2 % des Wegs, bei einer gedrängten
+entsprechend mehr, weil ihr weniger Bilder bleiben. Das ist keine Testzusage,
+sondern eine Zusicherung im Renderer selbst: eine Einstellungsliste, die sie
+verletzt, verlässt `buildZoomSegments` nicht.
 
 Zeiger und Klick-Ripple werden hier gezeichnet, nicht aufgenommen: Headless
 Chromium rendert überhaupt keinen Zeiger, das Log ist die einzige Quelle. Größe,
