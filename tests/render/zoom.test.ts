@@ -13,6 +13,8 @@ import {
   cropAt,
   DEFAULT_ZOOM_LOOK,
   frameBoundingBox,
+  peakStepFraction,
+  type ZoomSegment,
 } from '../../src/render/zoom.js'
 
 const LANDSCAPE: FormatSpec = {
@@ -649,6 +651,251 @@ describe('two interactions at one instant are one shot', () => {
     }
     expect(held.length).toBeGreaterThan(50)
     for (const crop of held) expect(crop).toEqual(shot.target)
+  })
+})
+
+/**
+ * The camera moves; it does not cut.
+ *
+ * Round three's suite could not tell the difference. Every assertion on the
+ * crowded branch checked times and endpoints — where the shot starts, where it
+ * ends, what it is framed on — and none of them looked at the motion in
+ * between, so setting `zoomInMs = 0` on a crowded shot, which makes the camera
+ * arrive by teleporting, left all 249 tests green. Measured on a pair 50ms
+ * apart at opposite corners, that mutation moves the camera 658px in a single
+ * frame: 95% of the journey, against 8.3px in the ordinary case.
+ *
+ * The threshold below is not a taste. `peakStepFraction` runs the very spring
+ * `cropAt` interpolates along and returns how much of the path its busiest
+ * frame covers — so a shot that is given its whole window matches the bound
+ * exactly rather than fitting under it, and a shot with less time is allowed
+ * proportionally more per frame because it has fewer frames, not because
+ * anything was relaxed for it.
+ */
+describe('the camera never jumps', () => {
+  const FRAME_MS = 1000 / 60
+  const span = (a: Rect, b: Rect): number =>
+    Math.max(
+      Math.abs(a.x - b.x),
+      Math.abs(a.y - b.y),
+      Math.abs(a.width - b.width),
+      Math.abs(a.height - b.height),
+    )
+
+  it('never covers more of a shot in one frame than the spring does, over the whole corpus', () => {
+    let shots = 0
+    let tightShots = 0
+    let handedOver = 0
+    let frames = 0
+    let worst = 0
+    for (const name of FIXTURES) {
+      for (const spec of [LANDSCAPE, PORTRAIT, SQUARE]) {
+        const format = resolveFormat(spec, CAPTURE)
+        const segments = buildZoomSegments(
+          toTimedEvents(atCaptureScale(fixture(name))),
+          format,
+        )
+        for (const segment of segments) {
+          const path = span(segment.from, segment.target)
+          if (path <= 0) continue
+          shots += 1
+          const window = segment.eventMs - segment.startMs
+          if (window < DEFAULT_ZOOM_LOOK.zoomInMs) tightShots += 1
+          if (span(segment.from, format.base) > 0) handedOver += 1
+          const limit = peakStepFraction(
+            Math.min(DEFAULT_ZOOM_LOOK.zoomInMs, window),
+            DEFAULT_ZOOM_LOOK.spring,
+          )
+          for (
+            let timeMs = segment.startMs - FRAME_MS;
+            timeMs < segment.eventMs;
+            timeMs += FRAME_MS
+          ) {
+            const step = span(
+              cropAt(timeMs, segments, format),
+              cropAt(timeMs + FRAME_MS, segments, format),
+            )
+            frames += 1
+            worst = Math.max(worst, step / path)
+            expect(step / path).toBeLessThanOrEqual(limit * 1.001)
+          }
+        }
+      }
+    }
+    // The denominators, absolute: how many shots were watched, how many of them
+    // had less time for their approach than the look asks for, how many started
+    // from where the camera already was rather than from the resting frame —
+    // the crowded branch and the interrupted pull-out, the two this invariant
+    // exists for — and how many frame-to-frame steps were measured in all.
+    expect(shots).toBe(46)
+    expect(tightShots).toBe(16)
+    expect(handedOver).toBe(12)
+    expect(frames).toBe(1586)
+    expect(worst).toBeGreaterThan(0.15)
+  })
+
+  it('lets an ordinary approach take 9.2% of its path in its busiest frame', () => {
+    // The number ordinary motion actually produces, written down: 650ms of
+    // spring at 60Hz. Everything else in this block is measured against it.
+    expect(
+      peakStepFraction(DEFAULT_ZOOM_LOOK.zoomInMs, DEFAULT_ZOOM_LOOK.spring),
+    ).toBeCloseTo(0.092, 3)
+    // A shot with a fifth of the time is allowed more per frame, because it has
+    // fewer frames — and still nothing like a cut.
+    expect(peakStepFraction(130, DEFAULT_ZOOM_LOOK.spring)).toBeLessThan(0.5)
+    // No duration at all is a cut, and the bound says so.
+    expect(peakStepFraction(0, DEFAULT_ZOOM_LOOK.spring)).toBe(1)
+  })
+
+  it('would fail a shot that arrived by cutting, which is why it passes the ones that do not', () => {
+    // The mutation applied by hand to the shots the shipped rule produces: the
+    // crowded shot in `run-interior-taps` jumps to its framing instead of
+    // travelling to it. Its own bound, unchanged, rejects it.
+    const format = resolveFormat(LANDSCAPE, CAPTURE)
+    const segments = buildZoomSegments(
+      toTimedEvents(atCaptureScale(fixture('run-interior-taps'))),
+      format,
+    )
+    const crowded = segments[1]
+    expect(crowded).toBeDefined()
+    if (crowded === undefined) return
+    const cut: ZoomSegment[] = [
+      segments[0] as ZoomSegment,
+      { ...crowded, zoomInMs: 0 },
+    ]
+    const path = span(crowded.from, crowded.target)
+    expect(path).toBeGreaterThan(100)
+    const limit = peakStepFraction(
+      Math.min(DEFAULT_ZOOM_LOOK.zoomInMs, crowded.eventMs - crowded.startMs),
+      DEFAULT_ZOOM_LOOK.spring,
+    )
+    let worst = 0
+    for (
+      let timeMs = crowded.startMs - FRAME_MS;
+      timeMs < crowded.eventMs;
+      timeMs += FRAME_MS
+    ) {
+      worst = Math.max(
+        worst,
+        span(
+          cropAt(timeMs, cut, format),
+          cropAt(timeMs + FRAME_MS, cut, format),
+        ) / path,
+      )
+    }
+    expect(worst).toBeGreaterThan(0.9)
+    expect(worst).toBeGreaterThan(limit * 1.001)
+  })
+
+  it('opens a shot from where the camera is, not from the resting frame', () => {
+    // The other way a cut gets into a video, found by this invariant rather
+    // than by watching: when a shot opens while the previous one's pull-out is
+    // still running, treating the resting frame as its starting point teleports
+    // the camera back to it for one frame. At a 1600ms gap — where the first
+    // shot's hold ends exactly where the second's approach begins, so the
+    // pull-out never runs at all — that was the whole journey, 640px, in one
+    // frame.
+    const format = resolveFormat(LANDSCAPE, CAPTURE)
+    const events: RecordEvent[] = [
+      { type: 'header', version: 1, fps: 60, seed: 1 },
+    ]
+    // A pointer that keeps moving, so the hold is exactly `minHoldMs` and the
+    // gap lands in the window where the pull-out is interrupted.
+    for (let tick = 0; tick <= 400; tick += 1) {
+      events.push({ type: 'pointer', tick, x: 300 + tick * 5, y: 400 })
+    }
+    events.push({
+      type: 'click',
+      tick: 60,
+      x: 600,
+      y: 400,
+      bbox: { x: 200, y: 380, width: 200, height: 80 },
+    })
+    events.push({
+      type: 'click',
+      tick: 156,
+      x: 2300,
+      y: 1200,
+      bbox: { x: 2200, y: 1180, width: 200, height: 80 },
+    })
+    const segments = buildZoomSegments(toTimedEvents(events), format)
+    expect(segments.length).toBe(2)
+    const [first, second] = segments
+    expect(first).toBeDefined()
+    expect(second).toBeDefined()
+    if (first === undefined || second === undefined) return
+    expect(second.eventMs - first.eventMs).toBeCloseTo(1600, 6)
+    expect(second.startMs).toBeGreaterThanOrEqual(first.endMs)
+    expect(second.startMs).toBeLessThan(first.endMs + first.zoomOutMs)
+
+    let worst = 0
+    for (
+      let timeMs = first.endMs - FRAME_MS;
+      timeMs < second.eventMs;
+      timeMs += FRAME_MS
+    ) {
+      worst = Math.max(
+        worst,
+        span(
+          cropAt(timeMs, segments, format),
+          cropAt(timeMs + FRAME_MS, segments, format),
+        ),
+      )
+    }
+    expect(worst).toBeLessThan(100)
+
+    // The old rule, applied by hand to the same shots: a second shot that
+    // believes the camera rests at the base rectangle.
+    const fromBase = [first, { ...second, from: format.base }]
+    let jumped = 0
+    for (
+      let timeMs = first.endMs - FRAME_MS;
+      timeMs < second.eventMs;
+      timeMs += FRAME_MS
+    ) {
+      jumped = Math.max(
+        jumped,
+        span(
+          cropAt(timeMs, fromBase, format),
+          cropAt(timeMs + FRAME_MS, fromBase, format),
+        ),
+      )
+    }
+    expect(jumped).toBeGreaterThan(300)
+  })
+
+  it('keeps its pace when the look asks for a much shorter approach', () => {
+    // The bound is the look's, not a constant: a 130ms approach is allowed its
+    // own, larger, per-frame share and is still a move rather than a cut. The
+    // shot list builds — the guard inside `buildZoomSegments` measures the same
+    // thing this file does and would refuse it otherwise.
+    const format = resolveFormat(LANDSCAPE, CAPTURE)
+    const events = toTimedEvents(atCaptureScale(fixture('run-interior-button')))
+    const look = { zoomInMs: 130, zoomLeadMs: 200 }
+    const segments = buildZoomSegments(events, format, look)
+    const segment = segments[0]
+    expect(segment).toBeDefined()
+    if (segment === undefined) return
+    const path = span(segment.from, segment.target)
+    const limit = peakStepFraction(130, DEFAULT_ZOOM_LOOK.spring)
+    let worst = 0
+    for (
+      let timeMs = segment.startMs - FRAME_MS;
+      timeMs < segment.eventMs;
+      timeMs += FRAME_MS
+    ) {
+      worst = Math.max(
+        worst,
+        span(
+          cropAt(timeMs, segments, format, look),
+          cropAt(timeMs + FRAME_MS, segments, format, look),
+        ) / path,
+      )
+    }
+    expect(worst).toBeGreaterThan(
+      peakStepFraction(DEFAULT_ZOOM_LOOK.zoomInMs, DEFAULT_ZOOM_LOOK.spring),
+    )
+    expect(worst).toBeLessThanOrEqual(limit * 1.001)
   })
 })
 

@@ -213,6 +213,16 @@ const FRAME_MS = 1000 / 60
  */
 const ARRIVAL_FLOOR_MS = FRAME_MS
 
+/** The ∞-norm distance between two crops: the largest single-axis move. */
+function rectSpan(a: Rect, b: Rect): number {
+  return Math.max(
+    Math.abs(a.x - b.x),
+    Math.abs(a.y - b.y),
+    Math.abs(a.width - b.width),
+    Math.abs(a.height - b.height),
+  )
+}
+
 /** The smallest box containing both, in source pixels. */
 function unionBox(a: BoundingBox, b: BoundingBox): BoundingBox {
   const x = Math.min(a.x, b.x)
@@ -231,6 +241,37 @@ function boxesOverlap(a: BoundingBox, b: BoundingBox): boolean {
     Math.min(a.x + a.width, b.x + b.width) > Math.max(a.x, b.x) &&
     Math.min(a.y + a.height, b.y + b.height) > Math.max(a.y, b.y)
   )
+}
+
+/**
+ * How much of its journey the camera covers in the busiest single frame, as a
+ * fraction of the whole journey, when it rides `spring` for `durationMs`.
+ *
+ * This is the pace of ordinary motion expressed as a number: it is computed
+ * from the very curve `cropAt` interpolates along, so for an approach that is
+ * given its full window it is not an allowance but an equality — measured
+ * 0.1557 against 0.1557 for the 383ms approach in `run-close-taps`. It is a
+ * supremum over the phase of the frame grid, which the renderer does not
+ * control: a segment may start anywhere between two output frames, so the
+ * bound has to hold for every offset rather than for the one that happens to
+ * line up with the segment's start.
+ */
+export function peakStepFraction(
+  durationMs: number,
+  spring: SpringConfig,
+  frameMs: number = FRAME_MS,
+): number {
+  if (durationMs <= 0) return 1
+  const samples = 2048
+  let peak = 0
+  for (let index = 0; index <= samples; index += 1) {
+    const at = (index / samples) * durationMs
+    const step =
+      springEase(Math.min(1, (at + frameMs) / durationMs), spring) -
+      springEase(Math.min(1, at / durationMs), spring)
+    if (step > peak) peak = step
+  }
+  return Math.min(1, peak)
 }
 
 /**
@@ -379,10 +420,18 @@ export function buildZoomSegments(
         segment.zoomInMs,
         segment.eventMs - segment.startMs,
       )
+    } else if (segment.startMs < previous.endMs + previous.zoomOutMs) {
+      // The pull-out is still running when the next shot opens. Starting that
+      // shot from the resting frame would teleport the camera back to it for
+      // one frame — measured 640px in a single frame at a 1600ms gap, where the
+      // two shots abut exactly and the pull-out never runs at all. A shot
+      // starts from wherever the camera actually is.
+      segment.from = cropAt(segment.startMs, kept, format, resolved)
     }
     kept.push(segment)
   }
 
+  assertSmoothApproach(kept, format, resolved)
   return kept
 }
 
@@ -434,6 +483,58 @@ function crowdedHoldMs(gap: number, look: ResolvedLook): number {
     Math.max(share, ARRIVAL_FLOOR_MS),
     Math.max(gap - ARRIVAL_FLOOR_MS, ARRIVAL_FLOOR_MS),
   )
+}
+
+/**
+ * The camera never jumps: in no single output frame does it cover more of a
+ * shot's journey than the spring it rides covers in its busiest frame.
+ *
+ * The threshold is not a taste: it is `peakStepFraction` of the approach's own
+ * window, so it reproduces ordinary motion exactly and scales with the time a
+ * crowded shot actually has. A shot given 650ms moves at most 9.2% of its path
+ * per frame; the same formula allows 15.6% to the 383ms approach in
+ * `run-close-taps`, and refuses a hard cut at any duration.
+ *
+ * It is checked here, against the crops `cropAt` really produces, rather than
+ * against the `zoomInMs` field — a guard that read the field back would pass
+ * any value that field was given.
+ */
+function assertSmoothApproach(
+  segments: readonly ZoomSegment[],
+  format: ResolvedFormat,
+  look: ResolvedLook,
+): void {
+  for (const segment of segments) {
+    const path = rectSpan(segment.from, segment.target)
+    if (path <= 0) continue
+    const window = segment.eventMs - segment.startMs
+    const limit =
+      path * peakStepFraction(Math.min(look.zoomInMs, window), look.spring)
+    for (
+      let timeMs = segment.startMs - FRAME_MS;
+      timeMs < segment.eventMs;
+      timeMs += FRAME_MS
+    ) {
+      const step = rectSpan(
+        cropAt(timeMs, segments, format, look),
+        cropAt(timeMs + FRAME_MS, segments, format, look),
+      )
+      // A thousandth of slack for the sampled supremum in `peakStepFraction`,
+      // which is a grid over a smooth curve and so sits a hair below the true
+      // peak. Far too small to admit a cut: the mutation this catches moves 95%
+      // of the path in one frame against a 15.6% allowance.
+      if (step > limit * 1.001 + 1e-6) {
+        throw new Error(
+          `The camera would cover ${step.toFixed(1)}px of a ` +
+            `${path.toFixed(1)}px journey in one frame at ` +
+            `${timeMs.toFixed(1)}ms, against the ${limit.toFixed(1)}px the ` +
+            `spring covers in its busiest frame over this shot's ` +
+            `${Math.min(look.zoomInMs, window).toFixed(1)}ms approach. That ` +
+            `is a cut, not a camera move.`,
+        )
+      }
+    }
+  }
 }
 
 /**
