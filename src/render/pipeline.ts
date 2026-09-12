@@ -29,7 +29,7 @@ import {
   type Raster,
 } from './compose.js'
 import { CONTROL, STOP, type WorkerSetup } from './compose-worker.js'
-import type { Size } from './geometry.js'
+import type { Rect, Size } from './geometry.js'
 import type { FormatPlan, FrameDecision, RenderPlan } from './plan.js'
 import type { SpriteCache, SpriteGeometry } from './sprite.js'
 
@@ -41,12 +41,11 @@ import type { SpriteCache, SpriteGeometry } from './sprite.js'
  *
  * The ceiling of six that used to sit here was measured when composition was a
  * bilinear kernel costing about 28ms per output frame for all three formats,
- * where the encoder writes really were what the next frame waited on — and it
- * still is: measured on 300 real capture frames, the old kernel renders in
- * 18.2s on six threads and 16.2s on fourteen. The windowed-sinc kernel in
- * `compose.ts` costs roughly ten times that, and the same material goes from
- * 82.2s on six threads to 67.3s on fourteen. Composition now dominates the
- * pipeline, so a ceiling of six caps the machine rather than the encoder.
+ * where the encoder writes really were what the next frame waited on. The
+ * windowed-sinc kernel in `compose.ts` costs roughly ten times that, so
+ * composition now dominates the pipeline by an order of magnitude and a
+ * ceiling of six would cap the machine rather than the encoder. There is no
+ * ceiling any more; what is left is the two cores reserved above.
  *
  * The floor of one is not a fallback: a machine with three cores composes on a
  * single thread, and at this kernel's cost that machine cannot hold the
@@ -195,6 +194,17 @@ function exited(child: ChildProcess, what: string): Promise<void> {
   })
 }
 
+/** Two crops are the same picture only if they are the same rectangle. */
+function sameRect(a: Rect, b: Rect | null): boolean {
+  return (
+    b !== null &&
+    a.x === b.x &&
+    a.y === b.y &&
+    a.width === b.width &&
+    a.height === b.height
+  )
+}
+
 export type PipelineFormat = {
   format: FormatPlan
   outputPath: string
@@ -272,6 +282,28 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
     let decoded = -1
     let slot = 0
 
+    /**
+     * The last picture composed for each format, without the pointer on it.
+     *
+     * A capture runs at whatever rate the browser painted — m1-008 is 1332
+     * frames for 2873 output frames — so every second source frame is shown
+     * twice or more, and while the camera is at rest the crop for those two
+     * output frames is the same rectangle too. Same source pixels and same
+     * crop is the same picture, bit for bit, and composing it twice is work
+     * with a known answer. Roughly half of a typical recording is that case;
+     * with a windowed-sinc kernel costing 250ms a frame, recomputing it is the
+     * difference between making the milestone's two-minute budget and missing
+     * it by a factor of two.
+     *
+     * The pointer is not part of this: it moves at 60Hz and is painted onto
+     * the copy afterwards, which is also why the copy is kept clean.
+     */
+    const pristine = encoders.map((encoder) =>
+      createRaster(encoder.format.output),
+    )
+    const lastCrops: Array<Rect | null> = encoders.map(() => null)
+    let lastSource = -1
+
     /** Reads forward to `wanted`, leaving that frame in `into`. */
     const fill = async (wanted: number, into: number): Promise<Buffer> => {
       let frame: Buffer | null = null
@@ -304,13 +336,32 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
         return decision
       })
 
-      if (pool === null) {
+      const unchanged =
+        wanted === lastSource &&
+        decisions.every((decision, index) =>
+          sameRect(decision.crop, lastCrops[index] ?? null),
+        )
+
+      if (unchanged) {
+        // Nothing to compose, but the decoder still has to be drained: it is
+        // blocked on a full pipe whether or not we had work to do.
+        const next = options.sourceForOutput[n + 1]
+        if (next !== undefined && next > wanted) {
+          const nextSlot = pool === null ? 0 : 1 - slot
+          current = await fill(next, nextSlot)
+          slot = nextSlot
+        }
+      } else if (pool === null) {
         sourceRaster.data = current
         for (const [index, encoder] of encoders.entries()) {
           const decision = decisions[index]
           if (decision === undefined) throw new Error('unreachable: decision')
-          composeFrame(sourceRaster, decision, options.cursor, encoder.target)
+          // Without the pointer, exactly as the pool composes: it goes on
+          // below, the same way for one thread and for many.
+          composeFrame(sourceRaster, decision, null, encoder.target)
         }
+        const next = options.sourceForOutput[n + 1]
+        if (next !== undefined && next > wanted) current = await fill(next, 0)
       } else {
         pool.start(slot, decisions)
         // The read-ahead is what keeps the decoder off the critical path: it
@@ -329,20 +380,21 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
       for (const [index, encoder] of encoders.entries()) {
         const decision = decisions[index]
         const target = pool === null ? encoder.target : pool.targets[index]
+        const keep = pristine[index]
         if (decision === undefined || target === undefined) {
           throw new Error('unreachable: missing target')
         }
-        if (pool !== null) paintCursor(target, decision, options.cursor)
+        if (keep === undefined) throw new Error('unreachable: missing copy')
+        if (unchanged) target.data.set(keep.data)
+        else keep.data.set(target.data)
+        paintCursor(target, decision, options.cursor)
         if (encoder.child.stdin === null) {
           throw new Error('Encoder was started without a writable stdin')
         }
         await write(encoder.child.stdin, target.data)
+        lastCrops[index] = decision.crop
       }
-
-      if (pool === null) {
-        const next = options.sourceForOutput[n + 1]
-        if (next !== undefined && next > wanted) current = await fill(next, 0)
-      }
+      lastSource = wanted
     }
   } catch (error) {
     remember(error)
