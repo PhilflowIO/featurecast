@@ -206,13 +206,31 @@ export function roundOutward(
       width = Math.min(maxWidth, evenDown(height * aspect))
     }
   }
-  const x = Math.min(
-    Math.max(left, Math.ceil(bounds.x)),
-    Math.floor(rectRight(bounds)) - width,
-  )
-  const y = Math.min(
-    Math.max(top, Math.ceil(bounds.y)),
-    Math.floor(rectBottom(bounds)) - height,
-  )
+  // Growing a crop only to the right and down moves its centre with it: for a
+  // 1900x1000 element the aspect search adds 28 pixels of width and 16 of
+  // height, and anchoring at `left`/`top` put the element 14 pixels left of
+  // centre and 8 above it. The element belongs in the middle of the shot, so
+  // the grown rectangle is re-centred on the one that was asked for — and then
+  // pulled back into the window in which it still contains that rectangle, so
+  // centring can never cost containment.
+  const placeOn = (
+    origin: number,
+    extent: number,
+    grown: number,
+    low: number,
+    span: number,
+  ): number => {
+    const centred = Math.round(origin + extent / 2 - grown / 2)
+    const contained = Math.min(
+      Math.max(centred, Math.ceil(origin + extent - grown)),
+      Math.floor(origin),
+    )
+    return Math.min(
+      Math.max(contained, Math.ceil(low)),
+      Math.floor(low + span) - grown,
+    )
+  }
+  const x = placeOn(rect.x, rect.width, width, bounds.x, bounds.width)
+  const y = placeOn(rect.y, rect.height, height, bounds.y, bounds.height)
   return { x, y, width, height }
 }
