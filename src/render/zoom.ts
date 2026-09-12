@@ -189,6 +189,15 @@ export function pointerSamples(events: readonly TimedEvent[]): PointerSample[] {
 }
 
 /**
+ * The shortest stretch a shot may keep after its own interaction: one frame at
+ * 60Hz, the rate this renderer is built around. It is not a look parameter and
+ * must not become one — it is the numeric form of "the camera was there when it
+ * was clicked", and a look that could set it to zero could switch the
+ * milestone's acceptance criterion off.
+ */
+const ARRIVAL_FLOOR_MS = 1000 / 60
+
+/**
  * Turns the event log into the camera's shot list.
  *
  * One segment per interaction. It opens `zoomLeadMs` before the interaction so
@@ -197,6 +206,31 @@ export function pointerSamples(events: readonly TimedEvent[]): PointerSample[] {
  * result, and above by `maxHoldMs` so a long standstill does not hold the
  * close-up forever. Overlapping segments cut straight into one another rather
  * than pulling out and back in.
+ *
+ * **A segment never ends before its own event.** When two interactions crowd
+ * each other — a second click less than `zoomLeadMs` after the first — one of
+ * them has to give, and the choice of which is the whole point. Round two shut
+ * the first shot down at the second shot's ideal start, which for a 433ms gap
+ * is 267ms *before* the first click; `cropAt` then answered that click with a
+ * way-point on the journey to the next element, and on two targets on opposite
+ * sides of the viewport the clicked element was not in the picture at all.
+ *
+ * So the later shot yields instead. Its approach starts where the earlier shot
+ * ends and covers the same ground faster, which is exactly what a camera
+ * operator does when the action is quick, and it leaves the promise above
+ * literally true: at every event the crop is the framing computed for that
+ * event's element.
+ *
+ * The alternative considered — merging two crowded interactions into one
+ * framing that contains both boxes — was rejected because it cannot keep that
+ * promise even in principle: a union framing is by construction not the
+ * framing computed for either element, so `cropAt(eventMs)` would stop being
+ * comparable with `frameBoundingBox(bbox)` and the criterion would have to be
+ * softened to "contains" — the same loosening that let round one pass.
+ *
+ * Yielding has a floor: below two frames between two interactions there is no
+ * honest move left, and that case throws rather than quietly picking a
+ * way-point at one of the two clicks.
  */
 export function buildZoomSegments(
   events: readonly TimedEvent[],
@@ -248,19 +282,34 @@ export function buildZoomSegments(
       continue
     }
     if (previous.endMs > segment.startMs) {
+      const gap = segment.eventMs - previous.eventMs
+      if (gap < 2 * ARRIVAL_FLOOR_MS) {
+        throw new Error(
+          `Two interactions ${gap.toFixed(1)}ms apart (at ` +
+            `${previous.eventMs.toFixed(1)}ms and ` +
+            `${segment.eventMs.toFixed(1)}ms) leave the camera no honest ` +
+            `move between them: it cannot both be on the first element when ` +
+            `that element is clicked and on the second when the second is. ` +
+            `The renderer refuses rather than framing a way-point at one of ` +
+            `the two clicks. Record the two interactions further apart, or ` +
+            `decide deliberately to frame them as one shot.`,
+        )
+      }
+      // The later shot yields, never the earlier one's arrival: its approach
+      // starts where the earlier shot ends and covers the same distance in
+      // whatever time is left. The earlier shot keeps its own click plus one
+      // frame — everything beyond that is hold, and hold is what gives way.
+      previous.endMs = Math.min(
+        previous.endMs,
+        Math.max(segment.startMs, previous.eventMs + ARRIVAL_FLOOR_MS),
+      )
       // Cut straight from one close-up to the next: no pull-out in between.
-      previous.endMs = segment.startMs
       segment.from = previous.target
+      segment.startMs = Math.max(segment.startMs, previous.endMs)
       segment.zoomInMs = Math.min(
         segment.zoomInMs,
         segment.eventMs - segment.startMs,
       )
-    }
-    if (previous.endMs <= previous.startMs) {
-      // Fully swallowed by its successor; its own shot never happens.
-      kept.pop()
-      const earlier = kept.at(-1)
-      segment.from = earlier?.target ?? format.base
     }
     kept.push(segment)
   }

@@ -30,11 +30,24 @@ const SQUARE: FormatSpec = {
 const CAPTURE = { width: 2560, height: 1600 }
 
 /**
- * Every fixture below is a real event log from `artifacts/m2-001`, and every
- * one of them contains at least one click or tap with a bounding box. That is
- * the point: the milestone is judged on whether the zoom frames the element
- * that was hit, so the suite has to be run against logs in which something was
- * actually hit.
+ * Every fixture below except the last is a real event log from
+ * `artifacts/m2-001`, and every one of them contains at least one click or tap
+ * with a bounding box. That is the point: the milestone is judged on whether
+ * the zoom frames the element that was hit, so the suite has to be run against
+ * logs in which something was actually hit.
+ *
+ * `run-a` and `run-b` are the two logs in the whole corpus whose interactions
+ * are closer together than `zoomLeadMs` — 433ms apart. Rounds one and two both
+ * shipped a suite in which the crowded-shot path was unreachable: four of the
+ * five fixtures have a single interaction and the fifth has a 1917ms gap, so
+ * the code that decides what happens when two shots collide was never once
+ * executed by a test. These two make it reachable with real material.
+ *
+ * `run-close-taps` is synthetic and deliberately extreme: two taps 400ms apart
+ * on opposite sides of the viewport, which is the case where a truncated shot
+ * puts the clicked element *entirely outside* the picture rather than merely
+ * off-centre. Two taps that far apart that fast are ordinary on a touch screen
+ * — the finger lifts, so there is no pointer path between them.
  */
 const FIXTURES = [
   'run-scroll-click',
@@ -42,7 +55,29 @@ const FIXTURES = [
   'run-sticky-overlay',
   'run-edge',
   'run-hero',
+  'run-a',
+  'run-b',
+  'run-close-taps',
 ]
+
+/**
+ * How many shots each fixture produces, and how many of those shots had to give
+ * way to a successor. Both numbers are asserted, not just the second: a "no
+ * fixture violates the invariant" that quietly ran over two segments instead of
+ * eleven would be a green suite measuring nothing. The counts are absolute so
+ * that a change in the corpus shows up as a failure here rather than as a
+ * silently smaller denominator.
+ */
+const SHOTS: Record<string, { crowded: number; segments: number }> = {
+  'run-a': { crowded: 1, segments: 2 },
+  'run-b': { crowded: 1, segments: 2 },
+  'run-close-taps': { crowded: 1, segments: 2 },
+  'run-edge': { crowded: 0, segments: 1 },
+  'run-hero': { crowded: 0, segments: 1 },
+  'run-scroll-click': { crowded: 0, segments: 2 },
+  'run-sticky-overlay': { crowded: 0, segments: 1 },
+  'run-touch': { crowded: 0, segments: 1 },
+}
 
 function fixture(name: string): RecordEvent[] {
   return parseEventLog(
@@ -245,6 +280,139 @@ describe('the zoom frames the hit element at every click', () => {
       expect(cropAt(segment.eventMs, segments, format)).toEqual(segment.target)
       expect(segment.target).not.toEqual(format.base)
     }
+  })
+})
+
+/**
+ * The invariant the whole milestone rests on: **a shot never ends before its
+ * own event.**
+ *
+ * Round two ended a crowded shot at its successor's ideal start, which for the
+ * 433ms gap in `run-a` is 267ms before the first click. `cropAt` answered that
+ * click with a point on the journey to the next element — 92px beside it there,
+ * and 657px beside it on two targets on opposite sides, where the clicked
+ * element was not in the picture at all. Six of the 57 shots the corpus
+ * produces were cut that way, and the error has no bound.
+ */
+describe('a shot never ends before its own event', () => {
+  const format = resolveFormat(LANDSCAPE, CAPTURE)
+
+  for (const name of FIXTURES) {
+    it(`${name}: every shot is on its element when its event lands`, () => {
+      const events = toTimedEvents(atCaptureScale(fixture(name)))
+      const segments = buildZoomSegments(events, format)
+      const expected = SHOTS[name]
+      expect(expected).toBeDefined()
+      if (expected === undefined) return
+      // The denominator, asserted: this many shots, of which this many were
+      // crowded by a successor. Without it, "no shot violates the invariant"
+      // would still pass over an empty shot list.
+      expect(segments.length).toBe(expected.segments)
+
+      let crowded = 0
+      for (const [index, segment] of segments.entries()) {
+        expect(segment.endMs).toBeGreaterThan(segment.eventMs)
+        expect(cropAt(segment.eventMs, segments, format)).toEqual(
+          segment.target,
+        )
+        const successor = segments[index + 1]
+        if (successor === undefined) continue
+        const ideal = Math.max(
+          0,
+          successor.eventMs - DEFAULT_ZOOM_LOOK.zoomLeadMs,
+        )
+        if (successor.startMs > ideal) {
+          // The successor's approach was pushed later, which only happens when
+          // it collided with this shot's hold — the guarded path.
+          crowded += 1
+          expect(segment.endMs).toBeLessThan(
+            segment.eventMs + DEFAULT_ZOOM_LOOK.minHoldMs,
+          )
+          expect(successor.from).toEqual(segment.target)
+          expect(successor.startMs).toBeGreaterThanOrEqual(segment.endMs)
+          expect(successor.zoomInMs).toBeLessThanOrEqual(
+            successor.eventMs - successor.startMs,
+          )
+        }
+      }
+      expect(crowded).toBe(expected.crowded)
+    })
+  }
+
+  it('would frame a way-point if the shot were truncated, which is why it is not', () => {
+    // The old rule, applied by hand to the shots the new one produced, so the
+    // assertion above is shown to be sharp rather than merely green. Two taps
+    // 400ms apart on opposite sides: truncating the first shot at the second's
+    // ideal start leaves the tapped element completely out of frame at the
+    // moment it is tapped.
+    const events = toTimedEvents(atCaptureScale(fixture('run-close-taps')))
+    const segments = buildZoomSegments(events, format)
+    const first = segments[0]
+    const second = segments[1]
+    expect(first).toBeDefined()
+    expect(second).toBeDefined()
+    if (first === undefined || second === undefined) return
+
+    const truncatedStart = Math.max(
+      0,
+      second.eventMs - DEFAULT_ZOOM_LOOK.zoomLeadMs,
+    )
+    expect(truncatedStart).toBeLessThan(first.eventMs)
+    const truncated = [
+      { ...first, endMs: truncatedStart },
+      {
+        ...second,
+        startMs: truncatedStart,
+        zoomInMs: Math.min(
+          DEFAULT_ZOOM_LOOK.zoomInMs,
+          second.eventMs - truncatedStart,
+        ),
+      },
+    ]
+    const wayPoint = cropAt(first.eventMs, truncated, format)
+    expect(wayPoint).not.toEqual(first.target)
+    const taps = events.filter(({ event }) => event.type === 'tap')
+    const firstTap = taps[0]
+    expect(firstTap).toBeDefined()
+    if (firstTap === undefined || !('bbox' in firstTap.event)) return
+    expect(contains(wayPoint, boxToRect(firstTap.event.bbox), 1)).toBe(false)
+    // ...while the rule that ships keeps it framed.
+    expect(
+      contains(
+        cropAt(first.eventMs, segments, format),
+        boxToRect(firstTap.event.bbox),
+        1,
+      ),
+    ).toBe(true)
+  })
+
+  it('refuses two interactions too close for any honest camera move', () => {
+    const events: RecordEvent[] = [
+      { type: 'header', version: 1, fps: 60, seed: 1 },
+    ]
+    for (let tick = 0; tick <= 60; tick += 1) {
+      events.push({ type: 'pointer', tick, x: 200, y: 400 })
+    }
+    // One 60Hz tick apart: there is no move that arrives on both elements in
+    // time, so the renderer says so instead of picking a way-point at one of
+    // the two clicks.
+    events.push({
+      type: 'click',
+      tick: 60,
+      x: 200,
+      y: 400,
+      bbox: { x: 100, y: 380, width: 200, height: 80 },
+    })
+    events.push({
+      type: 'click',
+      tick: 61,
+      x: 2300,
+      y: 200,
+      bbox: { x: 2200, y: 180, width: 200, height: 80 },
+    })
+    expect(() => buildZoomSegments(toTimedEvents(events), format)).toThrow(
+      /no honest move/,
+    )
   })
 })
 
