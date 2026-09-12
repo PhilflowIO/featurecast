@@ -29,9 +29,87 @@ afterEach(async () => {
   )
 })
 
-/** A locator double that always hit-tests as landing on the target. */
+type FakeBoundingBox = { height: number; width: number; x: number; y: number }
+
+/** Stand-in for one rendering tick in the simulated sampling loop below. */
+const SIMULATED_FRAME_INTERVAL_MS = 16
+
+/**
+ * Simulates `observeFrames`' in-page `requestAnimationFrame` loop
+ * (src/record.ts) on top of a plain `boundingBox` mock: reads it roughly
+ * once per simulated rendering tick for a real `windowMs`, and returns the
+ * same timestamped frame list the real payload returns. Keeps every
+ * existing assertion about how often `boundingBox` was called meaningful,
+ * since sampling still drives that same mock — just from inside the
+ * simulated `evaluate()` payload, matching where the real implementation
+ * does it (a Node-side poll samples at a cadence that varies with machine
+ * load, which is what made the settled geometry load-dependent).
+ */
+async function simulateObservedFrames(
+  boundingBox: () => Promise<FakeBoundingBox | null>,
+  windowMs: number,
+  minFrames: number,
+) {
+  const start = Date.now()
+  const frames: {
+    bottom: number
+    left: number
+    right: number
+    t: number
+    top: number
+  }[] = []
+  for (;;) {
+    const raw = await boundingBox()
+    if (raw === null || raw.width <= 0 || raw.height <= 0) {
+      throw new Error('Target must resolve to a visible bounding box')
+    }
+    const elapsed = Date.now() - start
+    frames.push({
+      t: elapsed,
+      left: raw.x,
+      top: raw.y,
+      right: raw.x + raw.width,
+      bottom: raw.y + raw.height,
+    })
+    if (elapsed >= windowMs && frames.length >= minFrames) return frames
+    await new Promise((resolve) =>
+      setTimeout(resolve, SIMULATED_FRAME_INTERVAL_MS),
+    )
+  }
+}
+
+/**
+ * A locator double that always hit-tests as landing on the target.
+ * `evaluate()` is called with one of three shapes: `{ x, y }` (a hit test,
+ * see `hitsTarget`), answered `true`; `{ windowMs, minFrames }` (see
+ * `observeFrames`), answered with a simulated frame list; or `undefined`
+ * (see `candidatePeriodsMs`), answered with an empty list — a fake has no
+ * real `getAnimations()`, and an empty list is exactly what a plain,
+ * non-animated element returns for real, correctly sending callers to the
+ * geometric fallback.
+ */
 function hittableLocator(boundingBox: ReturnType<typeof vi.fn>) {
-  return { boundingBox, evaluate: vi.fn().mockResolvedValue(true) }
+  return {
+    boundingBox,
+    evaluate: vi
+      .fn()
+      .mockImplementation(
+        (
+          _pageFunction: unknown,
+          arg: { minFrames: number; windowMs: number } | undefined,
+        ) => {
+          if (arg === undefined) return Promise.resolve([])
+          if ('windowMs' in arg) {
+            return simulateObservedFrames(
+              boundingBox as () => Promise<FakeBoundingBox | null>,
+              arg.windowMs,
+              arg.minFrames,
+            )
+          }
+          return Promise.resolve(true)
+        },
+      ),
+  }
 }
 
 function fakePage(viewport = { height: 720, width: 1280 }) {
@@ -535,4 +613,231 @@ describe('record', () => {
     const typed = events.find((event) => event.type === 'type')
     expect(typed).toMatchObject({ text })
   })
+
+  /**
+   * A locator double for a permanently animated target: `boundingBox`
+   * answers from a phase clock, and `evaluate(undefined)` answers the
+   * Web Animations API probe with a declared iteration duration, exactly
+   * as a CSS-animated element does.
+   */
+  function animatedLocator(
+    boxAtPhase: (phase: number) => FakeBoundingBox,
+    periodMs: number,
+    declaredPeriodsMs: number[] = [periodMs],
+  ) {
+    const started = Date.now()
+    const boundingBox = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(
+          boxAtPhase(((Date.now() - started) % periodMs) / periodMs),
+        ),
+      )
+    const base = hittableLocator(boundingBox)
+    return {
+      boundingBox,
+      evaluate: vi
+        .fn()
+        .mockImplementation(
+          (
+            pageFunction: unknown,
+            arg: { minFrames: number; windowMs: number } | undefined,
+          ) =>
+            arg === undefined
+              ? Promise.resolve(declaredPeriodsMs)
+              : base.evaluate(pageFunction, arg),
+        ),
+    }
+  }
+
+  const readClick = async (output: string) => {
+    const events = (await readFile(join(output, 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+    return events.find((event) => event.type === 'click') as {
+      bbox: FakeBoundingBox
+      x: number
+      y: number
+    }
+  }
+
+  it('settles a permanently animated target instead of waiting for it to stop', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage()
+    // Pulses forever around a fixed centre: no read is ever equal to the
+    // one before it, so waiting for "the same box twice" never returns.
+    page.locator.mockReturnValue(
+      animatedLocator((phase) => {
+        const scale = 1 + 0.5 * Math.sin(phase * 2 * Math.PI)
+        const width = 80 * scale
+        const height = 40 * scale
+        return {
+          x: 600 + (80 - width) / 2,
+          y: 300 + (40 - height) / 2,
+          width,
+          height,
+        }
+      }, 240),
+    )
+
+    await createRecorder(runtimeFor(page))(
+      { out: output, settleTimeoutMs: 8000 },
+      async (_page, demo) => {
+        await demo.click('#pulsing')
+      },
+    )
+
+    const click = await readClick(output)
+    // The pulse is symmetric around scale 1, so its time average is the
+    // resting 80x40 box and its centre is the element's own centre.
+    expect(click.bbox).toEqual({ x: 600, y: 300, width: 80, height: 40 })
+    expect([click.x, click.y]).toEqual([640, 320])
+  }, 20_000)
+
+  /**
+   * The load-bearing case for "resting geometry": an animation that sits
+   * at its resting size most of the cycle and briefly peaks. The time
+   * average is a box the element never occupies — logging it would have
+   * M4 frame geometry that was never on screen. The most-dwelt box is the
+   * resting one.
+   */
+  it('logs the most-dwelt box for an asymmetric animation, not its mean', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage()
+    const resting = { x: 600, y: 300, width: 80, height: 40 }
+    const peak = { x: 596, y: 298, width: 88, height: 44 }
+    page.locator.mockReturnValue(
+      animatedLocator((phase) => (phase < 0.7 ? resting : peak), 240),
+    )
+
+    await createRecorder(runtimeFor(page))(
+      { out: output, settleTimeoutMs: 8000 },
+      async (_page, demo) => {
+        await demo.click('#asymmetric')
+      },
+    )
+
+    const click = await readClick(output)
+    expect(click.bbox).toEqual(resting)
+  }, 20_000)
+
+  /**
+   * The same asymmetric animation, interacted with at six different
+   * offsets into its cycle. The logged box must not depend on which phase
+   * the recorder happened to start in — that dependence is precisely what
+   * made two processes disagree.
+   */
+  it('logs the same box for an asymmetric animation whatever phase the interaction starts in', async () => {
+    const resting = { x: 600, y: 300, width: 80, height: 40 }
+    const peak = { x: 596, y: 298, width: 88, height: 44 }
+    const boxes: FakeBoundingBox[] = []
+
+    for (const offsetMs of [0, 40, 90, 150, 200, 230]) {
+      const output = await temporaryDirectory()
+      const page = fakePage()
+      page.locator.mockReturnValue(
+        animatedLocator(
+          (phase) => ((phase + offsetMs / 240) % 1 < 0.7 ? resting : peak),
+          240,
+        ),
+      )
+      await createRecorder(runtimeFor(page))(
+        { out: output, settleTimeoutMs: 8000 },
+        async (_page, demo) => {
+          await demo.click('#asymmetric')
+        },
+      )
+      boxes.push((await readClick(output)).bbox)
+    }
+
+    expect(boxes).toEqual(boxes.map(() => resting))
+  }, 60_000)
+
+  /**
+   * The measurement window is `ceil(MIN_MEASUREMENT_MS / period)` whole
+   * periods and nothing else. Before this, the window's length was a
+   * multiple of however wide the growth loop's window had grown by the
+   * time convergence happened — so a run that needed one more growth round
+   * averaged over a differently phased window and logged a different box.
+   * Here one run spends 400ms watching a target relocate before the
+   * animation settles into its loop and the other does not; both must log
+   * the same box.
+   */
+  it('logs the same box however long the settle loop waited first', async () => {
+    const resting = { x: 600, y: 300, width: 80, height: 40 }
+    const peak = { x: 596, y: 298, width: 88, height: 44 }
+    const boxes: FakeBoundingBox[] = []
+
+    for (const preambleMs of [0, 400]) {
+      const output = await temporaryDirectory()
+      const page = fakePage()
+      const started = Date.now()
+      page.locator.mockReturnValue(
+        animatedLocator((phase) => {
+          const elapsed = Date.now() - started
+          if (elapsed < preambleMs) {
+            // Still travelling to its final position: neither still nor
+            // periodic, so the settle loop keeps waiting.
+            return {
+              x: 600,
+              y: 300 + (preambleMs - elapsed),
+              width: 80,
+              height: 40,
+            }
+          }
+          return phase < 0.7 ? resting : peak
+        }, 240),
+      )
+      await createRecorder(runtimeFor(page))(
+        { out: output, settleTimeoutMs: 8000 },
+        async (_page, demo) => {
+          await demo.click('#asymmetric')
+        },
+      )
+      boxes.push((await readClick(output)).bbox)
+    }
+
+    expect(boxes[1]).toEqual(boxes[0])
+    expect(boxes[0]).toEqual(resting)
+  }, 30_000)
+
+  /**
+   * A drift far below any sub-pixel tolerance: 0.05px per rendering frame.
+   * The old criterion compared two reads against a 0.5px epsilon, which
+   * such a drift never exceeds, so the target was declared settled while
+   * it was still growing and the logged box was a width the element only
+   * held in passing. The criterion is exact equality now, which has no
+   * tolerance to hide under.
+   */
+  it('keeps waiting out a target drifting far below any sub-pixel tolerance', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage()
+    const startedAt = Date.now()
+    const growForMs = 700
+    const finalWidth = 100 + (growForMs / SIMULATED_FRAME_INTERVAL_MS) * 0.05
+    page.locator.mockReturnValue(
+      hittableLocator(
+        vi.fn().mockImplementation(() => {
+          const elapsed = Math.min(Date.now() - startedAt, growForMs)
+          return Promise.resolve({
+            x: 600,
+            y: 300,
+            width: 100 + (elapsed / SIMULATED_FRAME_INTERVAL_MS) * 0.05,
+            height: 40,
+          })
+        }),
+      ),
+    )
+
+    await createRecorder(runtimeFor(page))(
+      { out: output, settleTimeoutMs: 8000 },
+      async (_page, demo) => {
+        await demo.click('#slow-drift')
+      },
+    )
+
+    const click = await readClick(output)
+    expect(click.bbox.width).toBe(Math.round(finalWidth))
+  }, 20_000)
 })

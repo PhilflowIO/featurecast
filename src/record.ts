@@ -210,18 +210,35 @@ export function createRecorder(
        */
       const resolveVerifiedTarget = async (
         locator: LocatorLike,
+        deadlineAt: number,
       ): Promise<{ bbox: BoundingBox; point: { x: number; y: number } }> => {
-        const bbox = await waitForStableBoundingBox(
-          page,
+        const settled = await resolveSettledGeometry(
           locator,
+          deadlineAt,
           settleTimeoutMs,
         )
+        // The settled centre is the resting box's own centre, already
+        // pulled inside the region the target covered at every animation
+        // phase — so it is the right thing to try first, and for an
+        // unoccluded target it is the only hit test this costs. The
+        // fallback search only runs when something is actually on top of
+        // it, and it is given the resting box, not a live read.
+        const viewport = page.viewportSize()
+        const centreIsOnScreen =
+          viewport === null ||
+          (settled.center.x >= 0 &&
+            settled.center.x < viewport.width &&
+            settled.center.y >= 0 &&
+            settled.center.y < viewport.height)
+        if (centreIsOnScreen && (await hitsTarget(locator, settled.center))) {
+          return { bbox: settled.bbox, point: settled.center }
+        }
         const point = await findVerifiedInteractionPoint(
           locator,
-          bbox,
-          page.viewportSize(),
+          settled.bbox,
+          viewport,
         )
-        return { bbox, point }
+        return { bbox: settled.bbox, point }
       }
 
       const moveToPoint = async (
@@ -271,48 +288,66 @@ export function createRecorder(
         interactionIndex += 1
         const thisInteraction = interactionIndex
         const locator = resolveLocator(target)
-        const { point: initialPoint } = await resolveVerifiedTarget(locator)
+        // One budget for the whole interaction, not one per settle call.
+        // A `moveTo` runs up to two settles (before travel, and again if
+        // the target moved out from under the pointer during it); giving
+        // each its own `settleTimeoutMs` meant a single interaction could
+        // legitimately burn twice the budget the option advertises —
+        // measured at 125s against a 60s setting.
+        const deadlineAt = Date.now() + settleTimeoutMs
+        const initialPoint = (await resolveVerifiedTarget(locator, deadlineAt))
+          .point
         await moveToPoint(
           initialPoint,
           deriveMotionSeed(seed, thisInteraction, PRIMARY_MOVE_ROLE),
         )
 
         // The travel above can take 0.4-4s (longer for distant targets).
-        // Trusting geometry resolved *before* it — as the previous version
-        // did — is exactly how a click gets logged for something that never
-        // happened: the target can move, get re-rendered, or end up covered
-        // by something else while the cursor is still travelling. Re-verify
-        // the same point actually still hits the target now that we've
-        // arrived; only if that fails does the more expensive full
-        // re-resolution below run.
+        // Trusting geometry resolved *before* it is exactly how a click
+        // gets logged for something that never happened: the target can
+        // move, get re-rendered, grow around a stable centre, or end up
+        // covered by something else while the cursor is still travelling.
+        // So the geometry is resolved again, unconditionally, now that
+        // we've arrived — and it is this second result that gets logged,
+        // because a renderer will zoom exactly this box.
+        //
+        // Resolving again is safe in a way it was not before. Two settles
+        // of a permanently animating target used to disagree by about a
+        // pixel, because each averaged over whatever window it happened to
+        // catch; that noise is why a 4px "the pointer is close enough
+        // already" tolerance had to exist, to stop one process taking a
+        // corrective hop the other didn't. Both settles now integrate over
+        // the same whole number of the animation's own periods, so they
+        // agree by construction rather than by tolerance.
+        const arrived = await resolveVerifiedTarget(locator, deadlineAt)
+
+        // Whether to spend a second visible pointer curve is decided by a
+        // hit test, not by comparing two coordinates against a threshold.
+        // "Would a click where the pointer physically is right now land on
+        // the target" is a discrete question that a pixel of measurement
+        // noise cannot flip, which is what makes the tolerance constant
+        // unnecessary rather than merely smaller.
         let point = initialPoint
-        if (!(await hitsTarget(locator, point))) {
-          const corrected = await resolveVerifiedTarget(locator)
+        if (!(await hitsTarget(locator, initialPoint))) {
           await moveToPoint(
-            corrected.point,
+            arrived.point,
             deriveMotionSeed(seed, thisInteraction, CORRECTIVE_MOVE_ROLE),
           )
-          if (!(await hitsTarget(locator, corrected.point))) {
+          if (!(await hitsTarget(locator, arrived.point))) {
             throw new Error(
               'Target moved during pointer travel and could not be ' +
                 'reliably hit even after re-resolving and correcting the ' +
                 'approach. Never logging an unverified interaction.',
             )
           }
-          point = corrected.point
+          point = arrived.point
         }
 
-        // Refreshed unconditionally, right before the caller logs it — not
-        // just inside the corrective branch above. A target can grow or
-        // shift around a stable center during the 0.4-4s travel and still
-        // hit-test correctly at the same point without ever entering that
-        // branch, yet be a visually different rect than what was resolved
-        // before moving; a later renderer zooms exactly this bbox.
-        const freshRaw = await locator.boundingBox()
-        if (freshRaw === null || freshRaw.width <= 0 || freshRaw.height <= 0) {
-          throw new Error('Target must resolve to a visible bounding box')
-        }
-        return { bbox: normalizedBoundingBox(freshRaw), ...point }
+        // Never a live single read: for an animating target that returns
+        // whatever phase this one round trip caught, which is both the
+        // wrong box (not the resting geometry a zoom should frame) and a
+        // different one in every process.
+        return { bbox: arrived.bbox, ...point }
       }
 
       // Give the log and the app the same deterministic rest position before
@@ -691,70 +726,709 @@ async function sleepUntil(page: RecordPage, deadline: number): Promise<void> {
   if (remaining > 0) await page.waitForTimeout(remaining)
 }
 
-const STABLE_WINDOW_MS = 80
-const STABLE_POLL_INTERVAL_MS = 16
 /**
- * Below this, two reads count as "the same" geometry. Deliberately a real
- * sub-pixel epsilon, not integer rounding: rounding first made two reads of
- * a 0.25px/16ms drift compare equal on every single poll, so a target that
- * never actually stopped moving was declared settled anyway.
+ * One observation chunk. Deliberately short and *fixed*: the settle loop
+ * waits for an animation to end by taking chunk after chunk, so a finite
+ * animation of duration D costs about D plus one chunk — not a multiple of
+ * D, which is what a window that grows toward the remaining budget costs.
+ */
+const STABLE_WINDOW_MS = 80
+/**
+ * Below this, two derived edge values count as "the same". Used only where
+ * a real tolerance is unavoidable (period verification, drift detection);
+ * the "is this target still?" test itself needs no epsilon at all — see
+ * `isExactlyStill`.
  */
 const STABLE_EPSILON_PX = 0.5
+/** Every observation returns at least this many frames, however loaded the
+ * machine is, so a chunk starved down to one frame can never be mistaken
+ * for a still target. */
+const MIN_FRAMES_PER_OBSERVATION = 3
+/**
+ * How long the dwell measurement integrates over, before being rounded up
+ * to a whole number of the animation's own periods. A pure constant on
+ * purpose: the measurement window must be a function of the *animation*
+ * (its period) and nothing else. Anything derived from elapsed time, the
+ * remaining budget, or how many chunks happened to pass first makes the
+ * logged geometry a function of machine load, which is exactly the defect
+ * this criterion exists to remove. ~480ms is 29 frames at 60Hz — enough
+ * resolution for the dwell histogram below to separate a plateau from a
+ * sweep.
+ */
+const MIN_MEASUREMENT_MS = 480
+/** Periods longer than this are not worth integrating over: two of them
+ * already exceed any sane `settleTimeoutMs`, and an "animation" that slow
+ * is a page state change, not a loop. */
+const MAX_PERIOD_MS = 4000
+/** Shortest period worth considering — below one rendering frame there is
+ * nothing to sample. */
+const MIN_PERIOD_MS = 32
+/** How often the settle loop re-attempts period resolution while it waits.
+ * Failing to find a period is cheap; finding one ends the wait. */
+const PERIOD_RETRY_INTERVAL_MS = 1000
+/** Window used to estimate a period geometrically when the Web Animations
+ * API has no usable answer. Long enough to contain two full cycles of
+ * anything up to `MAX_PERIOD_MS / 2`. */
+const PERIOD_ESTIMATE_WINDOW_MS = 2 * MAX_PERIOD_MS
+/**
+ * The dwell histogram picks a single "most-dwelt" box only when that box
+ * is dwelt on clearly longer than any other. 1.5 is not a tuned tolerance,
+ * it separates two structurally different shapes: an animation with a rest
+ * phase (a plateau visited for a large fraction of every cycle — ratios of
+ * 5-30 in practice) from one that sweeps continuously (every box visited
+ * about equally, ratio ~1; a symmetric ease-in-out's turning points reach
+ * exactly 2, since the resting end is passed twice per cycle and the far
+ * end once). Below the threshold there is no resting box to report and the
+ * period-aligned time average is the honest answer.
+ */
+const DWELL_DOMINANCE_RATIO = 1.5
+/**
+ * Derived edge values are snapped to this grid before being rounded to the
+ * integers the log uses. Without it, an animation whose true time-average
+ * sits exactly on a half pixel — which symmetric animations routinely do,
+ * e.g. a 15px bounce around y=300 averaging to 307.5 — would round up in
+ * one process and down in another on a residual of hundredths of a pixel.
+ * Snapping first makes the value handed to `Math.round` an exact multiple
+ * of the grid, so the rounding is decided by arithmetic rather than by
+ * which frames a process happened to catch. 0.5px absorbs ~0.25px of
+ * residual, against a measured residual an order of magnitude smaller.
+ */
+const EDGE_SNAP_PX = 0.5
+
+/** One sampled rendering frame: the target's four edges at a page-clock
+ * timestamp, relative to the start of its observation. */
+type Frame = {
+  bottom: number
+  left: number
+  right: number
+  t: number
+  top: number
+}
+
+type SettledGeometry = {
+  /** The target's resting geometry: the box it dwells in, if it has one,
+   * else its period-aligned time average. */
+  bbox: BoundingBox
+  /**
+   * Where to interact. The resting box's own centre, pulled inside the
+   * region that was covered by the target at *every* sampled phase, so a
+   * click landing at any moment of the animation still hits.
+   */
+  center: { x: number; y: number }
+}
 
 /**
- * Resolves a target's bounding box only once it has stayed within
- * `STABLE_EPSILON_PX` of a reference reading for a full `STABLE_WINDOW_MS`
- * window — a time budget, not a fixed read count, so a crawl slower than the
- * poll interval (e.g. 1px/100ms) can't rack up "unchanged" reads by luck
- * before the window has actually elapsed. This is a plain Node-side polling
- * loop over `locator.boundingBox()`, not a `page.evaluate()` watcher keyed on
- * `window.scrollX/Y`: that would miss any scroll that isn't the window
- * itself (an `overflow:auto` container, or a JS-driven transform like
- * Lenis-style inertial scrolling), and the actual geometry of the element
- * we're about to interact with is what matters, regardless of which
- * mechanism moved it. Throws, naming the option that controls the budget, if
- * it never stabilizes in time. Rounds only the final, settled value — never
- * the intermediate comparisons — so the caller gets the same clean integers
- * the rest of the log already uses.
+ * Samples the target's geometry inside the page, one `requestAnimationFrame`
+ * tick at a time, for `windowMs` — in a single round trip.
+ *
+ * Sampling has to happen in the page and it has to be driven by rAF. A
+ * Node-side poll of `boundingBox()` samples at whatever cadence the event
+ * loop and the CDP connection allow, which varies per process and per
+ * machine load. A tight synchronous loop over `getBoundingClientRect()`
+ * inside one script execution is worse than imprecise, it is wrong: a
+ * browser recomputes a CSS animation's current value once per
+ * rendering-lifecycle tick, not per layout query, so every read in one
+ * execution returns the same frozen value. Only an rAF callback
+ * corresponds to a genuinely new rendering tick.
+ *
+ * No named function in the payload: tsx compiles with esbuild's
+ * `keepNames: true`, which wraps a named function in an injected
+ * `__name(...)` call that does not exist once this source text is
+ * serialized into the page (see tests/tsx-pipeline.test.ts). Assigning to
+ * a property of an already-created object is the one form the
+ * named-function-expression inference rule does not cover.
  */
-async function waitForStableBoundingBox(
-  page: RecordPage,
+async function observeFrames(
   locator: LocatorLike,
-  timeoutMs: number,
-): Promise<BoundingBox> {
-  const overallStart = Date.now()
-  let reference: BoundingBox | null = null
-  let windowStart = Date.now()
-  for (;;) {
-    const raw = await locator.boundingBox()
-    if (raw === null || raw.width <= 0 || raw.height <= 0) {
-      throw new Error('Target must resolve to a visible bounding box')
-    }
-    const now = Date.now()
-    if (reference === null || !closeEnough(raw, reference)) {
-      reference = raw
-      windowStart = now
-    }
-    if (now - windowStart >= STABLE_WINDOW_MS) {
-      return normalizedBoundingBox(raw)
-    }
-    if (now - overallStart > timeoutMs) {
-      throw new Error(
-        `Target geometry did not settle within settleTimeoutMs (${String(timeoutMs)}ms). ` +
-          'Increase RecordOptions.settleTimeoutMs if the page keeps animating intentionally.',
-      )
-    }
-    await page.waitForTimeout(STABLE_POLL_INTERVAL_MS)
+  windowMs: number,
+): Promise<Frame[]> {
+  const frames = await locator.evaluate(
+    (element, arg: { minFrames: number; windowMs: number }) =>
+      new Promise((resolve, reject) => {
+        const collected: {
+          bottom: number
+          left: number
+          right: number
+          t: number
+          top: number
+        }[] = []
+        const start = performance.now()
+        const loop = {} as { tick: () => void }
+        loop.tick = () => {
+          const rect = element.getBoundingClientRect()
+          if (rect.width <= 0 || rect.height <= 0) {
+            reject(new Error('Target must resolve to a visible bounding box'))
+            return
+          }
+          const elapsed = performance.now() - start
+          collected.push({
+            t: elapsed,
+            left: rect.left,
+            top: rect.top,
+            right: rect.left + rect.width,
+            bottom: rect.top + rect.height,
+          })
+          if (elapsed < arg.windowMs || collected.length < arg.minFrames) {
+            requestAnimationFrame(loop.tick)
+          } else {
+            resolve(collected)
+          }
+        }
+        requestAnimationFrame(loop.tick)
+      }),
+    {
+      windowMs: Math.max(windowMs, 1),
+      minFrames: MIN_FRAMES_PER_OBSERVATION,
+    },
+  )
+  return frames as Frame[]
+}
+
+const EDGES = ['left', 'top', 'right', 'bottom'] as const
+
+/**
+ * Whether every sampled frame reported *bitwise identical* edges. No
+ * epsilon, deliberately: `getBoundingClientRect()` returns sub-pixel
+ * floats, so a target still moving at any rate the browser can represent
+ * reports different numbers frame to frame, while a target whose layout is
+ * finished reports the same number forever. An epsilon here is what let
+ * "however slow the drift" quietly become false — a 0.05px-per-frame
+ * widening stayed inside any sub-pixel tolerance and was declared settled
+ * mid-growth. Exact equality has no such floor: the limit becomes the
+ * browser's own sub-pixel quantisation (Chromium: 1/64px) over the
+ * observation window, i.e. about 0.2px/s for an 80ms window, rather than a
+ * tolerance chosen by hand.
+ */
+function isExactlyStill(frames: Frame[]): boolean {
+  if (frames.length < MIN_FRAMES_PER_OBSERVATION) return false
+  const first = frames[0]!
+  return frames.every((frame) =>
+    EDGES.every((edge) => frame[edge] === first[edge]),
+  )
+}
+
+/**
+ * How far the second half of an observation sits from the first half, per
+ * edge. Scale-free by construction: a linear drift of any rate shows up
+ * here as rate x span / 2, so a longer observation exposes a slower drift,
+ * rather than a fixed tolerance deciding which rates are invisible. Used
+ * to tell a *bounded* animation (halves agree — it comes back to where it
+ * was) from one that is also travelling somewhere (halves diverge), which
+ * must never be reported as settled just because it repeats.
+ */
+function halvesDriftPx(frames: Frame[]): number {
+  if (frames.length < 4) return Infinity
+  const middle = Math.floor(frames.length / 2)
+  const first = frames.slice(0, middle)
+  const second = frames.slice(middle)
+  const meanOf = (subset: Frame[], edge: (typeof EDGES)[number]): number =>
+    subset.reduce((sum, frame) => sum + frame[edge], 0) / subset.length
+  return Math.max(
+    ...EDGES.map((edge) =>
+      Math.abs(meanOf(second, edge) - meanOf(first, edge)),
+    ),
+  )
+}
+
+/**
+ * Time average of each edge over exactly `spanMs` starting at `startT`.
+ * Every frame is weighted by the time until the next one, and the last one
+ * only by the time left inside the span — so this is a genuine integral
+ * over the span, not an average over however many frames the machine
+ * managed to render inside it. Under load, where rAF drops from 60Hz to a
+ * handful of frames, that is the difference between an answer that stays
+ * put and one that follows the load. `null` when the observation does not
+ * cover the span.
+ */
+function weightedEdgeMeans(
+  frames: Frame[],
+  startT: number,
+  spanMs: number,
+): Record<string, number> | null {
+  const endT = startT + spanMs
+  if (frames.length === 0 || frames[frames.length - 1]!.t < endT) {
+    // The frame that would close the span is the one excluded from the
+    // integral, so the observation must reach at least that far.
+    if (frames.length === 0 || frames[frames.length - 1]!.t < startT)
+      return null
+  }
+  const inSpan = frames.filter((frame) => frame.t >= startT && frame.t < endT)
+  if (inSpan.length === 0) return null
+  const totals: Record<string, number> = {
+    left: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+  }
+  let totalWeight = 0
+  inSpan.forEach((frame, index) => {
+    const next = index + 1 < inSpan.length ? inSpan[index + 1]!.t : endT
+    const weight = Math.max(next - frame.t, 0)
+    totalWeight += weight
+    for (const edge of EDGES) totals[edge]! += frame[edge] * weight
+  })
+  if (totalWeight <= 0) return null
+  for (const edge of EDGES) totals[edge]! /= totalWeight
+  return totals
+}
+
+/**
+ * How far the time average of one period sits from the next one's. Zero
+ * for a genuinely looping animation however violent its motion; non-zero,
+ * and growing with the period, for one that is also travelling somewhere.
+ */
+function consecutivePeriodDriftPx(frames: Frame[], periodMs: number): number {
+  const start = frames[0]!.t
+  const first = weightedEdgeMeans(frames, start, periodMs)
+  const second = weightedEdgeMeans(frames, start + periodMs, periodMs)
+  if (first === null || second === null) return Infinity
+  return Math.max(
+    ...EDGES.map((edge) => Math.abs(second[edge]! - first[edge]!)),
+  )
+}
+
+/** Snaps to `EDGE_SNAP_PX` and then to the integers the log uses. */
+function snappedRound(value: number): number {
+  return Math.round(Math.round(value / EDGE_SNAP_PX) * EDGE_SNAP_PX)
+}
+
+function boxFromEdges(
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+): BoundingBox {
+  const x = snappedRound(left)
+  const y = snappedRound(top)
+  return {
+    x,
+    y,
+    width: snappedRound(right) - x,
+    height: snappedRound(bottom) - y,
   }
 }
 
-function closeEnough(a: BoundingBox, b: BoundingBox): boolean {
-  return (
-    Math.abs(a.x - b.x) < STABLE_EPSILON_PX &&
-    Math.abs(a.y - b.y) < STABLE_EPSILON_PX &&
-    Math.abs(a.width - b.width) < STABLE_EPSILON_PX &&
-    Math.abs(a.height - b.height) < STABLE_EPSILON_PX
+/**
+ * Integrates an observation over exactly `spanMs` starting at its first
+ * frame, and returns the target's resting geometry.
+ *
+ * Every frame is weighted by the time until the next one, and the last
+ * included frame only by the time left inside the span — so the result is
+ * a genuine time average over the span, not an average over however many
+ * frames the machine managed to render. Under load, where rAF drops from
+ * 60Hz to a handful of frames, that is the difference between a stable
+ * answer and one that follows the load. The span is a whole number of the
+ * animation's periods, so no partial cycle biases the average, and the
+ * trailing frame that would reach past it is excluded rather than counted
+ * whole.
+ *
+ * The reported box is the *most-dwelt* quantised box when one dominates —
+ * "resting geometry" for an animation with a rest phase means the box it
+ * actually sits in, not the average of where it sits and where it briefly
+ * jumps to. A 70%-dwell/30%-peak animation whose mean is reported logs a
+ * box the element never occupies, and M4 would frame that. When no box
+ * dominates (a continuous sweep with no rest), the period-aligned time
+ * average is the answer instead.
+ */
+function restingGeometryOver(frames: Frame[], spanMs: number): SettledGeometry {
+  const start = frames[0]!.t
+  const inSpan = frames.filter((frame) => frame.t - start < spanMs)
+  const weights = inSpan.map((frame, index) => {
+    const next =
+      index + 1 < inSpan.length ? inSpan[index + 1]!.t : start + spanMs
+    return Math.max(next - frame.t, 0)
+  })
+  const means = weightedEdgeMeans(frames, start, spanMs)!
+  const meanBox = boxFromEdges(
+    means.left!,
+    means.top!,
+    means.right!,
+    means.bottom!,
   )
+
+  const dwell = new Map<string, { box: BoundingBox; ms: number }>()
+  inSpan.forEach((frame, index) => {
+    const box = boxFromEdges(frame.left, frame.top, frame.right, frame.bottom)
+    const id = `${String(box.x)},${String(box.y)},${String(box.width)},${String(box.height)}`
+    const entry = dwell.get(id)
+    if (entry === undefined) dwell.set(id, { box, ms: weights[index]! })
+    else entry.ms += weights[index]!
+  })
+  const ranked = [...dwell.values()].sort((a, b) => b.ms - a.ms)
+  const best = ranked[0]
+  const runnerUp = ranked[1]
+  const bbox =
+    best !== undefined &&
+    (runnerUp === undefined || best.ms > runnerUp.ms * DWELL_DOMINANCE_RATIO)
+      ? best.box
+      : meanBox
+
+  // The region covered by the target at every sampled phase. Its edges are
+  // the animation's own extremes, each of which a process can only ever
+  // observe to within one rendering frame — so the intersection's *centre*
+  // is not something two processes can agree on to the pixel, and using it
+  // directly is what left a 1px cross-process difference in the click
+  // point. The resting box's centre is a time average and does agree; it
+  // is clamped into the always-covered region for the rare target that
+  // travels further than its own size, where the resting centre could sit
+  // outside.
+  const extremes = {
+    left: Math.max(...inSpan.map((frame) => frame.left)),
+    top: Math.max(...inSpan.map((frame) => frame.top)),
+    right: Math.min(...inSpan.map((frame) => frame.right)),
+    bottom: Math.min(...inSpan.map((frame) => frame.bottom)),
+  }
+  const restingCenter = {
+    x: bbox.x + bbox.width / 2,
+    y: bbox.y + bbox.height / 2,
+  }
+  const center =
+    extremes.right > extremes.left && extremes.bottom > extremes.top
+      ? {
+          x: Math.round(
+            Math.min(Math.max(restingCenter.x, extremes.left), extremes.right),
+          ),
+          y: Math.round(
+            Math.min(Math.max(restingCenter.y, extremes.top), extremes.bottom),
+          ),
+        }
+      : { x: Math.round(restingCenter.x), y: Math.round(restingCenter.y) }
+
+  return { bbox, center }
+}
+
+/** The degenerate case of `restingGeometryOver`: a target that did not
+ * move at all during its observation has one box and is its own average. */
+function stillGeometry(frames: Frame[]): SettledGeometry {
+  const frame = frames[0]!
+  const bbox = boxFromEdges(frame.left, frame.top, frame.right, frame.bottom)
+  return {
+    bbox,
+    center: {
+      x: Math.round(bbox.x + bbox.width / 2),
+      y: Math.round(bbox.y + bbox.height / 2),
+    },
+  }
+}
+
+/**
+ * Every candidate period the Web Animations API can offer for this target,
+ * read and never set — pure introspection, not "disabling the animation".
+ *
+ * Three things the previous version missed, each measured: an animation on
+ * an *ancestor* moves the target without appearing in the target's own
+ * `getAnimations()`, so the whole parent chain is walked; an alternating
+ * animation's geometric period is twice its iteration duration, because
+ * the iteration only covers one direction of the ping-pong; and two
+ * animations of different durations have a common period (their least
+ * common multiple), not "no answer". Every candidate returned here is
+ * still *verified* against the sampled geometry before being used — the
+ * API says what the page declared, the samples say what the box actually
+ * does, and only the second is what the logged geometry may depend on.
+ */
+async function candidatePeriodsMs(locator: LocatorLike): Promise<number[]> {
+  const declared = (await locator.evaluate((element) => {
+    const nodes: Element[] = []
+    let current: Element | null = element
+    while (current !== null) {
+      nodes.push(current)
+      current = current.parentElement
+    }
+    const durations: number[] = []
+    for (const node of nodes) {
+      const animations =
+        node === element
+          ? node.getAnimations({ subtree: true })
+          : node.getAnimations()
+      for (const animation of animations) {
+        const effect = animation.effect
+        if (effect === null) continue
+        const duration = effect.getComputedTiming().duration
+        if (typeof duration !== 'number' || duration <= 0) continue
+        const direction = effect.getTiming().direction
+        const alternating =
+          direction === 'alternate' || direction === 'alternate-reverse'
+        durations.push(alternating ? duration * 2 : duration)
+      }
+    }
+    return durations
+  }, undefined)) as number[]
+
+  const rounded = declared
+    .map((duration) => Math.round(duration))
+    .filter((duration) => duration >= MIN_PERIOD_MS)
+  const candidates = new Set<number>(rounded)
+  // A composite of several animations repeats on their least common
+  // multiple, which is the only window that covers all of them a whole
+  // number of times.
+  for (const a of rounded) {
+    for (const b of rounded) {
+      const common = leastCommonMultiple(a, b)
+      if (common !== null) candidates.add(common)
+    }
+  }
+  return [...candidates]
+    .filter((period) => period >= MIN_PERIOD_MS && period <= MAX_PERIOD_MS)
+    .sort((a, b) => a - b)
+}
+
+function leastCommonMultiple(a: number, b: number): number | null {
+  let x = a
+  let y = b
+  while (y !== 0) {
+    const remainder = x % y
+    x = y
+    y = remainder
+  }
+  if (x === 0) return null
+  const multiple = (a / x) * b
+  return Number.isFinite(multiple) ? multiple : null
+}
+
+/** Peak-to-peak travel of the widest-moving edge across an observation. */
+function amplitudePx(frames: Frame[]): number {
+  return Math.max(
+    ...EDGES.map(
+      (edge) =>
+        Math.max(...frames.map((frame) => frame[edge])) -
+        Math.min(...frames.map((frame) => frame[edge])),
+    ),
+  )
+}
+
+/**
+ * The target's edges at an arbitrary instant, linearly interpolated
+ * between the two frames that bracket it. Rendering frames one period
+ * apart are essentially never *aligned* — a 240ms period at a 60Hz refresh
+ * is 14.4 frames — so comparing a frame against the nearest frame one
+ * period later compares two different phases, and for a fast animation
+ * those differ by pixels. Interpolating removes that misalignment, leaving
+ * only the curvature error over one frame interval.
+ */
+function edgesAt(frames: Frame[], t: number): Record<string, number> | null {
+  if (t < frames[0]!.t || t > frames[frames.length - 1]!.t) return null
+  let index = 0
+  while (index + 1 < frames.length && frames[index + 1]!.t < t) index += 1
+  const before = frames[index]!
+  const after = frames[Math.min(index + 1, frames.length - 1)]!
+  const span = after.t - before.t
+  const ratio = span > 0 ? (t - before.t) / span : 0
+  const interpolated: Record<string, number> = {}
+  for (const edge of EDGES) {
+    interpolated[edge] = before[edge] + (after[edge] - before[edge]) * ratio
+  }
+  return interpolated
+}
+
+/**
+ * Whether the sampled geometry actually repeats with period `periodMs`:
+ * every frame must match the (interpolated) geometry one period later.
+ * This is what makes a *declared* period safe to use, and what makes a
+ * wrong one — an ancestor's unrelated animation, an iteration duration
+ * that is half the geometric period of an alternating one — fail here
+ * instead of silently biasing the average. Needs the observation to span
+ * at least two periods.
+ *
+ * The tolerance is relative to the motion's own amplitude, not a flat
+ * sub-pixel epsilon, because linear interpolation across one rendering
+ * interval carries a curvature error that scales with amplitude: a 40px
+ * swing over 240ms is off by ~0.9px between two 16ms frames however
+ * correct the period is. A *wrong* period mismatches by a large fraction
+ * of the amplitude, so 5% of it separates the two cleanly while a flat
+ * 0.5px would reject every fast animation.
+ */
+const PERIOD_MATCH_AMPLITUDE_FRACTION = 0.05
+
+function periodHolds(frames: Frame[], periodMs: number): boolean {
+  const span = frames[frames.length - 1]!.t - frames[0]!.t
+  if (span < periodMs * 2) return false
+  const tolerance = Math.max(
+    STABLE_EPSILON_PX,
+    amplitudePx(frames) * PERIOD_MATCH_AMPLITUDE_FRACTION,
+  )
+  let compared = 0
+  for (const frame of frames) {
+    const later = edgesAt(frames, frame.t + periodMs)
+    if (later === null) break
+    compared += 1
+    for (const edge of EDGES) {
+      if (Math.abs(later[edge]! - frame[edge]) > tolerance) return false
+    }
+  }
+  return compared >= MIN_FRAMES_PER_OBSERVATION
+}
+
+/**
+ * Estimates a period straight from the sampled geometry, for the case the
+ * Web Animations API cannot answer: a JS-driven `requestAnimationFrame`
+ * loop, a `<canvas>`-backed layout, a transition whose declared timing
+ * does not match what the box does. Scans lags at one-frame resolution and
+ * returns the shortest that holds; `null` when none does.
+ */
+function estimatePeriodMs(frames: Frame[]): number | null {
+  const span = frames[frames.length - 1]!.t - frames[0]!.t
+  const longest = Math.min(MAX_PERIOD_MS, span / 2)
+  for (let lag = MIN_PERIOD_MS; lag <= longest; lag += 8) {
+    if (periodHolds(frames, lag)) return lag
+  }
+  return null
+}
+
+/**
+ * The number of whole periods the dwell measurement covers. A pure
+ * function of the period — never of elapsed time, the remaining budget or
+ * how long the settle loop waited first. That is the whole point: the
+ * logged geometry must be a property of the animation, not of the machine
+ * that recorded it.
+ */
+function measurementPeriods(periodMs: number): number {
+  return Math.max(1, Math.ceil(MIN_MEASUREMENT_MS / periodMs))
+}
+
+function settleTimeoutError(timeoutMs: number, detail: string): Error {
+  return new Error(
+    `Target geometry did not settle within settleTimeoutMs (${String(timeoutMs)}ms): ` +
+      `${detail}. Increase RecordOptions.settleTimeoutMs if the page keeps ` +
+      'animating intentionally.',
+  )
+}
+
+/**
+ * Resolves a target's resting geometry and a safe interaction point for it.
+ *
+ * Three cases, in the order they are cheapest to recognise:
+ *
+ * 1. **Still.** One 80ms observation in which every frame reports the same
+ *    edges, to the last sub-pixel. Returns immediately — the common case
+ *    costs one round trip, the same as a single `boundingBox()` read plus
+ *    a stability window.
+ * 2. **Finite animation.** Keeps taking 80ms observations until one is
+ *    still. An animation of duration D therefore settles in about D, not a
+ *    multiple of D, and the box logged afterwards is the element's actual
+ *    resting layout — nothing is averaged, because nothing is moving any
+ *    more.
+ * 3. **Permanent bounded animation.** A pulsing CTA, a bounce, a spin: it
+ *    never stops, so waiting for stillness would time out (which is the
+ *    bug this replaces). Instead its period is resolved and verified
+ *    against the samples, and its geometry is integrated over a whole
+ *    number of those periods. Both the period and the number of periods
+ *    are properties of the animation alone, so two processes integrate
+ *    over identical windows however differently they were scheduled.
+ *
+ * Anything that keeps moving without repeating — a layout shift, a panel
+ * sliding in, a button widening 0.05px per frame — matches none of the
+ * three and is correctly waited for until it stops or the budget runs out.
+ */
+async function resolveSettledGeometry(
+  locator: LocatorLike,
+  deadlineAt: number,
+  timeoutMs: number,
+): Promise<SettledGeometry> {
+  // A visibility check before any observation, so an absent or collapsed
+  // target fails with the same message it always has.
+  await readValidatedBoundingBox(locator)
+
+  let lastObservation: Frame[] = []
+  let nextPeriodAttemptAt = 0
+  for (;;) {
+    const frames = await observeFrames(locator, STABLE_WINDOW_MS)
+    lastObservation = frames
+    if (isExactlyStill(frames)) return stillGeometry(frames)
+
+    if (Date.now() >= nextPeriodAttemptAt) {
+      nextPeriodAttemptAt = Date.now() + PERIOD_RETRY_INTERVAL_MS
+      const settled = await tryPeriodicMeasurement(locator, deadlineAt)
+      if (settled !== null) return settled
+    }
+
+    if (Date.now() >= deadlineAt) {
+      throw settleTimeoutError(
+        timeoutMs,
+        halvesDriftPx(lastObservation) < STABLE_EPSILON_PX
+          ? 'the target keeps moving within a bounded range but no repeating ' +
+              'period could be measured, so there is no window whose average ' +
+              'would be reproducible'
+          : 'the target is still moving to a new position',
+      )
+    }
+  }
+}
+
+/**
+ * Resolves and verifies a period for the target, then measures over a
+ * whole number of them. `null` when no period holds, or when a verified
+ * one would not fit in the remaining budget — in which case the caller
+ * goes back to waiting for the animation to end, which is the right
+ * behaviour for a finite one (a 3s pop-in declares a 3s duration; two of
+ * those do not fit an ordinary budget, and it does not need them — it ends).
+ */
+async function tryPeriodicMeasurement(
+  locator: LocatorLike,
+  deadlineAt: number,
+): Promise<SettledGeometry | null> {
+  const fits = (windowMs: number): boolean =>
+    Date.now() + windowMs <= deadlineAt
+
+  for (const periodMs of await candidatePeriodsMs(locator)) {
+    // Two whole periods *plus a margin*: an observation asked for exactly
+    // 2P ends on the first frame at or past 2P, so its first-to-last span
+    // is 2P minus one frame interval — just short of what `periodHolds`
+    // needs, which made period verification fail or succeed depending on
+    // where the first frame happened to land.
+    const probeMs = periodMs * 2 + STABLE_WINDOW_MS
+    if (
+      !fits(
+        probeMs + periodMs * measurementPeriods(periodMs) + STABLE_WINDOW_MS,
+      )
+    ) {
+      continue
+    }
+    const probe = await observeFrames(locator, probeMs)
+    if (isExactlyStill(probe)) return stillGeometry(probe)
+    if (!periodHolds(probe, periodMs)) continue
+    // Repeating is not the same as staying put: a carousel that also
+    // creeps down the page repeats perfectly while relocating. Comparing
+    // the time average of the first period against the second exposes
+    // that, at any rate, because the two averages are a whole period apart.
+    if (consecutivePeriodDriftPx(probe, periodMs) >= STABLE_EPSILON_PX) continue
+    return measureOverPeriods(locator, periodMs)
+  }
+
+  // Nothing declared, or nothing declared that held. Estimate from the
+  // geometry itself rather than silently averaging over a window of
+  // arbitrary length.
+  if (!fits(PERIOD_ESTIMATE_WINDOW_MS + MIN_MEASUREMENT_MS)) return null
+  const probe = await observeFrames(locator, PERIOD_ESTIMATE_WINDOW_MS)
+  if (isExactlyStill(probe)) return stillGeometry(probe)
+  if (halvesDriftPx(probe) >= STABLE_EPSILON_PX) return null
+  const estimated = estimatePeriodMs(probe)
+  if (estimated === null) return null
+  if (!fits(estimated * measurementPeriods(estimated) + STABLE_WINDOW_MS)) {
+    return null
+  }
+  return measureOverPeriods(locator, estimated)
+}
+
+async function measureOverPeriods(
+  locator: LocatorLike,
+  periodMs: number,
+): Promise<SettledGeometry> {
+  const spanMs = periodMs * measurementPeriods(periodMs)
+  // One extra frame's worth of observation so the span is fully covered
+  // even though the frame that would close it is excluded from the
+  // integral.
+  const frames = await observeFrames(locator, spanMs + STABLE_WINDOW_MS)
+  return restingGeometryOver(frames, spanMs)
+}
+
+async function readValidatedBoundingBox(
+  locator: LocatorLike,
+): Promise<BoundingBox> {
+  const raw = await locator.boundingBox()
+  if (raw === null || raw.width <= 0 || raw.height <= 0) {
+    throw new Error('Target must resolve to a visible bounding box')
+  }
+  return raw
 }
 
 /** How far, in px, an edge/corner probe sits inside the visible intersection. */
@@ -928,14 +1602,6 @@ function orderedBoundingBox(bbox: BoundingBox): BoundingBox {
 function assertSeed(seed: number): void {
   if (!Number.isInteger(seed) || seed < 0 || seed > 0xffffffff)
     throw new Error('Seed must be an unsigned 32-bit integer')
-}
-function normalizedBoundingBox(bbox: BoundingBox): BoundingBox {
-  return {
-    x: Math.round(bbox.x),
-    y: Math.round(bbox.y),
-    width: Math.round(bbox.width),
-    height: Math.round(bbox.height),
-  }
 }
 /**
  * Derives a motion seed as a pure function of (recorder seed, interaction
