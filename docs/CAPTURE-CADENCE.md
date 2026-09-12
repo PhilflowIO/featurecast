@@ -512,3 +512,280 @@ anchored top instead of centered. Whether the zoom reserve is worth the
 extra capture height (more pixels to rasterize, though no longer the
 bottleneck per this document) versus DEVICES.md's simpler native-16:9
 capture is an open product decision, not something this fix decided.
+
+## The capture clock and the efficiency denominator (added 2026-09-12, #21)
+
+Two numbers this document relied on were being produced the wrong way. Both
+are fixed; the corrected figures supersede every efficiency percentage above.
+
+### What `metadata.timestamp` on a screencast frame actually is
+
+Not the moment the compositor produced the frame, and not the moment it was
+presented. It is `base::Time::Now()` — plain wall clock — read in the browser
+process when the DevTools handler builds the frame's metadata:
+`content/browser/devtools/protocol/page_handler.cc:178`,
+`.SetTimestamp(base::Time::Now().InSecondsFSinceUnixEpoch())`, called from
+`OnFrameFromVideoConsumer` (same file, 1814-1861). Pinned tree,
+Chromium 153.0.8010.12, under `~/featurecast-bench/chromium-patch/chromium/src`.
+
+A better timebase exists and is one field away. The capturer writes the
+oracle-smoothed presentation time onto the VideoFrame
+(`components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.cc:1511`)
+and ships it over mojo as `info->timestamp` (same file, 1527), where
+`DevToolsVideoConsumer::OnFrameCaptured` puts it back on the frame
+(`content/browser/devtools/devtools_video_consumer.cc:182-185`) — and
+`PageHandler` never reads it. It is not reachable over CDP without a patch.
+Measured cost of using the arrival stamp instead: the lag from presentation
+to arrival is 2.4-8.4 ms at the median and 6.6-12.3 ms at p95 across the
+product runs below, so the arrival stamp is a tight proxy. Re-basing the
+timeline onto the presentation times was built and measured on two full
+runs; it makes the finished video **worse**, and the numbers are in
+"Re-basing the timeline" below.
+
+### Delivery order is not capture order, and the timestamps were the casualty
+
+`ScreencastFrameCaptured` hands the bitmap to `base::ThreadPool` for JPEG
+encoding and the CDP event is emitted from the encode's reply
+(`page_handler.cc:1864-1893`), so frames arrive in encode-completion order
+while their timestamps were assigned strictly in capture order on one
+sequence. `capture.ts` used to treat delivery order as authoritative and
+clamp a regressing timestamp forward onto its predecessor. Measured on
+`artifacts/sbs-patched`: 42 clamps, and 39 inter-frame gaps of **exactly
+0.0 ms** — every zero gap in that run was manufactured by the clamp, none
+was a resolution tie (1415 of its 1416 timestamps carry a fractional
+millisecond). A zero-gap frame gets no `duration` line in the ffconcat
+timeline, so ffmpeg steps past it and its neighbour holds twice as long.
+
+The manifest is now sorted back into capture order instead. On a real run
+with the fix (`wt-clock/artifacts/clock-r1`, patched Chromium, AI box):
+48 frames restored to order, `coincidentTimestampCount` 0, zero-length gaps 0.
+
+### The efficiency denominator was the in-page probe, and then it was double-counted
+
+`src/paint-rate.ts` runs on the renderer's main thread; smooth scrolling is
+driven by the compositor thread. During exactly the motion this project
+records, the probe therefore sees fewer frames than reach the screen — 51
+against 66 in one measured window. `captured / ticks` consequently rises as
+the machine degrades, and the patched-Chromium arm reported **100.9%**
+capture efficiency, which the 95% gate passed.
+
+The denominator is now Chromium's own presented frames, taken from a
+two-category browser trace and computed in-process at the end of the run
+(`src/presented.ts`). Predicate: `PipelineReporter` async events in the
+renderer process whose `b` phase carries state `STATE_PRESENTED_ALL` or
+`STATE_PRESENTED_PARTIAL`, bucketed at the paired `e` timestamp.
+
+The first version of that counted Chromium's _reports_ of a presentation
+instead of the presentations. Chromium files one record per reporting
+pipeline in the renderer, all carrying the same `e` timestamp: measured on a
+product run, **2238 records against 1510 distinct presentation instants**,
+728 instants reported exactly twice and none more than twice. Of the 752
+`STATE_PRESENTED_PARTIAL` records, 669 are the twin of an `ALL` record of the
+same instant; the remaining 83 are separate screen updates and are measured
+to be so — 20.8 ms from the nearest `ALL`-bearing instant at the median,
+4.1 ms at the minimum, none sub-millisecond, and 16.6 ms after their own
+predecessor at the median, which is one 60 Hz refresh.
+
+**The check that settles it without reading any Chromium source:** a window
+cannot contain more presentations than the display refreshes inside it. That
+is `floor(duration × refreshHz) + 1` — both edges of the window can carry
+one — and the fencepost matters. The window `invoices:scroll-down:1` reported
+89.8 presented frames per second under the record-counting denominator;
+counting instants it reports 59.6.
+
+Two things about this bound were wrong until round three, and both stopped it
+binding in practice.
+
+It was written as `duration × 60`, with a further frame subtracted on top
+(`presentedFrameCount - 1 >`) that no comment explained. Measured over the
+three runs under `~/featurecast-bench/verify-r2/art/vr{1,2,3}`, no window came
+closer than **4.46 frames** to tripping it — and that closest window,
+`vr3`'s `tasks:scroll-left:1`, is the one that was called physically
+impossible at 61.9 presented frames per second. It is not impossible: 18
+instants need 17 gaps, 17 × 16.655 ms is 283 ms, and the window is 291 ms
+long. A rate above the nominal refresh in a short window is the fencepost,
+not a defect, and a bound that mistakes the two while sitting 4.46 frames
+clear of every real window is decorative.
+
+And 60 was a constant. On a 120 Hz display that constant rejects every window
+longer than 67 ms; at 144 Hz it rejects all 38 motion windows of a real run;
+below about 40 Hz it stops binding at all. The rate is in the data, and
+`resolveRefreshHz` reads it there: the median of the gaps a single refresh
+can occupy (5–30 ms, i.e. 33–200 Hz). Over twelve full runs on the reference
+box that median lands between 16.600 and 16.716 ms — **59.82 to 60.24 Hz**
+against a nominal 60 — and the estimate is trustworthy in proportion to how
+much of it there is. Taking every contiguous slice of those runs and scoring
+it against the whole run: worst error 4.40 Hz once 50 in-band gaps are
+present, 1.70 Hz at 100, **0.84 Hz at 150**, 0.54 Hz at 200. Below 150 the
+function refuses instead of guessing; a real 70-second recording supplies
+782 to 888. A 26-instant excerpt, for the record, reads 61.5 Hz on hardware
+that runs at 60.0.
+
+What is left is one measured allowance. Genuine sub-refresh instants exist —
+`STATE_PRESENTED_PARTIAL` frames that really are separate screen updates less
+than a refresh apart — and a short window can hold a couple. Across twelve
+full runs and every sliding 0.30 s, 0.50 s, 0.90 s, 1.50 s and 3.00 s stretch
+of each, the instant count exceeds `floor(span × refreshHz) + 1` by at most
+**2**, while the double-counting defect exceeded the old, looser line by 35
+to 51. The allowance is 3, and the suite pins it from both sides: 64 instants
+in a 1.000 s window pass, 65 fail, so loosening or tightening it by a single
+frame fails a test. Round two's version could be loosened from 4 to 5 without
+a single test objecting.
+
+`presented.json` is written next to the other artifacts so the denominator
+itself can be re-checked afterwards, and `capture-efficiency.json` now
+carries the `refreshHz` the bound was computed from.
+
+### The denominator's other end: a trace that lost events
+
+The refresh bound is one-sided. A denominator that is too **small** moves
+capture efficiency towards the gate rather than away from it — on `r2a`'s
+numbers 84.2% becomes 88.5% at 5% denominator loss, 93.2% at 10% and 105.4%
+at 20% — and no ratio built on that denominator can notice.
+
+Chromium reports it, so it is read rather than inferred.
+`Tracing.tracingComplete` carries `dataLossOccurred`
+(`content/browser/devtools/protocol/tracing_handler.cc:698-706`), which is
+set from Perfetto's own buffer statistics: `chunks_overwritten`,
+`chunks_discarded`, `abi_violations` or `trace_writer_packet_loss` above zero
+(`services/tracing/public/cpp/perfetto/perfetto_session.cc:39-49`). The final
+statistics are requested after the last chunk has been streamed and before
+the completion notification is sent (`tracing_handler.cc:518-529`, comment
+"Request stats to check if data loss occurred"), so the flag covers the whole
+recording. `extractPresentedFrameTimes` takes it as a required argument and
+refuses the trace outright when it is set.
+
+Two more paths could shrink the denominator silently, and both are now loud.
+A `PipelineReporter` id opened twice used to keep the newer record and drop
+the older one's instant — one lost instant per overlapping pair, so a trace
+made entirely of such pairs would score half. Clock marks from two renderer
+processes used to select whichever process the first mark happened to be in,
+counting one renderer's presentations and losing the other's. Neither shape
+occurs in any of 24 real traces, which is the reason they must not be guessed
+at quietly rather than a reason to ignore them.
+
+Both the presented and the painted timestamps are now required parameters of
+`computeCaptureEfficiencyReport`. The optional one had already been misused:
+`tests/capture.integration.test.ts` passed the paint ticks into the presented
+slot while its own comment claimed otherwise, and it type-checked.
+
+### What the finished video actually shows, and what causes it
+
+Three product runs of this branch on the AI box against the patched Chromium
+build (`~/featurecast-bench/verify-r2/art/vr{1,2,3}`, 2026-09-12), measured on
+`output.mp4` by frame comparison over all scroll windows: **30.6%, 34.1% and
+31.3%** of output frames show nothing new at the tightest threshold (0.05
+mean grey levels), rising to 37.6%, 41.8% and 40.8% at the loosest (1.0).
+
+The accounting below is built so its categories cannot overlap, and the
+denominator is the same for every row: every output frame inside a scroll
+window, compared against the frame before it, is assigned to exactly one of
+them.
+
+| cause                                                         | `vr1` | `vr2` | `vr3` |
+| ------------------------------------------------------------- | ----- | ----- | ----- |
+| the compositor presented nothing new in that 16.7 ms slot     | 5.3%  | 7.9%  | 6.6%  |
+| it presented, but the capture never received the frame        | 19.9% | 21.1% | 20.0% |
+| the capture received a new frame whose picture did not change | 5.3%  | 5.0%  | 4.7%  |
+| a new picture                                                 | 69.4% | 65.9% | 68.7% |
+| denominator (output frames in scroll windows)                 | 487   | 478   | 485   |
+
+The disjointness is by construction rather than by claim: a slot that reuses
+the previous source frame cannot show a new picture, and the first two rows
+partition exactly those slots by whether a presentation instant fell inside
+them. The previous version of this table did claim it, and was wrong. It
+counted the ceiling as "no presentation instant in this slot" without
+requiring the slot to be a repeat, so slots that advanced the source frame
+and visibly changed were charged to the compositor: `r2b` slot 2041 advanced
+from source frame 770 to 771 and changed 449 537 pixels. On the three runs
+above that same overlap covers **21, 74 and 27 slots** — and the old table's
+`10.4%` row was computed over 450 output slots while its other three rows
+were computed over 464, so its adding up to 100.0% was arithmetic luck.
+
+The second row is this pipeline's own loss and the largest fixable part.
+
+**The loss is not load-dependent, which is what makes it diagnosable.** The
+earlier claim that it was rested on a spread of 84.2 / 87.1 / 81.6% across
+three runs and one older run at 98.1%. Measured against load directly, three
+product runs scored 80.2% at load 17, 81.9% at load 2 and 82.1% at load 20 —
+no dependence, and the spread is run-to-run noise. The loss is stable and
+concentrated: the sort windows capture 1–2 of 15–17 presentations, and the
+right-scroll reproducibly 4 of 13–14. That is a finding for #17, not weather.
+
+### Acceptance point 1 belongs to the frame supply, not to this document
+
+The ticket asks for under 10% unchanged output frames. The ceiling on that —
+the share of output slots in which Chromium presented nothing at all, i.e.
+what the run would still repeat with a perfect capture **and** a perfect
+clock — is **9.7%, 23.4% and 12.2%** on the three runs above, and 8.4 / 10.4 /
+11.5 / 12.1 / 19.5 / 23.0% over six runs measured independently. One of six
+is under 10%.
+
+So in most runs the target is not reachable by any change to the timeline or
+to the capture path. How many frames arrive at all is decided by the frame
+supplier, which is #17 and #2. This ticket delivers the timebase and an
+honest measuring instrument; it does not deliver that number, and no version
+of it will.
+
+### Re-basing the timeline onto the presentation times: rejected, then the rejection withdrawn
+
+The obvious remaining suspect was the clock. `metadata.timestamp` is an
+arrival stamp, arrival jitter is a few milliseconds, and the output grid is
+16.7 ms wide — so two frames presented one refresh apart can land in one
+output slot, and some other slot repeats. Modelled as slot occupancy the
+effect looks large: placing each captured frame on the latest presentation
+instant at or before its arrival takes the empty-slot share from 32.9% to
+23.1% on `r2b` and from 27.8% to 20.6% on `r2c`.
+
+Round two built that, measured the finished videos, found them **worse**
+(`r2b` 21.8% → 28.5%, `vt1` 23.5% → 25.2%) and concluded that the slot model
+is wrong. **Both halves of that conclusion have since been withdrawn, and the
+experiment behind them does not support anything.**
+
+The experiment was not the controlled comparison it described itself as. Its
+own manifest went from 1581 `file` lines to 1541: the re-basing **deleted 40
+frames** before ffmpeg ever ran, each of them the earlier partner of a shared
+presentation instant, and the implementation named that `foldedFrameCount`
+while its guard let the run through. A second, independent loss on top:
+presentation instants sit on the 60 Hz grid themselves, 435 of 1540 landed on
+a slot boundary, and the collisions inside the scroll windows rose from 0 to
+35 at identical frame count — surviving distinct source frames in those
+windows fell from 354 to 308. "Same frames, same encoder, same command, only
+the timestamps changed" was literally untrue.
+
+The model it was used to refute is also wrong in the other direction.
+`fps=60` **does** delete frames that share an output slot, and it keeps the
+**later** one. Measured through exactly the production chain — 32 source
+images each carrying its index as a five-bit barcode, concat demuxer,
+`option framerate 1000`, `fps=60`, libx264, so it is known frame by frame
+which source image reaches which output slot
+(`~/featurecast-bench/verify-r2/verify-r2-fpsprobe2.sh`):
+
+| case                   | result                                        |
+| ---------------------- | --------------------------------------------- |
+| even 16.667 ms spacing | 24 output frames, identity, nothing lost      |
+| two frames in one slot | **source frame 2 appears in no output frame** |
+| realistic jitter       | **source frames 1 and 8 deleted entirely**    |
+| a 55 ms hole           | frame 3 repeated three times, nothing lost    |
+
+So "re-basing does not help" is unproven, not disproven, and the lever is
+still open. It is deliberately not pursued here: this ticket is the timebase
+and the measuring instrument, and re-opening the re-basing needs a controlled
+experiment that does not lose frames on the way in. A finer ffconcat timebase
+(`option framerate 1000000` instead of `1000`) moved each timeline by about a
+point in opposite directions, so 1 ms quantisation is not the cause of
+anything either way.
+
+### The exact mapping exists, and needs the patch
+
+For the record, because the next attempt will find it: Chromium writes the
+presentation time of every _captured_ frame into the same trace, as
+`Capture` events in category `gpu.capture` carrying `frame_number` and
+`timestamp_micros`. On the patched build the books balance exactly —
+capture events equal delivered frames plus folded duplicates, difference
+**0** on all three repeats (1607, 1634, 1608). On the stock and unpatched
+builds they do not: Chromium discards 70 to 110 frames it had already
+captured (`stock` 70/77, `unpatched` 92/104/110), so a mapping built there
+would silently move content in time. The exact mapping is therefore
+available only behind #17's patch. Whether it would buy anything is open: the
+one experiment that said no deleted 40 frames on its way in.

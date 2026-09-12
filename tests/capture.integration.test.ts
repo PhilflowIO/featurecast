@@ -12,6 +12,7 @@ import {
 } from '../src/capture.js'
 import { computeCaptureEfficiencyReport } from '../src/efficiency.js'
 import { readPaintTimestamps, startPaintRateProbe } from '../src/paint-rate.js'
+import { startPresentedFrameTrace } from '../src/presented.js'
 import { HARDWARE_GL_LAUNCH_ARGS } from '../src/renderer.js'
 
 const directories: string[] = []
@@ -61,11 +62,17 @@ describe('captureScreencast against real Chromium', () => {
     // which measured 33.8-38.3fps under full-suite load versus 60fps in
     // isolation on this box — an absolute "fps >= 50" threshold is a flaky
     // assertion about machine load, not about this pipeline. Capture
-    // efficiency (captured / painted, both counted on the same in-page
-    // clock via `paint-rate.ts`) stays load-independent: if the host slows
-    // both the page's paint and this pipeline's capture proportionally, the
-    // ratio is unaffected, so a regression here means a real loss, not a
-    // busy machine.
+    // efficiency stays load-independent: if the host slows both the
+    // compositor and this pipeline's capture proportionally, the ratio is
+    // unaffected, so a regression here means a real loss, not a busy
+    // machine.
+    //
+    // The denominator is Chromium's own presented-frame trace, the same one
+    // the product path uses. It used to be the in-page change-tick probe,
+    // passed into the presented-timestamps parameter while the surrounding
+    // comment claimed otherwise — the exact silent-wrong-denominator
+    // substitution that an optional parameter with a default invites, and
+    // the reason that parameter is now required.
     const browser = await chromium.launch({
       args: [...HARDWARE_GL_LAUNCH_ARGS],
       headless: true,
@@ -74,6 +81,7 @@ describe('captureScreencast against real Chromium', () => {
       const context = await browser.newContext({ viewport: CAPTURE_SIZE })
       const page = await context.newPage()
       await page.setContent(ANIMATED_FIXTURE)
+      const presentedFrames = await startPresentedFrameTrace(browser, page)
       await startPaintRateProbe(page)
 
       const outputDirectory = join(await temporaryDirectory(), 'capture')
@@ -81,10 +89,11 @@ describe('captureScreencast against real Chromium', () => {
         page,
         outputDirectory,
         async () => {
-          await page.waitForTimeout(2_000)
+          await page.waitForTimeout(8_000)
         },
       )
       const paintTimestamps = await readPaintTimestamps(page)
+      const presentedTimestamps = await presentedFrames.stop()
 
       const manifest = JSON.parse(
         await readFile(capture.timestampsPath, 'utf8'),
@@ -112,7 +121,24 @@ describe('captureScreencast against real Chromium', () => {
             start: manifest.session.startedAt,
           },
         ],
+        presentedTimestamps,
         paintTimestamps,
+      )
+      // The trace has to have reached this assertion, or "85% efficient" is
+      // a statement about an empty denominator: `computeCaptureEfficiencyReport`
+      // scores a window with zero presentations as 100%.
+      expect(
+        efficiencyReport.windows[0]?.presentedFrameCount ?? 0,
+      ).toBeGreaterThan(30)
+      // And the denominator must be instants, not Chromium's reports of
+      // them: a report-counting denominator lands far above what the display
+      // can produce. The rate is the one read off this machine's own
+      // presentation instants, not a hard-wired 60 — the recording runs 8s
+      // rather than 2s so there are enough gaps to read it to better than a
+      // frame (`MIN_GAPS_FOR_REFRESH_ESTIMATE`).
+      expect(efficiencyReport.refreshHz).toBeGreaterThan(24)
+      expect(efficiencyReport.windows[0]?.presentedFps ?? 0).toBeLessThan(
+        efficiencyReport.refreshHz + 4,
       )
       // 85%, not the production 95% floor (`src/efficiency.ts`): this
       // fixture's window includes screencast start/stop settling time the

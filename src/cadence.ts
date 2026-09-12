@@ -8,8 +8,11 @@ import type { RendererInfo } from './renderer.js'
 const STATIC_INTERVAL_THRESHOLD_MS = 20
 
 export type SourceCadenceReport = {
-  /** Frames whose CDP timestamp regressed a few ms and was clamped forward; see `capture.ts`. */
-  clampedTimestampCount: number
+  /**
+   * Frames that shared a capture timestamp with their neighbour and were
+   * folded away by `orderFramesByCaptureTime`; see `capture.ts`. Expected 0.
+   */
+  coincidentTimestampCount: number
   /**
    * Byte-identical redelivered source frames `captureScreencast` folded
    * into the previous frame's duration instead of writing to disk (see
@@ -20,6 +23,14 @@ export type SourceCadenceReport = {
    */
   droppedDuplicateFrameCount: number
   frameCount: number
+  /**
+   * Frames Chromium's screencast delivered out of the order it stamped them
+   * in, restored to capture order by `orderFramesByCaptureTime`; see
+   * `capture.ts`. Reported because it is the only remaining trace of the
+   * reordering, and because a sudden jump in it would mean the encode
+   * pipeline changed depth under us.
+   */
+  outOfDeliveryOrderFrameCount: number
   medianIntervalMs: number
   p95IntervalMs: number
   /** WebGL renderer string active during capture; see `renderer.ts`. */
@@ -75,6 +86,12 @@ export function computeMotionWindowCadence(
  * deduplication happens in `captureScreencast`'s writer before a frame ever
  * reaches disk (see `droppedDuplicateFrameCount` above), so this should
  * always pass on output from a working capture.
+ *
+ * Note that "adjacent" here means adjacent by file name, i.e. adjacent in
+ * *delivery* order. Since `orderFramesByCaptureTime` sorts the manifest by
+ * capture timestamp, file-name order and timeline order are no longer the
+ * same sequence; this check is therefore a net over the delivery stream,
+ * which is exactly where the redelivery artifact it looks for happens.
  */
 export async function validateNoDuplicateAdjacentFrames(
   framesDirectory: string,
@@ -121,7 +138,8 @@ function percentile(sorted: readonly number[], fraction: number): number {
 export function computeSourceCadence(
   manifest: TimestampManifest,
   droppedDuplicateFrameCount = 0,
-  clampedTimestampCount = 0,
+  outOfDeliveryOrderFrameCount = 0,
+  coincidentTimestampCount = 0,
 ): SourceCadenceReport {
   const intervals: number[] = []
   for (let index = 1; index < manifest.frames.length; index += 1) {
@@ -135,10 +153,11 @@ export function computeSourceCadence(
 
   if (intervals.length === 0) {
     return {
-      clampedTimestampCount,
+      coincidentTimestampCount,
       droppedDuplicateFrameCount,
       frameCount: manifest.frames.length,
       medianIntervalMs: 0,
+      outOfDeliveryOrderFrameCount,
       p95IntervalMs: 0,
       shareUnderTwentyMs: 0,
     }
@@ -150,10 +169,11 @@ export function computeSourceCadence(
       .length / intervals.length
 
   return {
-    clampedTimestampCount,
+    coincidentTimestampCount,
     droppedDuplicateFrameCount,
     frameCount: manifest.frames.length,
     medianIntervalMs: percentile(sorted, 0.5),
+    outOfDeliveryOrderFrameCount,
     p95IntervalMs: percentile(sorted, 0.95),
     shareUnderTwentyMs,
   }
@@ -165,12 +185,14 @@ export async function writeCaptureStats(
   manifest: TimestampManifest,
   droppedDuplicateFrameCount = 0,
   renderer?: RendererInfo,
-  clampedTimestampCount = 0,
+  outOfDeliveryOrderFrameCount = 0,
+  coincidentTimestampCount = 0,
 ): Promise<SourceCadenceReport> {
   const cadence = computeSourceCadence(
     manifest,
     droppedDuplicateFrameCount,
-    clampedTimestampCount,
+    outOfDeliveryOrderFrameCount,
+    coincidentTimestampCount,
   )
   const report: SourceCadenceReport =
     renderer === undefined ? cadence : { ...cadence, renderer }

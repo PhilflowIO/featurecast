@@ -6,6 +6,8 @@ import { promisify } from 'node:util'
 
 import { describe, expect, it } from 'vitest'
 
+import { assertTsxCli } from './support/tsx-cli.js'
+
 const execFileAsync = promisify(execFile)
 
 function sha256(content: string): string {
@@ -34,8 +36,8 @@ describe('occluded target search determinism across processes', () => {
     await Promise.all(
       runs.map((run) =>
         execFileAsync(
-          'pnpm',
-          ['exec', 'tsx', 'demo/occluded-target-determinism-smoke.ts', run],
+          assertTsxCli(),
+          ['demo/occluded-target-determinism-smoke.ts', run],
           { cwd: process.cwd() },
         ),
       ),

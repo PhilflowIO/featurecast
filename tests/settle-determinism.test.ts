@@ -6,6 +6,8 @@ import { promisify } from 'node:util'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { assertTsxCli } from './support/tsx-cli.js'
+
 const execFileAsync = promisify(execFile)
 
 function sha256(content: string): string {
@@ -66,8 +68,8 @@ describe.each(['pulsing', 'bounce', 'asymmetric'])(
       await Promise.all(
         runs.map((run) =>
           execFileAsync(
-            'pnpm',
-            ['exec', 'tsx', 'demo/settle-determinism-smoke.ts', caseName, run],
+            assertTsxCli(),
+            ['demo/settle-determinism-smoke.ts', caseName, run],
             { cwd: process.cwd() },
           ),
         ),

@@ -21,6 +21,7 @@ import {
   warmUpOnlyDash,
 } from '../src/m1-benchmark.js'
 import { readPaintTimestamps, startPaintRateProbe } from '../src/paint-rate.js'
+import { startPresentedFrameTrace } from '../src/presented.js'
 import { probeOutput } from '../src/probe.js'
 import {
   createRecorder,
@@ -82,6 +83,12 @@ try {
 
   const runInteractions = createRecorder(capturedPageRuntime(page))
   let motionWindows: MotionWindow[] = []
+  // Chromium's own presented-frame count, the denominator capture
+  // efficiency is measured against. Started before the capture so no
+  // presented frame of the recording falls outside it; read only after the
+  // recording has finished, so the trace never competes with the screencast
+  // on the CDP channel while frames are flowing. See `src/presented.ts`.
+  const presentedFrames = await startPresentedFrameTrace(browser, page)
   const capture = await captureScreencast(page, outputDirectory, async () => {
     // Started right before the scripted motion begins, on the same
     // Date.now()-domain clock the motion windows below and the capture
@@ -98,6 +105,7 @@ try {
     )
   })
   const paintTimestamps = await readPaintTimestamps(page)
+  const presentedTimestamps = await presentedFrames.stop()
   const manifest = JSON.parse(
     await readFile(capture.timestampsPath, 'utf8'),
   ) as TimestampManifest
@@ -112,10 +120,11 @@ try {
     manifest,
     capture.droppedDuplicateFrameCount,
     rendererInfo,
-    capture.clampedTimestampCount,
+    capture.outOfDeliveryOrderFrameCount,
+    capture.coincidentTimestampCount,
   )
   console.log(
-    `source cadence: ${String(cadence.frameCount)} frames, median ${cadence.medianIntervalMs.toFixed(2)}ms, p95 ${cadence.p95IntervalMs.toFixed(2)}ms, ${(cadence.shareUnderTwentyMs * 100).toFixed(1)}% of gaps <=20ms, ${String(cadence.droppedDuplicateFrameCount)} duplicate source frames folded away`,
+    `source cadence: ${String(cadence.frameCount)} frames, median ${cadence.medianIntervalMs.toFixed(2)}ms, p95 ${cadence.p95IntervalMs.toFixed(2)}ms, ${(cadence.shareUnderTwentyMs * 100).toFixed(1)}% of gaps <=20ms, ${String(cadence.droppedDuplicateFrameCount)} duplicate source frames folded away, ${String(cadence.outOfDeliveryOrderFrameCount)} frames restored to capture order`,
   )
 
   const { durationSeconds } = await assembleScreencast(
@@ -175,22 +184,37 @@ try {
   )
 
   // Content-independent acceptance gate: did we capture essentially
-  // everything the page actually painted, regardless of how fast (or slow)
-  // that paint rate was. See `src/efficiency.ts` for the measured evidence
-  // behind the 95% floor and why the app's own paint rate is never gated.
+  // everything Chromium actually put on screen, regardless of how fast (or
+  // slow) it was putting it there. See `src/efficiency.ts` for the measured
+  // evidence behind the 95% floor, why the app's own rate is never gated,
+  // and why the denominator is Chromium's presented-frame count rather than
+  // anything this pipeline counts for itself.
   const efficiencyReport = computeCaptureEfficiencyReport(
     manifest,
     motionWindows,
+    presentedTimestamps,
     paintTimestamps,
   )
   await writeCaptureEfficiencyReport(outputDirectory, efficiencyReport)
+  // The denominator itself, not just the counts derived from it. Without
+  // this file every claim about capture efficiency has to be taken on
+  // trust: the trace is discarded at the end of the run, so nobody can
+  // re-derive the presentation instants afterwards, re-check them against
+  // the 60Hz refresh, or compare them to what the finished video shows.
+  // Round one's denominator was wrong by half and the artifacts carried no
+  // way to notice.
+  await writeFile(
+    `${outputDirectory}/presented.json`,
+    `${JSON.stringify(presentedTimestamps)}\n`,
+  )
   console.log(
     `capture efficiency: ${(efficiencyReport.overallEfficiency * 100).toFixed(1)}% ` +
-      `(${String(efficiencyReport.overallCapturedFrameCount)} of ${String(efficiencyReport.overallPaintedFrameCount)} painted frames captured, gated at 95%)`,
+      `(${String(efficiencyReport.overallCapturedFrameCount)} of ${String(efficiencyReport.overallPresentedFrameCount)} presented frames captured, gated at 95%)`,
   )
   for (const window of efficiencyReport.windows) {
     console.log(
-      `  ${window.label}: painted ${window.paintedFps.toFixed(1)}fps (app's own rate, context only), ` +
+      `  ${window.label}: presented ${window.presentedFps.toFixed(1)}fps (app's own rate, context only), ` +
+        `in-page change ticks ${String(window.paintedFrameCount)} (context only), ` +
         `efficiency ${(window.efficiency * 100).toFixed(1)}%`,
     )
   }

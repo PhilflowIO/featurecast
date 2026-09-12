@@ -64,17 +64,28 @@ export type TimestampManifest = {
 }
 
 export type ScreencastCapture = {
-  /** Frames whose CDP timestamp regressed by a few ms and was clamped forward; see `captureScreencast`. */
-  clampedTimestampCount: number
+  /**
+   * Frames that shared a capture timestamp with the frame before them and
+   * could therefore never both be on screen; see `orderFramesByCaptureTime`.
+   * Expected to be 0 — Chromium stamps with microsecond resolution.
+   */
+  coincidentTimestampCount: number
   /** Source frames folded into the previous distinct frame's duration; see `captureScreencast`. */
   droppedDuplicateFrameCount: number
   framesDirectory: string
+  /**
+   * Frames Chromium delivered later than a frame it had stamped after them,
+   * i.e. reordered by the asynchronous JPEG encode; see `captureScreencast`.
+   * These are restored to capture order, not clamped — a nonzero count is
+   * normal and costs nothing.
+   */
+  outOfDeliveryOrderFrameCount: number
   timestampsPath: string
 }
 
 type WriterResult = {
-  clampedTimestampCount: number
   droppedDuplicateFrameCount: number
+  outOfDeliveryOrderFrameCount: number
 }
 
 function frameFileName(index: number): string {
@@ -224,55 +235,65 @@ export async function captureScreencast(
 
     queue = createFrameQueue(maxQueuedBytes)
     let frameIndex = 0
-    let previousTimestamp: number | undefined
+    let previousDeliveredTimestamp: number | undefined
     let previousWrittenFrameData: Buffer | undefined
     let droppedDuplicateFrameCount = 0
-    let clampedTimestampCount = 0
+    let outOfDeliveryOrderFrameCount = 0
 
     const writer = (async (): Promise<WriterResult> => {
-      for await (const rawFrame of queue.drain()) {
-        // CDP's screencast timestamp is not monotonic under fast
-        // (hardware-GL, see renderer.ts) capture. This is proven, not
-        // guessed: instrumenting playwright-core's own
-        // `CRPage._onScreencastFrame` (the Chromium `Page.screencastFrame`
-        // handler, which computes
-        // `frameSwapWallTime: payload.metadata.timestamp ? payload.metadata.timestamp * 1e3 : Date.now()`)
-        // against a real acceptance run logged every frame's raw CDP
-        // `metadata.timestamp` alongside `Date.now()`. Result: 0 of 671
-        // frames were missing `metadata.timestamp` (so the `Date.now()`
-        // fallback — mixing a browser-clock timestamp with a Node-clock one
-        // — never fired; that hypothesis is refuted for this pipeline).
-        // Every one of the 6 regressions that run produced (3.7-18.1ms)
-        // carried a genuine, non-fallback `metadata.timestamp` on both the
-        // regressing frame and its predecessor, and the *next* frame after
-        // each regression always jumped forward past both — i.e. Chromium
-        // itself hands two adjacent screencast frames real capture
-        // timestamps that are briefly out of order. `onFrame` still fires
-        // in true delivery order (Playwright's own guarantee this file
-        // already relies on below), so this is JPEG-encode-completion
-        // reordering inside Chromium's screencast pipeline (frames are
-        // encoded asynchronously; encode completion, which drives CDP
-        // delivery order, can occasionally finish a hair out of step with
-        // the compositor's own capture-time stamps) — not a Node/browser
-        // clock-mixing artifact, and not GC pauses. Delivery order is the
-        // trustworthy signal; clamping the *timestamp* forward to match
-        // delivery order is therefore correct regardless of the
-        // regression's size: worst case, one frame's duration is
-        // misattributed by that many ms, negligible in a 20s+ video. Every
-        // regression is clamped and counted, with no ceiling that throws;
-        // real session corruption would show as timestamps off by seconds
-        // or more, which would still surface as a nonsensical
-        // `capture-stats.json` clampedTimestampCount relative to
-        // frameCount, not silently.
-        let frame = rawFrame
+      for await (const frame of queue.drain()) {
+        // Delivery order and capture order are two different things, and the
+        // timestamp is the one that carries capture order. Proven from the
+        // pinned Chromium tree
+        // (`~/featurecast-bench/chromium-patch/chromium/src`, 153.0.8010.12):
+        // `BuildScreencastFrameMetadata` stamps
+        // `.SetTimestamp(base::Time::Now().InSecondsFSinceUnixEpoch())`
+        // (`content/browser/devtools/protocol/page_handler.cc:178`) inside
+        // `OnFrameFromVideoConsumer` (same file, 1814-1861), which runs once
+        // per frame on a single browser-process sequence in the order viz
+        // delivers frames — and viz itself refuses to deliver out of order
+        // (`media/capture/content/video_capture_oracle.cc:270-277` drops a
+        // frame whose number is below the last delivered one). Only *after*
+        // stamping does `ScreencastFrameCaptured` hand the bitmap to
+        // `base::ThreadPool` for JPEG encoding, and the CDP event is emitted
+        // from the encode's reply, `ScreencastFrameEncoded` (same file,
+        // 1864-1893). Encodes therefore finish — and frames therefore arrive
+        // — in whatever order the thread pool completes them, while the
+        // timestamps were assigned strictly in order.
+        //
+        // The previous version of this code had the polarity backwards: it
+        // treated delivery order as authoritative and clamped a regressing
+        // timestamp forward onto its predecessor. Measured on a real
+        // acceptance run, that produced 42 clamps and 37 resulting zero
+        // gaps; `buildCaptureTimeline` gives a zero-gap frame no dwell time
+        // at all, so it vanishes from the video and its neighbour holds for
+        // twice as long. We now keep every timestamp exactly as Chromium
+        // stamped it and restore capture order by sorting the manifest at
+        // the end of the session (`orderFramesByCaptureTime`), which
+        // destroys no information and creates no zero gaps.
+        //
+        // Note what `metadata.timestamp` is *not*: it is not the moment the
+        // compositor produced or presented the frame. Chromium has that
+        // number one field away — the capturer writes the oracle-smoothed
+        // presentation time onto the VideoFrame
+        // (`components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.cc:1511`,
+        // `frame->set_timestamp(media_ticks - *first_frame_media_ticks_)`)
+        // and ships it over mojo as `info->timestamp` (same file, 1527),
+        // where `DevToolsVideoConsumer::OnFrameCaptured` puts it back on the
+        // frame (`content/browser/devtools/devtools_video_consumer.cc:182-185`)
+        // — but `PageHandler` never reads it back out. So the best timebase
+        // reachable over CDP is a browser-process arrival stamp, roughly one
+        // IPC hop after presentation, and that is what this manifest holds.
         if (
-          previousTimestamp !== undefined &&
-          frame.timestamp < previousTimestamp
+          previousDeliveredTimestamp !== undefined &&
+          frame.timestamp < previousDeliveredTimestamp
         ) {
-          clampedTimestampCount += 1
-          frame = { ...frame, timestamp: previousTimestamp }
+          outOfDeliveryOrderFrameCount += 1
         }
-        previousTimestamp = frame.timestamp
+        previousDeliveredTimestamp = Math.max(
+          previousDeliveredTimestamp ?? frame.timestamp,
+          frame.timestamp,
+        )
 
         // `page.screencast` is documented to emit a frame only when the page
         // repaints, but in practice it occasionally redelivers a
@@ -308,7 +329,7 @@ export async function captureScreencast(
           },
         })
       }
-      return { clampedTimestampCount, droppedDuplicateFrameCount }
+      return { droppedDuplicateFrameCount, outOfDeliveryOrderFrameCount }
     })().catch((error: unknown) => {
       const normalized =
         error instanceof Error ? error : new Error(String(error))
@@ -375,6 +396,8 @@ export async function captureScreencast(
     await stop()
     queue.close()
     const writerResult = await writer
+    const ordered = orderFramesByCaptureTime(manifest.frames)
+    manifest.frames = ordered.frames
     validateCaptureManifest(manifest)
 
     await writeFile(timestampsPath, `${JSON.stringify(manifest, null, 2)}\n`, {
@@ -383,6 +406,7 @@ export async function captureScreencast(
 
     return {
       ...writerResult,
+      coincidentTimestampCount: ordered.coincidentTimestampCount,
       framesDirectory,
       timestampsPath,
     }
@@ -431,6 +455,39 @@ async function removeCaptureDirectorySafely(
   }
 }
 
+/**
+ * Restores capture order from the timestamps Chromium stamped, which the
+ * asynchronous JPEG encode in `PageHandler::ScreencastFrameCaptured` is free
+ * to scramble on the way out (see the long comment in `captureScreencast`).
+ *
+ * The sort is stable, so frames that share a timestamp keep the order they
+ * were delivered in; of such a group only the last survives, because an
+ * earlier one has zero time on screen by construction. That fold is counted,
+ * never silent. Everything here is a pure function of the delivered
+ * sequence, so two runs over the same delivery sequence produce the same
+ * manifest — the determinism the acceptance run measures end to end.
+ */
+export function orderFramesByCaptureTime(
+  frames: readonly TimestampManifest['frames'][number][],
+): {
+  coincidentTimestampCount: number
+  frames: TimestampManifest['frames']
+} {
+  const sorted = [...frames].sort((a, b) => a.timestamp - b.timestamp)
+  const result: TimestampManifest['frames'] = []
+  let coincidentTimestampCount = 0
+  for (const frame of sorted) {
+    const previous = result.at(-1)
+    if (previous !== undefined && previous.timestamp === frame.timestamp) {
+      coincidentTimestampCount += 1
+      result[result.length - 1] = frame
+      continue
+    }
+    result.push(frame)
+  }
+  return { coincidentTimestampCount, frames: result }
+}
+
 /** Ensures capture metadata is sufficient for reproducible M1 acceptance. */
 export function validateCaptureManifest(manifest: TimestampManifest): void {
   if (
@@ -466,9 +523,15 @@ export function validateCaptureManifest(manifest: TimestampManifest): void {
     }
     if (
       !Number.isFinite(frame.timestamp) ||
-      (previousTimestamp !== undefined && frame.timestamp < previousTimestamp)
+      (previousTimestamp !== undefined && frame.timestamp <= previousTimestamp)
     ) {
-      throw new Error('Capture manifest timestamps must not decrease')
+      // Strictly increasing, not merely non-decreasing. Two frames sharing a
+      // timestamp cannot both be on screen, and `buildCaptureTimeline` would
+      // silently give the earlier one no dwell time at all — the exact defect
+      // the forward-clamping used to manufacture 37 times per run.
+      // `orderFramesByCaptureTime` folds any such pair away and counts it, so
+      // reaching here means something upstream broke the invariant.
+      throw new Error('Capture manifest timestamps must strictly increase')
     }
     previousTimestamp = frame.timestamp
   }

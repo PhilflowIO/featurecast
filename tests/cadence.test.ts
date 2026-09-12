@@ -93,10 +93,11 @@ describe('computeSourceCadence', () => {
     const report = computeSourceCadence(manifestWithTimestamps([1]))
 
     expect(report).toEqual({
-      clampedTimestampCount: 0,
+      coincidentTimestampCount: 0,
       droppedDuplicateFrameCount: 0,
       frameCount: 1,
       medianIntervalMs: 0,
+      outOfDeliveryOrderFrameCount: 0,
       p95IntervalMs: 0,
       shareUnderTwentyMs: 0,
     })
