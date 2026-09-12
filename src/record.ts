@@ -1479,32 +1479,50 @@ async function readValidatedBoundingBox(
   return raw
 }
 
-/** How far, in px, an edge/corner probe sits inside the visible intersection. */
+/** How far, in px, a grid probe sits inside the visible intersection. */
 const EDGE_PROBE_INSET_PX = 4
+/**
+ * Spacing between deterministic grid probe points, in px — a real, fixed
+ * upper bound on the gap between two probes, not an average that degrades
+ * as the target grows. Fine enough to guarantee finding a contiguous free
+ * region as small as this many px wherever it sits (issue #13): with
+ * probes spaced <= a region's own width apart, at least one probe must
+ * land inside it, by the pigeonhole principle over the region's span.
+ * The previous search was nine fixed points (center, edge midpoints,
+ * corners); any free area away from all nine — a band pinched between two
+ * overlays at 78% height, say — was reported as full occlusion. A grid
+ * whose *step* grew with the target (an average spacing) would only move
+ * that failure to bigger targets; the sample count is what scales with
+ * target size here, not this step.
+ */
+const GRID_STEP_PX = 6
+/**
+ * Safety valve, not a normal-mode limiter: prevents a pathological bbox
+ * (e.g. a bug producing an absurd width) from generating an unbounded probe
+ * count. A real full-screen hero at typical recording resolutions needs a
+ * small fraction of this per axis — see the cost note in README.md.
+ */
+const GRID_MAX_SAMPLES_PER_AXIS = 500
+/** Even a sliver target still gets more than one probe row/column — a free
+ * region can be pinched from only one side. */
+const GRID_MIN_SAMPLES_PER_AXIS = 3
+
+type IntersectionRect = {
+  bottom: number
+  left: number
+  right: number
+  top: number
+}
 
 /**
- * A small, deterministic set of candidate interaction points inside the
- * visible bbox/viewport intersection: center first (the common case), then
- * a point near the middle of each edge, then each corner — inset a few
- * pixels so a probe doesn't land exactly on a boundary. This is what finds a
- * clickable sliver when most of the element is covered by something else
- * (e.g. only the bottom 20px of a 200px-tall element is below a fixed
- * header): the center alone would land on the header every time. Throws if
- * the bbox has no visible overlap with the viewport at all.
+ * Visible intersection of `bbox` with `viewport`. Throws if there is none —
+ * a target entirely off-screen needs `demo.scroll`, not a wider point
+ * search.
  */
-function candidateInteractionPoints(
+function intersectionRect(
   bbox: BoundingBox,
-  viewport: ViewportSize | null,
-): { x: number; y: number }[] {
-  if (viewport === null) {
-    return [
-      {
-        x: Math.round(bbox.x + bbox.width / 2),
-        y: Math.round(bbox.y + bbox.height / 2),
-      },
-    ]
-  }
-
+  viewport: ViewportSize,
+): IntersectionRect {
   const left = Math.max(bbox.x, 0)
   const right = Math.min(bbox.x + bbox.width, viewport.width)
   const top = Math.max(bbox.y, 0)
@@ -1518,89 +1536,245 @@ function candidateInteractionPoints(
         'into view before interacting.',
     )
   }
+  return { left, right, top, bottom }
+}
 
-  const inset = Math.min(
-    EDGE_PROBE_INSET_PX,
-    (right - left) / 2,
-    (bottom - top) / 2,
-  )
-  const xs = {
-    left: left + inset,
-    mid: (left + right) / 2,
-    right: right - inset,
-  }
-  const ys = {
-    top: top + inset,
-    mid: (top + bottom) / 2,
-    bottom: bottom - inset,
-  }
-  const raw: [number, number][] = [
-    [xs.mid, ys.mid],
-    [xs.mid, ys.top],
-    [xs.mid, ys.bottom],
-    [xs.left, ys.mid],
-    [xs.right, ys.mid],
-    [xs.left, ys.top],
-    [xs.right, ys.top],
-    [xs.left, ys.bottom],
-    [xs.right, ys.bottom],
-  ]
-  const clampToViewport = (x: number, y: number): { x: number; y: number } => ({
+function clampToViewport(
+  x: number,
+  y: number,
+  viewport: ViewportSize,
+): { x: number; y: number } {
+  return {
     x: Math.min(Math.max(Math.round(x), 0), viewport.width - 1),
     y: Math.min(Math.max(Math.round(y), 0), viewport.height - 1),
-  })
-  const points = raw.map(([x, y]) => clampToViewport(x, y))
-  return points.filter(
-    (point, index) =>
-      points.findIndex(
-        (other) => other.x === point.x && other.y === point.y,
-      ) === index,
+  }
+}
+
+function gridAxisSamples(lengthPx: number): number {
+  const estimated = Math.ceil(lengthPx / GRID_STEP_PX) + 1
+  return Math.min(
+    Math.max(estimated, GRID_MIN_SAMPLES_PER_AXIS),
+    GRID_MAX_SAMPLES_PER_AXIS,
   )
 }
 
+function linspace(start: number, end: number, count: number): number[] {
+  if (count <= 1) return [(start + end) / 2]
+  const step = (end - start) / (count - 1)
+  return Array.from({ length: count }, (_unused, index) => start + step * index)
+}
+
+type GridPoint = { col: number; row: number; x: number; y: number }
+
 /**
- * Hit-tests a candidate point against the live DOM: does the element that
- * actually paints at these coordinates right now equal the target or one of
- * its descendants? This — not the geometry alone — is the ground truth for
- * "would a real click here land on the target", and it catches occlusion
- * (something else on top) the same way it catches the target having moved.
- * The callback contains no named nested function: tsx compiles with
- * esbuild's `keepNames: true`, which would otherwise wrap it in a
- * `__name(...)` call that doesn't exist once this source text is serialized
- * into the page (see tests/tsx-pipeline.test.ts).
+ * A deterministic grid of probe points spanning the visible intersection
+ * (inset a few px so a probe doesn't land exactly on a boundary between an
+ * overlay and the free area next to it). Row/col indices are what the flood
+ * fill in `largestFreeRegionPoint` walks to find a contiguous free region
+ * wherever it actually is, instead of assuming it's at an edge or corner.
+ */
+function candidateGrid(
+  rect: IntersectionRect,
+  viewport: ViewportSize,
+): GridPoint[] {
+  const inset = Math.min(
+    EDGE_PROBE_INSET_PX,
+    (rect.right - rect.left) / 2,
+    (rect.bottom - rect.top) / 2,
+  )
+  const left = rect.left + inset
+  const right = rect.right - inset
+  const top = rect.top + inset
+  const bottom = rect.bottom - inset
+  const xs = linspace(left, right, gridAxisSamples(right - left))
+  const ys = linspace(top, bottom, gridAxisSamples(bottom - top))
+
+  const points: GridPoint[] = []
+  ys.forEach((y, row) => {
+    xs.forEach((x, col) => {
+      const clamped = clampToViewport(x, y, viewport)
+      points.push({ row, col, x: clamped.x, y: clamped.y })
+    })
+  })
+  return points
+}
+
+/**
+ * Hit-tests an entire probe grid against the live DOM in a single round
+ * trip, not one `evaluate()` per point — every probe reads the same DOM
+ * snapshot instead of racing a page that could change mid-search (e.g. an
+ * overlay finishing its own entrance animation between two sequential
+ * probes). No named function in the payload: tsx compiles with esbuild's
+ * `keepNames: true`, which would otherwise wrap a named function in an
+ * injected `__name(...)` call that doesn't exist once this source text is
+ * serialized into the page (see tests/tsx-pipeline.test.ts).
+ */
+async function hitTestPoints(
+  locator: LocatorLike,
+  points: { x: number; y: number }[],
+): Promise<boolean[]> {
+  const result = await locator.evaluate(
+    (element, arg) =>
+      arg.points.map((point) => {
+        const hit = document.elementFromPoint(point.x, point.y)
+        return hit !== null && (hit === element || element.contains(hit))
+      }),
+    { points },
+  )
+  return result as boolean[]
+}
+
+/**
+ * Hit-tests a single candidate point against the live DOM: does the element
+ * that actually paints at these coordinates right now equal the target or
+ * one of its descendants? This — not the geometry alone — is the ground
+ * truth for "would a real click here land on the target", and it catches
+ * occlusion (something else on top) the same way it catches the target
+ * having moved.
  */
 async function hitsTarget(
   locator: LocatorLike,
   point: { x: number; y: number },
 ): Promise<boolean> {
-  const result = await locator.evaluate((element, arg) => {
-    const hit = document.elementFromPoint(arg.x, arg.y)
-    return hit !== null && (hit === element || element.contains(hit))
-  }, point)
-  return result === true
+  const [hit] = await hitTestPoints(locator, [point])
+  return hit === true
 }
 
 /**
- * Finds the first candidate interaction point that actually hit-tests to the
- * target, trying center first and falling back through edges and corners.
- * Throws if the target is occluded at every candidate — a script author
- * needs to know their interaction was never sent, not get a silent miss.
+ * Finds the largest contiguous (4-connected) region of hit-testable grid
+ * cells and returns the point inside it closest to that region's centroid.
+ * This is what finds a clickable free area wherever it actually is — a band
+ * pinched between two overlays at, say, 70% height, not just a sliver at an
+ * edge or corner. The centroid, not the first hit found, is what keeps the
+ * chosen point away from the region's own boundary, where an overlay's
+ * anti-aliased edge or a one-frame-later reflow is most likely to take it
+ * back. Deterministic: for the same grid and the same hit results, the same
+ * region and the same point win every time — region size ties keep the
+ * first-scanned (row-major) region, and the nearest-to-centroid search runs
+ * over that region in a fixed order, so nothing here depends on
+ * iteration/timing happenstance.
+ */
+function largestFreeRegionPoint(
+  points: GridPoint[],
+  hits: boolean[],
+): GridPoint | null {
+  const key = (row: number, col: number): string =>
+    `${String(row)}:${String(col)}`
+  const hitAt = new Map<string, GridPoint>()
+  points.forEach((point, index) => {
+    if (hits[index] === true) hitAt.set(key(point.row, point.col), point)
+  })
+
+  const visited = new Set<string>()
+  let bestRegion: GridPoint[] = []
+  for (const start of points) {
+    const startKey = key(start.row, start.col)
+    if (!hitAt.has(startKey) || visited.has(startKey)) continue
+
+    const region: GridPoint[] = []
+    const queue: GridPoint[] = [start]
+    visited.add(startKey)
+    while (queue.length > 0) {
+      const current = queue.shift()!
+      region.push(current)
+      const neighbors: [number, number][] = [
+        [current.row - 1, current.col],
+        [current.row + 1, current.col],
+        [current.row, current.col - 1],
+        [current.row, current.col + 1],
+      ]
+      for (const [row, col] of neighbors) {
+        const neighborKey = key(row, col)
+        const neighbor = hitAt.get(neighborKey)
+        if (neighbor && !visited.has(neighborKey)) {
+          visited.add(neighborKey)
+          queue.push(neighbor)
+        }
+      }
+    }
+    if (region.length > bestRegion.length) bestRegion = region
+  }
+  if (bestRegion.length === 0) return null
+
+  const centroid = {
+    x: bestRegion.reduce((sum, point) => sum + point.x, 0) / bestRegion.length,
+    y: bestRegion.reduce((sum, point) => sum + point.y, 0) / bestRegion.length,
+  }
+  let closest = bestRegion[0]!
+  let closestDistance = Infinity
+  for (const candidate of bestRegion) {
+    const distance = Math.hypot(
+      candidate.x - centroid.x,
+      candidate.y - centroid.y,
+    )
+    if (distance < closestDistance) {
+      closestDistance = distance
+      closest = candidate
+    }
+  }
+  return closest
+}
+
+/**
+ * `stepPx` set means the grid search actually ran and found nothing — in
+ * which case "occluded" is honest only about *every probed point*, not
+ * about the whole target: a free region narrower than the probe step would
+ * look identical. The old message claimed full occlusion in both cases,
+ * which sent a script author looking for an overlay that wasn't there.
+ * `stepPx` unset means occlusion at the center with no viewport available
+ * to search further.
+ */
+function occlusionError(bbox: BoundingBox, stepPx?: number): Error {
+  const detail =
+    stepPx === undefined
+      ? 'is occluded at its center and no viewport is available to search further'
+      : `is occluded at every probe point spaced ${String(stepPx)}px apart — ` +
+        'either every point on it is covered by something else (an ' +
+        'overlay, a sticky header), or the only free area left is ' +
+        `narrower than the ${String(stepPx)}px probe step`
+  return new Error(
+    `Target bounding box (${String(bbox.x)}, ${String(bbox.y)}, ` +
+      `${String(bbox.width)}x${String(bbox.height)}) ${detail}. Never ` +
+      'logging an unverified interaction.',
+  )
+}
+
+/**
+ * Resolves a verified, hit-testable interaction point for `bbox`. Tries the
+ * center of the visible intersection first — the common, unoccluded case,
+ * and cheap (one hit test). Only when that's covered does it fall back to a
+ * deterministic grid search for the largest contiguous free region,
+ * wherever it is (issue #13). Throws if the target is occluded at every
+ * probe — a script author needs to know their interaction was never sent,
+ * not get a silent miss.
  */
 async function findVerifiedInteractionPoint(
   locator: LocatorLike,
   bbox: BoundingBox,
   viewport: ViewportSize | null,
 ): Promise<{ x: number; y: number }> {
-  const candidates = candidateInteractionPoints(bbox, viewport)
-  for (const candidate of candidates) {
-    if (await hitsTarget(locator, candidate)) return candidate
+  if (viewport === null) {
+    const center = {
+      x: Math.round(bbox.x + bbox.width / 2),
+      y: Math.round(bbox.y + bbox.height / 2),
+    }
+    if (await hitsTarget(locator, center)) return center
+    throw occlusionError(bbox)
   }
-  throw new Error(
-    `Target bounding box (${String(bbox.x)}, ${String(bbox.y)}, ` +
-      `${String(bbox.width)}x${String(bbox.height)}) is occluded at every ` +
-      'candidate point inside it — something else (an overlay, a sticky ' +
-      'header) is on top. Never logging an unverified interaction.',
+
+  const rect = intersectionRect(bbox, viewport)
+  const center = clampToViewport(
+    (rect.left + rect.right) / 2,
+    (rect.top + rect.bottom) / 2,
+    viewport,
   )
+  if (await hitsTarget(locator, center)) return center
+
+  const grid = candidateGrid(rect, viewport)
+  const hits = await hitTestPoints(locator, grid)
+  const point = largestFreeRegionPoint(grid, hits)
+  if (point === null) throw occlusionError(bbox, GRID_STEP_PX)
+  return { x: point.x, y: point.y }
 }
 
 function validateEvent(event: RecordEvent): void {

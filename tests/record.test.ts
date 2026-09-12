@@ -85,11 +85,13 @@ async function simulateObservedFrames(
 
 /**
  * A locator double that always hit-tests as landing on the target.
- * `evaluate()` is called with one of three shapes: `{ x, y }` (a hit test,
- * see `hitsTarget`), answered `true`; `{ windowMs, minFrames }` (see
- * `observeFrames`), answered with a simulated frame list; or `undefined`
- * (see `candidatePeriodsMs`), answered with an empty list — a fake has no
- * real `getAnimations()`, and an empty list is exactly what a plain,
+ * `evaluate()` is called with one of three shapes: `{ points }` (a hit
+ * test — see `hitTestPoints`/`hitsTarget` in src/record.ts, which batches a
+ * whole probe grid into one round trip), answered with one boolean per
+ * point, in order; `{ windowMs, minFrames }` (see `observeFrames`),
+ * answered with a simulated frame list; or `undefined` (see
+ * `candidatePeriodsMs`), answered with an empty list — a fake has no real
+ * `getAnimations()`, and an empty list is exactly what a plain,
  * non-animated element returns for real, correctly sending callers to the
  * geometric fallback.
  */
@@ -101,7 +103,10 @@ function hittableLocator(boundingBox: ReturnType<typeof vi.fn>) {
       .mockImplementation(
         (
           _pageFunction: unknown,
-          arg: { minFrames: number; windowMs: number } | undefined,
+          arg:
+            | { minFrames: number; windowMs: number }
+            | { points: unknown[] }
+            | undefined,
         ) => {
           if (arg === undefined) return Promise.resolve([])
           if ('windowMs' in arg) {
@@ -111,7 +116,7 @@ function hittableLocator(boundingBox: ReturnType<typeof vi.fn>) {
               arg.minFrames,
             )
           }
-          return Promise.resolve(true)
+          return Promise.resolve(arg.points.map(() => true))
         },
       ),
   }
@@ -849,4 +854,172 @@ describe('record', () => {
     const click = await readClick(output)
     expect(click.bbox.width).toBe(Math.round(finalWidth))
   }, 20_000)
+
+  /**
+   * A locator double whose `evaluate()` hit-tests each probe point against
+   * a caller-supplied "is this pixel free" predicate, simulating an overlay
+   * occluding part of the target. Mirrors the real contract exercised by
+   * `hittableLocator` — the settle observation (`{ windowMs, minFrames }`)
+   * and the Web-Animations probe (`undefined`) answer exactly as there;
+   * a `{ points }` hit test answers one boolean per point, in order, from
+   * the predicate.
+   */
+  function occludedLocator(
+    boundingBox: ReturnType<typeof vi.fn>,
+    isFree: (point: { x: number; y: number }) => boolean,
+  ) {
+    return {
+      boundingBox,
+      evaluate: vi
+        .fn()
+        .mockImplementation(
+          (
+            _pageFunction: unknown,
+            arg:
+              | { minFrames: number; windowMs: number }
+              | { points: { x: number; y: number }[] }
+              | undefined,
+          ) => {
+            if (arg === undefined) return Promise.resolve([])
+            if ('windowMs' in arg) {
+              return simulateObservedFrames(
+                boundingBox as () => Promise<FakeBoundingBox | null>,
+                arg.windowMs,
+                arg.minFrames,
+              )
+            }
+            return Promise.resolve(arg.points.map((point) => isFree(point)))
+          },
+        ),
+    }
+  }
+
+  it('finds the free area below an overlay covering the top of the target', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage({ height: 720, width: 1280 })
+    // Target spans y 0..300; an overlay covers everything above y=250,
+    // leaving only a 50px strip at the very bottom free.
+    page.locator.mockReturnValue(
+      occludedLocator(
+        vi.fn().mockResolvedValue({ height: 300, width: 80, x: 600, y: 0 }),
+        (point) => point.y >= 250,
+      ),
+    )
+
+    await createRecorder(runtimeFor(page))(
+      { out: output },
+      async (_page, demo) => {
+        await demo.click('#covered-from-top')
+      },
+    )
+
+    const [, clickY] = page.mouse.click.mock.calls[0]!
+    expect(clickY).toBeGreaterThanOrEqual(250)
+  })
+
+  /**
+   * The discriminating test for issue #13's point search. It picks the free
+   * band's position mathematically so that a probe grid with the *average*
+   * spacing the previous attempt used on this target (`ceil(length/8)+1`
+   * samples per axis, capped at 33 — 9.125px apart on a 300px target, with
+   * points at y = 4 + k*9.125) provably never lands inside [244, 250): its
+   * nearest points are 241.25 and 250.375, both outside. The fixed 6px
+   * `GRID_STEP_PX` (5.9592px actual spacing here) always does, and so would
+   * no fixed nine-point edge/corner search. A test using a wide free area
+   * near an edge would pass on all three and prove nothing.
+   */
+  it('finds a free band too narrow for an average-spaced grid, at the exact spacing such a grid steps over', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage({ height: 720, width: 1280 })
+    page.locator.mockReturnValue(
+      occludedLocator(
+        vi.fn().mockResolvedValue({ height: 300, width: 80, x: 600, y: 0 }),
+        (point) => point.y >= 244 && point.y < 250,
+      ),
+    )
+
+    await createRecorder(runtimeFor(page))(
+      { out: output },
+      async (_page, demo) => {
+        await demo.click('#narrow-band')
+      },
+    )
+
+    const [, clickY] = page.mouse.click.mock.calls[0]!
+    expect(clickY).toBeGreaterThanOrEqual(244)
+    expect(clickY).toBeLessThan(250)
+  })
+
+  it('finds a free band pinched between two overlays, away from the target center and every fixed edge/corner probe', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage({ height: 720, width: 1280 })
+    // Target spans y 0..300 (center at y=150, the old fixed probes sat at
+    // y in {4, 150, 296}); overlays cover y<230 and y>=260, leaving only a
+    // 230..260 band free — none of the old nine fixed points fall inside it.
+    page.locator.mockReturnValue(
+      occludedLocator(
+        vi.fn().mockResolvedValue({ height: 300, width: 80, x: 600, y: 0 }),
+        (point) => point.y >= 230 && point.y < 260,
+      ),
+    )
+
+    await createRecorder(runtimeFor(page))(
+      { out: output },
+      async (_page, demo) => {
+        await demo.click('#pinched-band')
+      },
+    )
+
+    const [, clickY] = page.mouse.click.mock.calls[0]!
+    expect(clickY).toBeGreaterThanOrEqual(230)
+    expect(clickY).toBeLessThan(260)
+  })
+
+  it('picks the same point on two separate runs against an identical occlusion (determinism)', async () => {
+    const isFree = (point: { x: number; y: number }): boolean =>
+      point.y >= 230 && point.y < 260
+    const clicks: [number, number][] = []
+
+    for (let run = 0; run < 2; run += 1) {
+      const output = await temporaryDirectory()
+      const page = fakePage({ height: 720, width: 1280 })
+      page.locator.mockReturnValue(
+        occludedLocator(
+          vi.fn().mockResolvedValue({ height: 300, width: 80, x: 600, y: 0 }),
+          isFree,
+        ),
+      )
+      await createRecorder(runtimeFor(page))(
+        { out: output },
+        async (_page, demo) => {
+          await demo.click('#pinched-band')
+        },
+      )
+      clicks.push(page.mouse.click.mock.calls[0] as [number, number])
+    }
+
+    expect(clicks[1]).toEqual(clicks[0])
+  })
+
+  it('rejects a target that is occluded at every probe point instead of guessing, naming the probe step honestly', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage({ height: 720, width: 1280 })
+    page.locator.mockReturnValue(
+      occludedLocator(
+        vi.fn().mockResolvedValue({ height: 300, width: 80, x: 600, y: 0 }),
+        () => false,
+      ),
+    )
+
+    // The message must name the probe step: the old wording claimed certain
+    // full occlusion even when the real cause could be a free area narrower
+    // than the grid's own spacing, which is a different thing to go fix.
+    await expect(
+      createRecorder(runtimeFor(page))({ out: output }, async (_page, demo) =>
+        demo.click('#fully-covered'),
+      ),
+    ).rejects.toThrow(
+      /occluded at every probe point spaced 6px apart.*narrower than the 6px probe step/,
+    )
+  })
 })
