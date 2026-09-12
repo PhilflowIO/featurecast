@@ -104,24 +104,42 @@ zwei Zielen auf gegenüberliegenden Seiten wäre das geklickte Element überhaup
 nicht im Bild. Musste das Halten gekürzt werden, sagt der Renderer es in seiner
 Ausgabe, statt die Einstellung still auf ein Bild zusammenzuschrumpfen.
 
-Zwei Interaktionen im **selben Augenblick** auf demselben oder auf zwei sich
-überlappenden Elementen sind eine einzige Einstellung: die Kamera rahmt das
-Element und hält über beide Ereignisse hinweg. Das ist der Normalfall, kein
-Sonderfall — ein zweimal umgelegter Schalter, ein zweimal gedrückter Zähler,
-ein `type` gefolgt von einem `click` auf dasselbe Feld landen im Ereignis-Log
-alle auf demselben Zeitschlitz, weil `click` den Zähler nicht weiterstellt und
-eine Bewegung auf ein Ziel, auf dem der Zeiger schon steht, keine Proben
-erzeugt. Nur zwei Interaktionen im selben Augenblick auf Elementen, die sich
-**nicht** überlappen, bricht der Renderer ab — dafür gibt es keine Kamera —,
-und nennt dabei das Mittel, das heute hilft: ein `demo.hold(…)` zwischen den
-beiden.
+Zwei Interaktionen im **selben Augenblick auf demselben Element** sind eine
+einzige Einstellung: die Kamera rahmt das Element und hält über beide Ereignisse
+hinweg. Das ist der Normalfall, kein Sonderfall — ein zweimal umgelegter
+Schalter oder ein zweimal gedrückter Zähler landen im Ereignis-Log auf demselben
+Zeitschlitz, weil `click` den Zähler nicht weiterstellt und eine Bewegung auf
+ein Ziel, auf dem der Zeiger schon steht, keine Proben erzeugt. Weil beide
+Boxen dieselbe sind, ist die Rahmung der Einstellung Bit für Bit die Rahmung
+jedes einzelnen Ereignisses.
+
+Zwei Interaktionen im selben Augenblick auf **verschiedenen** Elementen bricht
+der Renderer ab — dafür gibt es keine Kamera —, und nennt dabei das Mittel, das
+heute hilft: ein `demo.hold(…)` zwischen den beiden. Auch überlappende Elemente
+sind verschiedene Elemente: eine gemeinsame Rahmung beider wäre die Hülle, und
+die Hülle eines Symbols in einer seitenfüllenden Fläche ist die ganze Seite —
+ein „Zoom", der sich nicht bewegt.
+
+Ebenso bricht der Renderer ab, wenn zwischen zwei Interaktionen zu wenig Zeit
+liegt, um die Kamera ehrlich hinüberzubringen: das Halten der ersten Einstellung
+braucht mindestens ein Bild, die Anfahrt der zweiten mindestens acht. Ein
+Abstand, der beides nicht bezahlt, ist ein Schnitt und kein Kameraweg.
 
 Die Kamera schneidet nie: in keinem einzelnen Ausgabebild legt sie mehr ihres
-Wegs zurück, als die Feder, auf der sie fährt, in ihrem schnellsten Bild
-zurücklegt — bei einer gewöhnlichen Anfahrt 9,2 % des Wegs, bei einer gedrängten
-entsprechend mehr, weil ihr weniger Bilder bleiben. Das ist keine Testzusage,
-sondern eine Zusicherung im Renderer selbst: eine Einstellungsliste, die sie
-verletzt, verlässt `buildZoomSegments` nicht.
+Wegs zurück, als die Feder, auf der sie fährt, über die kürzeste zugelassene
+Anfahrt in ihrem schnellsten Bild zurücklegt — 42,6 % des Wegs. Gewöhnliche
+Bewegung bleibt weit darunter (9,2 %), die gedrängteste im Korpus bei 33,1 %.
+Die Schranke liest bewusst nichts aus der Einstellung, über die sie urteilt:
+eine Schranke, die aus dem gekürzten Fenster selbst berechnet wird, vergleicht
+die Bewegung mit sich selbst und lässt alles durch. Zusätzlich gilt: eine
+Einstellung beginnt exakt dort, wo die Kamera ohnehin steht, und über die Naht
+zwischen zwei Einstellungen darf nur so viel Bewegung liegen, wie die Ausfahrt
+der vorigen selbst erzeugt. Wege unter 16 Quellpixeln sind kein Kameraweg und
+werden nicht beurteilt — eine rein relative Schranke ohne absoluten Boden hat in
+Runde vier eine gültige Aufnahme in allen drei Formaten verweigert.
+
+Das ist keine Testzusage, sondern eine Zusicherung im Renderer selbst: eine
+Einstellungsliste, die sie verletzt, verlässt `buildZoomSegments` nicht.
 
 Zeiger und Klick-Ripple werden hier gezeichnet, nicht aufgenommen: Headless
 Chromium rendert überhaupt keinen Zeiger, das Log ist die einzige Quelle. Größe,
