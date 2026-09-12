@@ -1,0 +1,48 @@
+# Warum Python in einem TypeScript-Repo?
+#
+# Entscheidung des Owners, festgehalten damit sie in sechs Monaten nicht als
+# Zufall gelesen wird: die Bildmathematik dieses Werkzeugs (Fourier-
+# Phasenkorrelation, Lucas-Kanade-Pyramiden, affines Rueckschieben) bleibt
+# erprobte Bibliothek -- OpenCV und NumPy -- statt selbstgeschriebener Code.
+# In diesem Projekt waren bereits zwei selbst gerechnete Messgeraete um die
+# Haelfte falsch (src/paint-rate.ts, die erste Fassung von src/efficiency.ts).
+# Ein drittes eigenes Zahlenwerk, diesmal ueber Pixeln, waere die dritte
+# Gelegenheit zum selben Fehler.
+#
+# Das Werkzeug ist Pruefwerkzeug. Es laeuft neben der Aufnahme, nie beim
+# Kunden, und es wird von nichts in src/ importiert.
+
+[project]
+name = "featurecast-smoothness"
+version = "0.1.0"
+description = "Misst am fertigen MP4, wie glatt eine Bewegung von Bild zu Bild uebergeht."
+requires-python = ">=3.11,<3.14"
+dependencies = ["numpy>=2.0", "opencv-python-headless>=4.10"]
+
+[project.scripts]
+smoothness = "smoothness.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["smoothness"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  # Videoerzeugung braucht ffmpeg und rund eine Minute. Einzeln ausfuehrbar:
+  #   uv run pytest -m langsam
+  #   uv run pytest -m "not langsam"
+  "langsam: erzeugt Videos mit ffmpeg (Minuten, nicht Sekunden)",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
