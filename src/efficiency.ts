@@ -7,6 +7,8 @@ import type { MotionWindow } from './cadence.js'
 export type CaptureEfficiencyWindow = {
   capturedFrameCount: number
   capturedFps: number
+  /** Wall-clock length of the scripted motion window, in seconds — the denominator behind every rate here, and what the 60Hz refresh bound is measured against. */
+  durationSeconds: number
   /** `capturedFrameCount / presentedFrameCount`; 1 (not undefined) when nothing was presented, so an idle window never reads as a loss. */
   efficiency: number
   label: string
@@ -48,9 +50,16 @@ export type CaptureEfficiencyReport = {
  * window, 66 frames presented against 51 ticks counted. An undercounting
  * denominator makes the ratio read better the worse things get, and on a
  * real acceptance run it reported **100.9%** capture efficiency, which the
- * 95% gate happily passed. Against the presented-frame count the same run
- * scores 83.3%. `paintedFrameCount` is still reported per window, as
- * context and as the visible size of that gap, but nothing is gated on it.
+ * 95% gate happily passed. Against Chromium's distinct presentation
+ * instants the same run scores 98.1%. `paintedFrameCount` is still reported
+ * per window, as context and as the visible size of that gap, but nothing is
+ * gated on it.
+ *
+ * `presentedTimestamps` and `paintTimestamps` are both required, with no
+ * default. An optional denominator is a denominator that can be omitted or
+ * transposed by a caller who never notices: the capture integration test did
+ * exactly that, passing the paint ticks into the presented parameter while
+ * its own comment claimed otherwise, and it type-checked.
  *
  * This is deliberately a different question from `cadence.ts`'s per-window
  * source cadence ("how fast did the source deliver frames") and from
@@ -84,7 +93,7 @@ export function computeCaptureEfficiencyReport(
   manifest: TimestampManifest,
   motionWindows: readonly MotionWindow[],
   presentedTimestamps: readonly number[],
-  paintTimestamps: readonly number[] = [],
+  paintTimestamps: readonly number[],
 ): CaptureEfficiencyReport {
   const countIn = (
     timestamps: readonly number[],
@@ -106,6 +115,7 @@ export function computeCaptureEfficiencyReport(
       capturedFrameCount,
       capturedFps:
         durationSeconds > 0 ? capturedFrameCount / durationSeconds : 0,
+      durationSeconds,
       efficiency:
         presentedFrameCount > 0 ? capturedFrameCount / presentedFrameCount : 1,
       label: window.label,
@@ -163,6 +173,39 @@ const DEFAULT_MIN_CAPTURE_EFFICIENCY = 0.95
 const MAX_BOUNDARY_CARRY_IN_FRAMES = 1
 
 /**
+ * The compositor's refresh rate, and therefore the hard ceiling on how many
+ * frames it can put on screen per second.
+ *
+ * This is the one number in this file that does not come from the pipeline
+ * being measured. It is the property of the display the browser composites
+ * against, so a denominator that claims more presentations than this is
+ * wrong no matter how plausible every ratio built on it looks — and that is
+ * exactly how the previous denominator failed: it counted Chromium's
+ * *reports* of a presentation rather than the presentations, reported 89.8
+ * presented frames per second for `invoices:scroll-down:1`, and nothing in
+ * the pipeline objected, because a ratio cannot tell "we captured
+ * everything" from "we counted the wrong thing" and neither can a second
+ * ratio derived from it.
+ */
+const COMPOSITOR_REFRESH_HZ = 60
+
+/**
+ * How far above the 60Hz line a window's presented-frame count may sit
+ * before the denominator is treated as broken.
+ *
+ * Measured, not chosen. Across nine full runs (three Chromium builds x three
+ * repeats) and every sub-3-second stretch of each, the distinct presentation
+ * instants exceed `60 * span` by at most **1.78 frames** — sub-refresh
+ * instants do exist (5.4% of gaps are under 12ms, mostly partially presented
+ * frames) but they never accumulate. The double-counting defect this guards
+ * against exceeds the same line by **35 to 51 frames** in every one of those
+ * nine runs. Four sits an order of magnitude below the smallest defect and
+ * more than twice above the largest honest excursion, so it separates the
+ * two without a judgement call.
+ */
+const MAX_PRESENTED_FRAMES_ABOVE_REFRESH = 4
+
+/**
  * Gates on capture efficiency only — never on the page's own presented fps
  * (`presentedFps` is reported per window for context, per the M1 acceptance
  * brief: "report the page's painted rate per motion window as context, not
@@ -174,18 +217,43 @@ const MAX_BOUNDARY_CARRY_IN_FRAMES = 1
  * several scripted windows (e.g. `dark-mode-toggle`, ~0.4s) present too few
  * frames for a per-window ratio to be statistically meaningful on its own.
  *
- * **And it gates the denominator itself.** A capture cannot hold more frames
- * than the browser presented; if any window says otherwise by more than the
- * one frame of boundary carry-in above, the denominator is wrong and every
- * ratio built on it is meaningless — including a passing one. This is the
- * sibling assertion the old gate lacked: it read 100.9% and passed, because
- * a ratio alone cannot tell "we captured everything" from "we counted the
- * wrong thing".
+ * **And it gates the denominator itself, twice.** First against physics: no
+ * window may report more presentations than a 60Hz compositor can produce
+ * in its own duration. Second against the numerator: a capture cannot hold
+ * more frames than the browser presented, beyond the one frame of boundary
+ * carry-in above.
+ *
+ * Both exist because a ratio alone cannot tell "we captured everything"
+ * from "we counted the wrong thing", and neither can a second ratio derived
+ * from the same count. The in-page denominator read 100.9% and passed; the
+ * report-counting denominator that replaced it read 81.4% and failed, and
+ * both were wrong in the same way. Only the refresh bound, which is a
+ * property of the display rather than of anything measured here, could tell
+ * them apart — it rejects the report-counting denominator on every one of
+ * nine real runs.
  */
 export function validateCaptureEfficiencyReport(
   report: CaptureEfficiencyReport,
   minEfficiency = DEFAULT_MIN_CAPTURE_EFFICIENCY,
 ): void {
+  const aboveRefresh = report.windows.filter(
+    (window) =>
+      window.presentedFrameCount - 1 >
+      window.durationSeconds * COMPOSITOR_REFRESH_HZ +
+        MAX_PRESENTED_FRAMES_ABOVE_REFRESH,
+  )
+  if (aboveRefresh.length > 0) {
+    const detail = aboveRefresh
+      .map(
+        (window) =>
+          `${window.label} (${String(window.presentedFrameCount)} presented in ${window.durationSeconds.toFixed(3)}s = ${window.presentedFps.toFixed(1)}fps)`,
+      )
+      .join(', ')
+    throw new Error(
+      `Capture efficiency denominator is not trustworthy: ${detail} exceeds what a ${String(COMPOSITOR_REFRESH_HZ)}Hz compositor can present. The denominator is counting something other than screen updates, and every ratio built on it — including a passing one — is meaningless.`,
+    )
+  }
+
   const impossible = report.windows.filter(
     (window) =>
       window.capturedFrameCount >

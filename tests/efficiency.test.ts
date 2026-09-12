@@ -36,7 +36,12 @@ describe('computeCaptureEfficiencyReport', () => {
     const manifest = manifestWithFrameTimestamps(presented)
     const windows: MotionWindow[] = [{ end: 100, label: 'scroll', start: 0 }]
 
-    const report = computeCaptureEfficiencyReport(manifest, windows, presented)
+    const report = computeCaptureEfficiencyReport(
+      manifest,
+      windows,
+      presented,
+      [],
+    )
 
     expect(report.overallEfficiency).toBe(1)
     expect(report.windows[0]?.presentedFrameCount).toBe(6)
@@ -50,7 +55,12 @@ describe('computeCaptureEfficiencyReport', () => {
     const manifest = manifestWithFrameTimestamps([0, 33, 66])
     const windows: MotionWindow[] = [{ end: 100, label: 'scroll', start: 0 }]
 
-    const report = computeCaptureEfficiencyReport(manifest, windows, presented)
+    const report = computeCaptureEfficiencyReport(
+      manifest,
+      windows,
+      presented,
+      [],
+    )
 
     expect(report.overallEfficiency).toBeCloseTo(0.5, 5)
     expect(report.windows[0]?.efficiency).toBeCloseTo(0.5, 5)
@@ -66,7 +76,12 @@ describe('computeCaptureEfficiencyReport', () => {
       { end: 500, label: 'table:tasks:scroll-down', start: 0 },
     ]
 
-    const report = computeCaptureEfficiencyReport(manifest, windows, presented)
+    const report = computeCaptureEfficiencyReport(
+      manifest,
+      windows,
+      presented,
+      [],
+    )
 
     expect(report.overallEfficiency).toBe(1)
     expect(report.windows[0]?.presentedFps).toBeCloseTo(4, 5)
@@ -76,7 +91,7 @@ describe('computeCaptureEfficiencyReport', () => {
     const manifest = manifestWithFrameTimestamps([])
     const windows: MotionWindow[] = [{ end: 100, label: 'idle', start: 0 }]
 
-    const report = computeCaptureEfficiencyReport(manifest, windows, [])
+    const report = computeCaptureEfficiencyReport(manifest, windows, [], [])
 
     expect(report.windows[0]?.efficiency).toBe(1)
     expect(report.overallEfficiency).toBe(1)
@@ -90,10 +105,37 @@ describe('computeCaptureEfficiencyReport', () => {
       { end: 200, label: 'second', start: 100 },
     ]
 
-    const report = computeCaptureEfficiencyReport(manifest, windows, presented)
+    const report = computeCaptureEfficiencyReport(
+      manifest,
+      windows,
+      presented,
+      [],
+    )
 
     expect(report.windows[0]?.presentedFrameCount).toBe(2) // 0, 50
     expect(report.windows[1]?.presentedFrameCount).toBe(2) // 100, 150
+  })
+
+  it("carries each window's own length through to the refresh bound", () => {
+    // A three-second window presenting a steady 50fps is ordinary content,
+    // and the 60Hz bound has to be measured against *this* window's three
+    // seconds. Hard-coding one second anywhere on that path turns 150
+    // honest presentations into an impossible 150fps and fails a good run —
+    // the bound would then be a statement about window length, not about
+    // the compositor.
+    const presented = evenlySpaced(150, 0, 3_000)
+    const report = computeCaptureEfficiencyReport(
+      manifestWithFrameTimestamps(presented),
+      [{ end: 3_000, label: 'tasks:scroll-down:long', start: 0 }],
+      presented,
+      [],
+    )
+
+    expect(report.windows[0]?.durationSeconds).toBe(3)
+    expect(report.windows[0]?.presentedFps).toBeCloseTo(50, 5)
+    expect(() => {
+      validateCaptureEfficiencyReport(report)
+    }).not.toThrow()
   })
 
   it('reports the in-page change-tick count as context without letting it set the score', () => {
@@ -123,20 +165,28 @@ describe('computeCaptureEfficiencyReport', () => {
 })
 
 describe('validateCaptureEfficiencyReport', () => {
+  /**
+   * Default duration puts the window at 50 presented frames per second —
+   * below the 60Hz refresh ceiling, so these fixtures describe runs that
+   * could physically have happened. A fixture that could not is not a
+   * fixture, and the refresh check below has its own explicit durations.
+   */
   function windowWith(
     captured: number,
     presented: number,
     label = 'scroll',
+    durationSeconds = Math.max(presented / 50, 0.1),
   ): CaptureEfficiencyWindowFixture {
     return {
       capturedFrameCount: captured,
-      capturedFps: captured,
+      capturedFps: captured / durationSeconds,
+      durationSeconds,
       efficiency: presented > 0 ? captured / presented : 1,
       label,
       paintedFrameCount: presented,
-      paintedFps: presented,
+      paintedFps: presented / durationSeconds,
       presentedFrameCount: presented,
-      presentedFps: presented,
+      presentedFps: presented / durationSeconds,
     }
   }
   type CaptureEfficiencyWindowFixture = Parameters<
@@ -216,6 +266,95 @@ describe('validateCaptureEfficiencyReport', () => {
     ).toThrow(
       'Capture efficiency denominator is not trustworthy: more frames were captured than Chromium presented in tasks:scroll-up:2 (53 captured, 51 presented)',
     )
+  })
+
+  it('refuses a denominator above what a 60Hz compositor can present', () => {
+    // The real window and the real number: `invoices:scroll-down:1` of a
+    // product run on the AI box, 1.0245s long, for which the report-counting
+    // denominator claimed 92 presented frames — 89.8 per second on a display
+    // that refreshes 60 times a second. Nothing else in this file could see
+    // that: the efficiency ratio was 0.66, comfortably below 1, and the
+    // captured-over-presented check is satisfied by *any* inflated
+    // denominator. This bound comes from the hardware, not from the numbers
+    // it judges, which is the only reason it can fail when they agree.
+    expect(() =>
+      validateCaptureEfficiencyReport({
+        overallCapturedFrameCount: 61,
+        overallEfficiency: 61 / 92,
+        overallPaintedFrameCount: 61,
+        overallPresentedFrameCount: 92,
+        windows: [windowWith(61, 92, 'invoices:scroll-down:1', 1.0245)],
+      }),
+    ).toThrow(
+      'invoices:scroll-down:1 (92 presented in 1.024s = 89.8fps) exceeds what a 60Hz compositor can present',
+    )
+  })
+
+  it('passes the same window once the denominator counts instants', () => {
+    // Same window, same duration, same captured count — only the
+    // denominator changed from 92 reports to the 61 distinct presentation
+    // instants behind them. 59.6fps, and the efficiency goes from 66% to
+    // 100%. The pair is the point: the bound must reject one and accept the
+    // other, or it is not measuring the defect.
+    expect(() =>
+      validateCaptureEfficiencyReport({
+        overallCapturedFrameCount: 61,
+        overallEfficiency: 1,
+        overallPaintedFrameCount: 61,
+        overallPresentedFrameCount: 61,
+        windows: [windowWith(61, 61, 'invoices:scroll-down:1', 1.0245)],
+      }),
+    ).not.toThrow()
+  })
+
+  it('leaves room for the sub-refresh instants real traces do contain', () => {
+    // Partially presented frames land between refreshes: 5.4% of the gaps
+    // in a real run are under 12ms. Measured over nine full runs and every
+    // sub-3s stretch of each, the honest excess over the 60Hz line peaks at
+    // 1.78 frames, so a window sitting 4 above it must still pass — the
+    // defect it has to catch sits 35 to 51 above.
+    expect(() =>
+      validateCaptureEfficiencyReport({
+        overallCapturedFrameCount: 64,
+        overallEfficiency: 1,
+        overallPaintedFrameCount: 64,
+        overallPresentedFrameCount: 65,
+        windows: [windowWith(64, 65, 'dense-but-real', 1.0)],
+      }),
+    ).not.toThrow()
+  })
+
+  it('checks the refresh ceiling before the floor, so an impossible fail cannot mislead either', () => {
+    // A run whose denominator is inflated reads *below* the floor, not
+    // above it — that is how round one concluded the 95% gate was broken at
+    // 81.3% when the honest number was 98.1%. The message has to name the
+    // denominator, or the next reader fixes the wrong thing.
+    expect(() =>
+      validateCaptureEfficiencyReport({
+        overallCapturedFrameCount: 40,
+        overallEfficiency: 0.4,
+        overallPaintedFrameCount: 40,
+        overallPresentedFrameCount: 100,
+        windows: [windowWith(40, 100, 'inflated-and-low', 1.0)],
+      }),
+    ).toThrow(/exceeds what a 60Hz compositor can present/)
+  })
+
+  it('names the refresh ceiling first when a window trips both denominator checks', () => {
+    // An inflated denominator can be overshot by the numerator as well. The
+    // useful diagnosis is the one that says *why* the denominator is wrong,
+    // not the one that says the numerator is bigger than it — the second
+    // sends the reader into the capture path, which is not where the defect
+    // is.
+    expect(() =>
+      validateCaptureEfficiencyReport({
+        overallCapturedFrameCount: 200,
+        overallEfficiency: 2,
+        overallPaintedFrameCount: 200,
+        overallPresentedFrameCount: 100,
+        windows: [windowWith(200, 100, 'both-wrong', 1.0)],
+      }),
+    ).toThrow(/exceeds what a 60Hz compositor can present/)
   })
 
   it('checks the denominator before the floor, so an impossible pass cannot slip through', () => {
