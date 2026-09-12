@@ -118,10 +118,31 @@ export function padRect(rect: Rect, padding: number): Rect {
  * `aspect`, when given, ties the two axes together instead of rounding each on
  * its own. Independent rounding lets the crop end up off-aspect by up to two
  * pixels, and an off-aspect crop in a chain that only ever crops and scales is
- * a non-uniform stretch — small, around one part in two thousand, but it is
- * exactly the kind of quiet distortion this tool exists not to have. With an
- * aspect the height is derived from the rounded width, so there is one rounding
- * rather than two that can disagree.
+ * a non-uniform stretch — exactly the kind of quiet distortion this tool exists
+ * not to have.
+ *
+ * Deriving the height from the rounded width is not enough on its own: both
+ * axes have to land on even numbers, so the derived height is rounded up by up
+ * to two pixels and the ratio moves with it. Measured worst case during a zoom
+ * move, 1938x1092 instead of 16:9 — 0.17%, where the comment here used to claim
+ * one part in two thousand, three and a half times better than the truth.
+ *
+ * So instead of rounding once, this searches the even sizes just above the
+ * requested one and takes the pair closest to the ratio. For every ratio the
+ * project ships there is an exact even pair within sixteen steps — 16:9 has one
+ * every 32 pixels of width — so the search does not merely improve the error,
+ * it removes it: measured over a sweep of 33 600 rectangles at four ratios, the
+ * worst deviation is exactly zero (`tests/render/geometry.test.ts`).
+ *
+ * The price is field of view: finding that pair can widen a crop by up to 34
+ * pixels, about 1.8% at 1920. That is the right way round for this tool. A
+ * slightly wider crop is still a crop of the original, still contains
+ * everything the unrounded rectangle did and still never magnifies; an
+ * off-ratio crop is a non-uniform stretch of the picture, which is a quiet
+ * distortion nobody can undo later.
+ *
+ * The one place the ratio still yields is the raster's own edge, where there is
+ * nothing left to grow into — see the clamps below.
  */
 export function roundOutward(
   rect: Rect,
@@ -150,7 +171,25 @@ export function roundOutward(
     // must still contain everything the unrounded one did.
     const derived = evenUp(width / aspect)
     if (derived < height) width = evenUp(height * aspect)
-    height = evenUp(width / aspect)
+    const leastWidth = width
+    const leastHeight = height
+    let bestError = Infinity
+    for (let step = 0; step <= 16; step += 1) {
+      const candidateWidth = leastWidth + step * 2
+      for (const candidateHeight of [
+        evenDown(candidateWidth / aspect),
+        evenUp(candidateWidth / aspect),
+      ]) {
+        if (candidateHeight < leastHeight) continue
+        const error = Math.abs(candidateWidth / candidateHeight - aspect)
+        // Strictly better only, so the smallest rectangle wins a tie and the
+        // search stays a pure function of its inputs.
+        if (error >= bestError) continue
+        bestError = error
+        width = candidateWidth
+        height = candidateHeight
+      }
+    }
   }
   const maxWidth = evenDown(bounds.width)
   const maxHeight = evenDown(bounds.height)
