@@ -48,6 +48,26 @@ const CAPTURE = { width: 2560, height: 1600 }
  * puts the clicked element *entirely outside* the picture rather than merely
  * off-centre. Two taps that far apart that fast are ordinary on a touch screen
  * — the finger lifts, so there is no pointer path between them.
+ *
+ * The last four are round four's, and they exist for two reasons the first
+ * eight could not serve.
+ *
+ * `run-toggle-twice` and `run-type-then-click` carry two interactions at *one*
+ * tick, which is what the wrapper produces whenever a script touches the same
+ * place twice: `click()` logs at the current tick without advancing it
+ * (`src/record.ts:334-346`), and a move onto a target the pointer already sits
+ * on yields no samples to advance it with (`src/motion.ts:82`). Their pointer
+ * paths come from the same `generateMotionPoints` a recording uses, so the
+ * logs have a recording's shape; the two interactions are one tick apart
+ * because that is what the wrapper writes, not because the fixture was bent to
+ * make it so.
+ *
+ * All four also place their elements in the *middle* of the raster. Every one
+ * of the original eight frames an element near an edge, so its crop is pinned
+ * against the raster and the centring assertion below is satisfied by the pin
+ * rather than by the framing — measured, a 300px error in `frameBoundingBox`
+ * failed exactly one of eight fixtures. A framing that is free to be wrong in
+ * both directions is the only kind that can test centring.
  */
 const FIXTURES = [
   'run-scroll-click',
@@ -58,25 +78,64 @@ const FIXTURES = [
   'run-a',
   'run-b',
   'run-close-taps',
+  'run-toggle-twice',
+  'run-type-then-click',
+  'run-interior-taps',
+  'run-interior-button',
 ]
 
 /**
- * How many shots each fixture produces, and how many of those shots had to give
- * way to a successor. Both numbers are asserted, not just the second: a "no
+ * What each fixture produces, in absolute numbers: how many interactions it
+ * contains, how many shots those become, and how many of those shots had to
+ * give way to a successor. All three are asserted, not just the last: a "no
  * fixture violates the invariant" that quietly ran over two segments instead of
  * eleven would be a green suite measuring nothing. The counts are absolute so
  * that a change in the corpus shows up as a failure here rather than as a
  * silently smaller denominator.
+ *
+ * `interactions` differing from `segments` is the merge: two interactions at one
+ * instant on one element are one shot.
  */
-const SHOTS: Record<string, { crowded: number; segments: number }> = {
-  'run-a': { crowded: 1, segments: 2 },
-  'run-b': { crowded: 1, segments: 2 },
-  'run-close-taps': { crowded: 1, segments: 2 },
-  'run-edge': { crowded: 0, segments: 1 },
-  'run-hero': { crowded: 0, segments: 1 },
-  'run-scroll-click': { crowded: 0, segments: 2 },
-  'run-sticky-overlay': { crowded: 0, segments: 1 },
-  'run-touch': { crowded: 0, segments: 1 },
+const SHOTS: Record<
+  string,
+  { crowded: number; interactions: number; segments: number }
+> = {
+  'run-a': { crowded: 1, interactions: 2, segments: 2 },
+  'run-b': { crowded: 1, interactions: 2, segments: 2 },
+  'run-close-taps': {
+    crowded: 1,
+    interactions: 2,
+    segments: 2,
+  },
+  'run-edge': { crowded: 0, interactions: 1, segments: 1 },
+  'run-hero': { crowded: 0, interactions: 1, segments: 1 },
+  'run-interior-button': {
+    crowded: 0,
+    interactions: 1,
+    segments: 1,
+  },
+  'run-interior-taps': {
+    crowded: 1,
+    interactions: 2,
+    segments: 2,
+  },
+  'run-scroll-click': { crowded: 0, interactions: 2, segments: 2 },
+  'run-sticky-overlay': {
+    crowded: 0,
+    interactions: 1,
+    segments: 1,
+  },
+  'run-toggle-twice': {
+    crowded: 0,
+    interactions: 2,
+    segments: 1,
+  },
+  'run-touch': { crowded: 0, interactions: 1, segments: 1 },
+  'run-type-then-click': {
+    crowded: 0,
+    interactions: 2,
+    segments: 1,
+  },
 }
 
 function fixture(name: string): RecordEvent[] {
@@ -99,8 +158,13 @@ function fixture(name: string): RecordEvent[] {
  */
 function atCaptureScale(events: readonly RecordEvent[]): RecordEvent[] {
   return events.map((event) => {
-    if (event.type === 'header' || !('x' in event)) return event
-    const scaled = { ...event, x: event.x * 2, y: event.y * 2 }
+    if (event.type === 'header') return event
+    // A `type` event carries a bounding box but no pointer position, so a
+    // scaling that keyed on `x` left its box at viewport scale while everything
+    // around it doubled — half a fixture in one coordinate system and half in
+    // another. Both are scaled here, independently.
+    const scaled =
+      'x' in event ? { ...event, x: event.x * 2, y: event.y * 2 } : event
     if (!('bbox' in scaled)) return scaled
     return {
       ...scaled,
@@ -210,18 +274,32 @@ describe('the zoom frames the hit element at every click', () => {
       for (const { event, timeMs } of interactions) {
         if (!('bbox' in event)) continue
         const crop = cropAt(timeMs, segments, format)
-        // The crop has to be the framing computed for *this* element, not some
-        // rectangle that happens to contain it — and for anything smaller than
-        // the capture's reserve that is a genuine close-up rather than the
-        // resting frame.
-        expect(crop).toEqual(frameBoundingBox(event.bbox, format).rect)
-        const padded = event.bbox.width + 2 * DEFAULT_ZOOM_LOOK.paddingPx
+        // The shot answering this interaction. Normally one shot per
+        // interaction; where two interactions land at one instant on one
+        // element they share a shot, and that shot's `box` is what was framed.
+        const shot = segments.find(
+          (segment) =>
+            timeMs >= segment.eventMs && timeMs <= segment.lastEventMs,
+        )
+        expect(shot).toBeDefined()
+        if (shot === undefined) continue
+        // The crop has to be the framing computed for *this* shot's element,
+        // not some rectangle that happens to contain it — and for anything
+        // smaller than the capture's reserve that is a genuine close-up rather
+        // than the resting frame. The comparison stays an equality against
+        // `frameBoundingBox`; a merged shot moves which box goes into it, never
+        // whether the crop has to equal what comes out.
+        expect(crop).toEqual(frameBoundingBox(shot.box, format).rect)
+        expect(contains(boxToRect(shot.box), boxToRect(event.bbox))).toBe(true)
+        const padded = shot.box.width + 2 * DEFAULT_ZOOM_LOOK.paddingPx
         if (padded < format.output.width) {
           expect(crop.width).toBe(format.output.width)
           expect(crop.width).toBeLessThan(format.base.width)
         }
-        const box = boxToRect(event.bbox)
-        expect(contains(crop, visiblePart(box, format), 1)).toBe(true)
+        const box = boxToRect(shot.box)
+        expect(
+          contains(crop, visiblePart(boxToRect(event.bbox), format), 1),
+        ).toBe(true)
         // Containment alone is a loose test: a 1920px crop around a 200px
         // button has hundreds of pixels of slack on each side, so a framing
         // that missed by half the picture would still "contain" it. The
@@ -268,7 +346,8 @@ describe('the zoom frames the hit element at every click', () => {
         ).toBeLessThanOrEqual(2)
         framed += 1
       }
-      expect(framed).toBeGreaterThan(0)
+      expect(framed).toBe(interactions.length)
+      expect(framed).toBe(SHOTS[name]?.interactions)
     })
   }
 
@@ -335,8 +414,11 @@ describe('a shot never ends before its own event', () => {
 
       let crowded = 0
       for (const [index, segment] of segments.entries()) {
-        expect(segment.endMs).toBeGreaterThan(segment.eventMs)
+        expect(segment.endMs).toBeGreaterThan(segment.lastEventMs)
         expect(cropAt(segment.eventMs, segments, format)).toEqual(
+          segment.target,
+        )
+        expect(cropAt(segment.lastEventMs, segments, format)).toEqual(
           segment.target,
         )
         const successor = segments[index + 1]
@@ -350,7 +432,7 @@ describe('a shot never ends before its own event', () => {
           // it collided with this shot's hold — the guarded path.
           crowded += 1
           expect(segment.endMs).toBeLessThan(
-            segment.eventMs + DEFAULT_ZOOM_LOOK.minHoldMs,
+            segment.lastEventMs + DEFAULT_ZOOM_LOOK.minHoldMs,
           )
           expect(successor.from).toEqual(segment.target)
           expect(successor.startMs).toBeGreaterThanOrEqual(segment.endMs)
@@ -410,16 +492,16 @@ describe('a shot never ends before its own event', () => {
     ).toBe(true)
   })
 
-  it('refuses two interactions too close for any honest camera move', () => {
+  it('refuses two interactions at one instant on elements that do not overlap', () => {
     const events: RecordEvent[] = [
       { type: 'header', version: 1, fps: 60, seed: 1 },
     ]
     for (let tick = 0; tick <= 60; tick += 1) {
       events.push({ type: 'pointer', tick, x: 200, y: 400 })
     }
-    // One 60Hz tick apart: there is no move that arrives on both elements in
-    // time, so the renderer says so instead of picking a way-point at one of
-    // the two clicks.
+    // One 60Hz tick apart, and nowhere near each other: there is no framing
+    // that answers both, so the renderer says so instead of picking a way-point
+    // at one of the two clicks.
     events.push({
       type: 'click',
       tick: 60,
@@ -435,8 +517,107 @@ describe('a shot never ends before its own event', () => {
       bbox: { x: 2200, y: 180, width: 200, height: 80 },
     })
     expect(() => buildZoomSegments(toTimedEvents(events), format)).toThrow(
-      /no honest move/,
+      /do not overlap/,
     )
+    // The remedy has to be one the author can apply today: `hold` is the only
+    // call in the wrapper that advances the log's clock without moving the
+    // pointer (`src/record.ts:377-386`).
+    expect(() => buildZoomSegments(toTimedEvents(events), format)).toThrow(
+      /demo\.hold\(400\)/,
+    )
+  })
+})
+
+/**
+ * Two interactions at one instant on one element.
+ *
+ * This is not an exotic log. `click()` writes its event at the tick the pointer
+ * has reached and does not advance it (`src/record.ts:334-346`), and a move
+ * onto a target the pointer already sits on generates no samples to advance it
+ * with (`src/motion.ts:82`) — so a switch toggled twice, a counter pressed
+ * twice, and `type(el, 'x')` followed by `click(el)` all produce two
+ * interactions 0.0ms apart. Round three refused to render any of them, with a
+ * message advising an option the CLI did not have.
+ *
+ * They are one shot: the camera frames the element and holds through both
+ * events. The framing stays exactly what `frameBoundingBox` computes — for the
+ * same element twice, from the very same box.
+ */
+describe('two interactions at one instant are one shot', () => {
+  const format = resolveFormat(LANDSCAPE, CAPTURE)
+
+  it('renders a switch toggled twice instead of refusing the recording', () => {
+    const events = toTimedEvents(atCaptureScale(fixture('run-toggle-twice')))
+    const interactions = events.filter(({ event }) => 'bbox' in event)
+    expect(interactions.length).toBe(2)
+    const [first, second] = interactions
+    expect(first).toBeDefined()
+    expect(second).toBeDefined()
+    if (first === undefined || second === undefined) return
+    // The premise: the wrapper really does log both at the same time.
+    expect(second.timeMs - first.timeMs).toBe(0)
+
+    const segments = buildZoomSegments(events, format)
+    expect(segments.length).toBe(1)
+    const shot = segments[0]
+    expect(shot).toBeDefined()
+    if (shot === undefined || !('bbox' in first.event)) return
+    // Same element twice: the merged box *is* the logged box, so the framing is
+    // bit for bit the one the criterion asks for.
+    expect(shot.box).toEqual(first.event.bbox)
+    expect(shot.target).toEqual(frameBoundingBox(first.event.bbox, format).rect)
+    expect(cropAt(first.timeMs, segments, format)).toEqual(shot.target)
+    expect(cropAt(second.timeMs, segments, format)).toEqual(shot.target)
+    // And it is a hold, not a single frame: the shot keeps the element for the
+    // full `minHoldMs` past the last of the two.
+    expect(shot.endMs - shot.lastEventMs).toBeCloseTo(
+      DEFAULT_ZOOM_LOOK.minHoldMs,
+      6,
+    )
+  })
+
+  it('frames both elements when a type and a click overlap', () => {
+    const events = toTimedEvents(atCaptureScale(fixture('run-type-then-click')))
+    const boxes = events
+      .filter(({ event }) => 'bbox' in event)
+      .map(({ event }) => ('bbox' in event ? event.bbox : undefined))
+    expect(boxes.length).toBe(2)
+    const [field, suggestion] = boxes
+    expect(field).toBeDefined()
+    expect(suggestion).toBeDefined()
+    if (field === undefined || suggestion === undefined) return
+    // Overlapping but not identical — the union is genuinely larger than both.
+    expect(
+      intersect(boxToRect(field), boxToRect(suggestion)).width,
+    ).toBeGreaterThan(0)
+    expect(field).not.toEqual(suggestion)
+
+    const segments = buildZoomSegments(events, format)
+    expect(segments.length).toBe(1)
+    const shot = segments[0]
+    expect(shot).toBeDefined()
+    if (shot === undefined) return
+    expect(shot.box.width).toBeGreaterThan(field.width)
+    expect(shot.box.width).toBeGreaterThan(suggestion.width)
+    expect(shot.target).toEqual(frameBoundingBox(shot.box, format).rect)
+    for (const box of [field, suggestion]) {
+      expect(contains(boxToRect(shot.box), boxToRect(box))).toBe(true)
+      expect(contains(shot.target, boxToRect(box), 1)).toBe(true)
+    }
+  })
+
+  it('holds one shot through both events instead of cutting between them', () => {
+    const events = toTimedEvents(atCaptureScale(fixture('run-toggle-twice')))
+    const segments = buildZoomSegments(events, format)
+    const shot = segments[0]
+    expect(shot).toBeDefined()
+    if (shot === undefined) return
+    const held: Rect[] = []
+    for (let timeMs = shot.eventMs; timeMs < shot.endMs; timeMs += 1000 / 60) {
+      held.push(cropAt(timeMs, segments, format))
+    }
+    expect(held.length).toBeGreaterThan(50)
+    for (const crop of held) expect(crop).toEqual(shot.target)
   })
 })
 

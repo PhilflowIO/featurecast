@@ -193,7 +193,7 @@ export function planRender(
     const clamps = new Set<string>()
     if (format.upscaleClamp !== undefined) clamps.add(format.upscaleClamp)
     for (const segment of segments) {
-      if (segment.clamp !== undefined) clamps.add(segment.clamp)
+      for (const clamp of segment.clamps) clamps.add(clamp)
     }
 
     const decisions: FrameDecision[] = []
@@ -300,12 +300,13 @@ export function serializePlan(plan: RenderPlan): string {
           trigger: segment.trigger,
           startMs: number(segment.startMs),
           eventMs: number(segment.eventMs),
+          lastEventMs: number(segment.lastEventMs),
           endMs: number(segment.endMs),
           zoomInMs: number(segment.zoomInMs),
           zoomOutMs: number(segment.zoomOutMs),
           from: rect(segment.from),
           target: rect(segment.target),
-          clamp: segment.clamp ?? null,
+          clamps: [...segment.clamps],
         })),
         frames: format.frames.map((frame) => ({
           n: frame.n,

@@ -94,13 +94,26 @@ export function resolveLook(look: ZoomLook = {}): ResolvedLook {
 
 /** What the camera does around one interaction. */
 export type ZoomSegment = {
-  /** Set when the requested framing hit a limit; carried into the plan. */
-  clamp?: string
+  /**
+   * The resting extent this shot is framed on. Normally one logged bounding
+   * box; for a shot that answers several interactions at the same instant, the
+   * union of theirs. `target` is `frameBoundingBox(box)` and nothing else, so
+   * the acceptance criterion stays an equality rather than a containment.
+   */
+  box: BoundingBox
+  /** Every limit this shot ran into, in plain words; carried into the plan. */
+  clamps: readonly string[]
   /** Time of the interaction itself. */
   eventMs: number
   endMs: number
   /** The framing the camera comes *from*: the resting crop, or the previous target. */
   from: Rect
+  /**
+   * The last interaction this shot holds through. Equal to `eventMs` for every
+   * ordinary shot; larger only when interactions at one instant were merged
+   * into one shot, in which case the hold has to cover all of them.
+   */
+  lastEventMs: number
   startMs: number
   target: Rect
   trigger: ZoomTrigger
@@ -188,6 +201,9 @@ export function pointerSamples(events: readonly TimedEvent[]): PointerSample[] {
   return samples
 }
 
+/** One frame at 60Hz, the rate this renderer is built around. */
+const FRAME_MS = 1000 / 60
+
 /**
  * The shortest stretch a shot may keep after its own interaction: one frame at
  * 60Hz, the rate this renderer is built around. It is not a look parameter and
@@ -195,7 +211,27 @@ export function pointerSamples(events: readonly TimedEvent[]): PointerSample[] {
  * was clicked", and a look that could set it to zero could switch the
  * milestone's acceptance criterion off.
  */
-const ARRIVAL_FLOOR_MS = 1000 / 60
+const ARRIVAL_FLOOR_MS = FRAME_MS
+
+/** The smallest box containing both, in source pixels. */
+function unionBox(a: BoundingBox, b: BoundingBox): BoundingBox {
+  const x = Math.min(a.x, b.x)
+  const y = Math.min(a.y, b.y)
+  return {
+    x,
+    y,
+    width: Math.max(a.x + a.width, b.x + b.width) - x,
+    height: Math.max(a.y + a.height, b.y + b.height) - y,
+  }
+}
+
+/** True when the two elements share screen area — the same element included. */
+function boxesOverlap(a: BoundingBox, b: BoundingBox): boolean {
+  return (
+    Math.min(a.x + a.width, b.x + b.width) > Math.max(a.x, b.x) &&
+    Math.min(a.y + a.height, b.y + b.height) > Math.max(a.y, b.y)
+  )
+}
 
 /**
  * Turns the event log into the camera's shot list.
@@ -221,16 +257,28 @@ const ARRIVAL_FLOOR_MS = 1000 / 60
  * literally true: at every event the crop is the framing computed for that
  * event's element.
  *
- * The alternative considered — merging two crowded interactions into one
- * framing that contains both boxes — was rejected because it cannot keep that
- * promise even in principle: a union framing is by construction not the
- * framing computed for either element, so `cropAt(eventMs)` would stop being
- * comparable with `frameBoundingBox(bbox)` and the criterion would have to be
- * softened to "contains" — the same loosening that let round one pass.
+ * **Two interactions at the same instant on one element are one shot.** The
+ * event log has no spacing to give there: `click()` logs at the current tick
+ * without advancing it (`src/record.ts:334-346`), and when the pointer already
+ * sits on the target there is no travel to advance it either
+ * (`src/motion.ts:82`), so a switch toggled twice, a counter pressed twice, or
+ * `type(el, 'x')` followed by `click(el)` all arrive 0.0ms apart. That is not a
+ * crowded pair of shots, it is one shot with two events in it: the camera
+ * frames the element and holds through both. The shot's `box` becomes the union
+ * of the merged boxes and `target` stays `frameBoundingBox(box)`, so the
+ * acceptance criterion is still an equality against a framing this file
+ * computed — for the ordinary case of the same element twice the union *is* the
+ * box, bit for bit.
  *
- * Yielding has a floor: below two frames between two interactions there is no
- * honest move left, and that case throws rather than quietly picking a
- * way-point at one of the two clicks.
+ * What stays loud is the pair that no camera can answer: two interactions at
+ * one instant on elements that do not overlap. There is no move, no framing and
+ * no compromise that has the camera on both at once, so the run fails and names
+ * the remedy the author can apply today.
+ *
+ * The zero-gap timing itself is a symptom of the event log's counted `tick`,
+ * which issue #9 replaces with a reading of the capture clock. Nothing here
+ * invents spacing to paper over that: the merge is decided on the logged
+ * geometry — do the two elements overlap — and not on a time this file made up.
  */
 export function buildZoomSegments(
   events: readonly TimedEvent[],
@@ -260,15 +308,17 @@ export function buildZoomSegments(
       timeMs + resolved.maxHoldMs,
     )
     segments.push({
+      box: event.bbox,
+      clamps: framing.clamp === undefined ? [] : [framing.clamp],
       eventMs: timeMs,
       endMs,
       from: format.base,
+      lastEventMs: timeMs,
       startMs,
       target: framing.rect,
       trigger: event.type as ZoomTrigger,
       zoomInMs,
       zoomOutMs: resolved.zoomOutMs,
-      ...(framing.clamp === undefined ? {} : { clamp: framing.clamp }),
     })
   }
 
@@ -281,27 +331,36 @@ export function buildZoomSegments(
       kept.push(segment)
       continue
     }
-    if (previous.endMs > segment.startMs) {
-      const gap = segment.eventMs - previous.eventMs
-      if (gap < 2 * ARRIVAL_FLOOR_MS) {
+
+    const gap = segment.eventMs - previous.lastEventMs
+    if (gap < 2 * ARRIVAL_FLOOR_MS) {
+      if (!boxesOverlap(previous.box, segment.box)) {
         throw new Error(
           `Two interactions ${gap.toFixed(1)}ms apart (at ` +
-            `${previous.eventMs.toFixed(1)}ms and ` +
-            `${segment.eventMs.toFixed(1)}ms) leave the camera no honest ` +
-            `move between them: it cannot both be on the first element when ` +
-            `that element is clicked and on the second when the second is. ` +
-            `The renderer refuses rather than framing a way-point at one of ` +
-            `the two clicks. Record the two interactions further apart, or ` +
-            `decide deliberately to frame them as one shot.`,
+            `${previous.lastEventMs.toFixed(1)}ms and ` +
+            `${segment.eventMs.toFixed(1)}ms) land on elements that do not ` +
+            `overlap: ${describeBox(previous.box)} and ` +
+            `${describeBox(segment.box)}. No camera is on both at the same ` +
+            `instant, so there is no framing to compute and the renderer ` +
+            `refuses rather than picking a way-point at one of the two. Put a ` +
+            `beat between them in the script: \`await demo.hold(400)\` — the ` +
+            `only call in the wrapper that advances the event log's clock on ` +
+            `its own (\`src/record.ts:377-386\`) — and the camera has a move ` +
+            `to make.`,
         )
       }
+      mergeShots(previous, segment, format, resolved)
+      continue
+    }
+
+    if (previous.endMs > segment.startMs) {
       // The later shot yields, never the earlier one's arrival: its approach
       // starts where the earlier shot ends and covers the same distance in
       // whatever time is left. The earlier shot keeps its own click plus one
       // frame — everything beyond that is hold, and hold is what gives way.
       previous.endMs = Math.min(
         previous.endMs,
-        Math.max(segment.startMs, previous.eventMs + ARRIVAL_FLOOR_MS),
+        Math.max(segment.startMs, previous.lastEventMs + ARRIVAL_FLOOR_MS),
       )
       // Cut straight from one close-up to the next: no pull-out in between.
       segment.from = previous.target
@@ -313,7 +372,37 @@ export function buildZoomSegments(
     }
     kept.push(segment)
   }
+
   return kept
+}
+
+function describeBox(box: BoundingBox): string {
+  return (
+    `${Math.round(box.width)}x${Math.round(box.height)} at ` +
+    `(${Math.round(box.x)},${Math.round(box.y)})`
+  )
+}
+
+/**
+ * Two interactions at one instant on overlapping elements, folded into the
+ * earlier shot: one framing, held through both events.
+ */
+function mergeShots(
+  previous: ZoomSegment,
+  segment: ZoomSegment,
+  format: ResolvedFormat,
+  look: ResolvedLook,
+): void {
+  const box = unionBox(previous.box, segment.box)
+  const framing = frameBoundingBox(box, format, look)
+  previous.box = box
+  previous.target = framing.rect
+  previous.clamps = framing.clamp === undefined ? [] : [framing.clamp]
+  previous.lastEventMs = Math.max(previous.lastEventMs, segment.eventMs)
+  // The hold is measured from the last of the merged events, so a `minHoldMs`
+  // that could not be honoured around two events separately is honoured once
+  // around the shot that contains them both.
+  previous.endMs = Math.max(previous.endMs, segment.endMs)
 }
 
 /**
