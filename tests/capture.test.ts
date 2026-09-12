@@ -460,6 +460,41 @@ describe('captureScreencast', () => {
     expect(manifest.frames).toHaveLength(delivered.length)
   })
 
+  it('counts a frame late by more than one position as out of order', async () => {
+    // The inversion is not always a swap of neighbours: the encode pool can
+    // hold a frame back past two later ones. Counting against the previous
+    // *delivered* timestamp would see only the first of those as out of
+    // order; counting against the highest timestamp delivered so far sees
+    // both, which is what "arrived after a frame stamped later than it" has
+    // to mean. Delivery here is 1000, 1033, 1008, 1016: two frames arrive
+    // after the 1033 that was stamped after them.
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const delivered = [1_000, 1_033, 1_008, 1_016]
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      for (const [index, timestamp] of delivered.entries()) {
+        onFrame({
+          data: Buffer.from(`frame-${String(index)}`),
+          timestamp,
+          viewportHeight: 1600,
+          viewportWidth: 2560,
+        })
+      }
+    })
+
+    const result = await captureScreencast(
+      testPage({ start, stop }),
+      outputDirectory,
+      async () => undefined,
+    )
+
+    expect(result.outOfDeliveryOrderFrameCount).toBe(2)
+    const manifest = JSON.parse(await readFile(result.timestampsPath, 'utf8'))
+    expect(
+      manifest.frames.map((frame: { timestamp: number }) => frame.timestamp),
+    ).toEqual([1_000, 1_008, 1_016, 1_033])
+  })
+
   it('folds away, and counts, two frames that share a capture timestamp', async () => {
     // Measured against the pinned Chromium: `metadata.timestamp` carries
     // microsecond resolution (1415 of 1416 frames of a real run had a
