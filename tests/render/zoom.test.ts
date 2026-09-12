@@ -370,6 +370,49 @@ describe('the zoom frames the hit element at every click', () => {
     })
   }
 
+  /**
+   * The denominator of the centring assertion above, which is the number that
+   * was 1 in round three.
+   *
+   * A crop pinned against the raster is centred by the pin, not by the framing:
+   * the expectation mirrors the pin, so the assertion passes whatever
+   * `frameBoundingBox` computed for that axis. Only framings that sit strictly
+   * inside the pan bounds on both axes can fail a small error, and the corpus
+   * has to contain enough of them that a mistake is not one fixture's private
+   * business. Measured: a +20px error in the framing's centre failed one of the
+   * eight fixtures round three shipped, and fails five of these twelve — the
+   * four new ones plus `run-sticky-overlay`, the only old fixture with a free
+   * axis.
+   */
+  it('frames five shots free of the raster edge, which is what makes the centring check bite', () => {
+    const format = resolveFormat(LANDSCAPE, CAPTURE)
+    const free: string[] = []
+    let checked = 0
+    for (const name of FIXTURES) {
+      const events = toTimedEvents(atCaptureScale(fixture(name)))
+      for (const segment of buildZoomSegments(events, format)) {
+        checked += 1
+        const insideX =
+          segment.target.x > format.panBounds.x &&
+          segment.target.x + segment.target.width <
+            format.panBounds.x + format.panBounds.width
+        const insideY =
+          segment.target.y > format.panBounds.y &&
+          segment.target.y + segment.target.height <
+            format.panBounds.y + format.panBounds.height
+        if (insideX && insideY) free.push(name)
+      }
+    }
+    expect(checked).toBe(17)
+    expect(free).toEqual([
+      'run-toggle-twice',
+      'run-type-then-click',
+      'run-interior-taps',
+      'run-interior-taps',
+      'run-interior-button',
+    ])
+  })
+
   it('fails when the framing is wrong, which is the point of it', () => {
     const events = toTimedEvents(atCaptureScale(fixture('run-scroll-click')))
     const format = resolveFormat(LANDSCAPE, CAPTURE)
