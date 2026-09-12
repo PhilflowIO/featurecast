@@ -93,6 +93,16 @@ bei einer unsymmetrischen Animation ist der Mittelwert eine Größe, die das
 Element in keinem einzigen Bild hat. Der Ausschnitt steht deshalb still, während
 das Element atmet, und wird nie nachträglich aufgeweitet.
 
+Folgen zwei Interaktionen dichter aufeinander, als die Kamera zum Anfahren
+braucht, gibt die **spätere** nach: ihre Anfahrt beginnt später und legt
+denselben Weg schneller zurück. Die frühere Einstellung wird dagegen nie vor
+ihrem eigenen Klick beendet — sonst zeigte das Bild im Moment des Klicks einen
+Punkt auf dem Weg zum nächsten Element statt das Element, das geklickt wurde,
+und bei zwei Zielen auf gegenüberliegenden Seiten wäre das geklickte Element
+überhaupt nicht im Bild. Liegen zwei Interaktionen so dicht beieinander, dass
+zwischen ihnen keine ehrliche Kamerabewegung mehr passt — weniger als zwei
+Bilder —, bricht der Renderer mit einer Meldung ab, statt leise danebenzuzielen.
+
 Zeiger und Klick-Ripple werden hier gezeichnet, nicht aufgenommen: Headless
 Chromium rendert überhaupt keinen Zeiger, das Log ist die einzige Quelle. Größe,
 Form und Ripple-Dauer sind Parameter.
@@ -121,17 +131,80 @@ steht. Jetzt ist zwischen Entscheidung und Pixel nichts mehr, das von Lauf zu
 Lauf anders ausfallen könnte; sechs Läufe in sechs Prozessen ergeben pro Format
 genau eine Prüfsumme.
 
+Die fertigen Dateien sagen auch, welche Farben sie meinen: `tv`-Bereich,
+bt709. Ohne diese Beschriftung liest jede nachgelagerte Kette ein `yuv420p` im
+Zweifel als Vollbereich und zieht die Pegel auseinander — die Pixel wären
+richtig und das Bild trotzdem falsch. Geprüft wird das an `ffprobe` auf einem
+echten Encode, nicht an der ffmpeg-Kommandozeile: ein Argument ist eine Absicht,
+die Datei ist das Ergebnis.
+
 Das Hochformat zahlt dafür nicht mit Schärfe, im Gegenteil: ein 9:16-Ausschnitt
 ist genauso groß wie das Ausgabebild, wird also gar nicht skaliert, sondern
 1:1 aus dem Original kopiert.
 
+### Der Filter, der verkleinert
+
+Aufgenommen wird in 2560×1600 und ausgeliefert in 1920×1080, weil das der
+einzige Weg zu scharfem Text ist. Der Filter, der diese Verkleinerung macht, ist
+deshalb kein Implementierungsdetail, sondern genau das Merkmal, für das die
+hohe Aufnahmeauflösung existiert. Verkleinert wird mit einem Lanczos-3-Kern —
+gefensterte Sinc, separabel, am Maßstab gestreckt —, demselben Verfahren, das
+M1 über ffmpeg benutzt hat. Gemessen an vier echten Aufnahmebildern, Ausschnitt
+2560×1440 → 1920×1080, also exakt der 1,33× Reserve:
+
+| Filter                      | Kantenenergie (Laplace-RMS) | Rundlauf-PSNR |
+| --------------------------- | --------------------------- | ------------- |
+| **featurecast (Lanczos-3)** | **39,3**                    | **31,60 dB**  |
+| ffmpeg Lanczos (M1)         | 39,3                        | 31,60 dB      |
+| ffmpeg bicubic              | 35,7                        | 31,24 dB      |
+| bilinear (Runde 2)          | 35,4                        | 30,72 dB      |
+| ffmpeg area                 | 32,4                        | 30,61 dB      |
+| ffmpeg bilinear             | 26,9                        | 30,02 dB      |
+
+Das kostet Rechenzeit, und zwar erheblich: ein 16:9-Bild aus dem vollen Raster
+braucht 179 ms statt 17,6 ms, ein 1:1-Bild 109 ms statt 10,7 ms — rund das
+Zehnfache. Der Ausschnitt, der genauso groß ist wie das Ausgabebild, wird nach
+wie vor gar nicht gefiltert, sondern zeilenweise kopiert (0,18 ms), und das
+bleibt so: Hochformat lebt von dieser 1:1-Kopie.
+
+### Was das Rendern kostet, und auf welcher Maschine
+
 Das Zuschneiden und Skalieren ist die gesamte Rechenarbeit des Renderers und
 läuft deshalb auf mehreren Threads: aufgeteilt nach Bildzeilen über alle Formate
-hinweg, gewichtet nach Zeilenbreite. Auf einem Thread hätte ein 48-Sekunden-Video
-146 Sekunden gebraucht — über der Zwei-Minuten-Grenze des Meilensteins — und
-nebenbei den Dekoder ausgehungert, weil derselbe Thread, der skaliert, auch die
-Einzelbilder abholen muss. Verteilt sind es **79 Sekunden** (gemessen auf der
-Workstation, `artifacts/m1-008`, 47,9 s Video, 2873 Ausgabebilder, drei Formate).
+hinweg, gewichtet nach der gemessenen Arbeit je Zeile — ein Format ohne
+Zoomreserve wird kopiert statt gefiltert und zählt entsprechend wenig, sonst
+warten die Threads, die es gezeichnet haben, auf den Rest. Zusätzlich wird kein
+Bild zweimal gerechnet: eine Aufnahme liefert weniger Einzelbilder als das Video
+Bilder hat (m1-008: 1332 gegen 2873), und solange Quellbild und Ausschnitt
+gleich bleiben, ist das fertige Bild dasselbe — der Zeiger kommt danach darauf.
+
+Gemessen auf der Workstation (16 Threads, unter Last), 300 echte Aufnahmebilder
+aus `artifacts/m1-008`, 11,8 Sekunden Video, 709 Ausgabebilder, drei Formate:
+
+|                                     | 1 Thread | 6 Threads | 14 Threads |
+| ----------------------------------- | -------- | --------- | ---------- |
+| bilinear (Runde 2)                  | —        | 18,2 s    | 16,2 s     |
+| Lanczos-3, naiv                     | 190,2 s  | 82,2 s    | 67,3 s     |
+| **Lanczos-3, mit Wiederverwendung** | —        | 43,4 s    | **38,3 s** |
+
+Das sind **3,2 Sekunden Rechenzeit pro Sekunde Video**. Die Zwei-Minuten-Grenze
+des Meilensteins hält damit für Material bis rund 35 Sekunden; die volle
+m1-008-Aufnahme (47,9 s) braucht hochgerechnet etwa 155 Sekunden statt der 79
+Sekunden, die die bilineare Variante gebraucht hat. **Das ist der bewusst
+bezahlte Preis für die Schärfe** — nicht ein Versehen: die hohe
+Aufnahmeauflösung existiert genau für diesen Filter, und ein weicheres Bild
+wäre ein Verlust am Produkt, während eine längere Wartezeit Bequemlichkeit
+kostet. Wer das anders gewichtet, hat mit ffmpeg-bicubic (31,24 dB gegen 31,60)
+eine messbar benannte Alternative, die etwa halb so lange braucht.
+
+Die Hardware-Annahme steht damit ausdrücklich hier statt implizit im Code:
+**gerechnet wird mit einer Maschine, die mindestens acht Kerne hat.** Der
+Standard ist „alle Kerne minus zwei" — zwei bleiben für diesen Thread, der den
+Dekoder leerzieht und drei Encoder füttert. Auf einer Drei-Kern-Maschine
+komponiert der Renderer auf einem einzigen Thread und ist rund fünfmal langsamer
+als hier gemessen; die Zwei-Minuten-Grenze hält dort für keine
+nennenswerte Aufnahme.
+
 Bildzeilen sind voneinander unabhängig, deshalb hängt das Ergebnis nicht an der
 Kernzahl: derselbe Lauf mit einem und mit sechs Threads erzeugt dieselbe Datei,
 Byte für Byte. `--threads <n>` stellt es ein, ändert aber nur die Dauer.
