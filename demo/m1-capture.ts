@@ -196,6 +196,17 @@ try {
     paintTimestamps,
   )
   await writeCaptureEfficiencyReport(outputDirectory, efficiencyReport)
+  // The denominator itself, not just the counts derived from it. Without
+  // this file every claim about capture efficiency has to be taken on
+  // trust: the trace is discarded at the end of the run, so nobody can
+  // re-derive the presentation instants afterwards, re-check them against
+  // the 60Hz refresh, or compare them to what the finished video shows.
+  // Round one's denominator was wrong by half and the artifacts carried no
+  // way to notice.
+  await writeFile(
+    `${outputDirectory}/presented.json`,
+    `${JSON.stringify(presentedTimestamps)}\n`,
+  )
   console.log(
     `capture efficiency: ${(efficiencyReport.overallEfficiency * 100).toFixed(1)}% ` +
       `(${String(efficiencyReport.overallCapturedFrameCount)} of ${String(efficiencyReport.overallPresentedFrameCount)} presented frames captured, gated at 95%)`,
