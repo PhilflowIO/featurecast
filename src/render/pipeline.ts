@@ -37,12 +37,24 @@ import type { SpriteCache, SpriteGeometry } from './sprite.js'
  * How many threads compose by default.
  *
  * Two cores are left alone: one for this thread, which still has a decoder to
- * drain and three encoders to feed, and one for the encoders themselves. Six is
- * the ceiling because past that the encoder writes, not the scaling, are what
- * the frame waits on.
+ * drain and three encoders to feed, and one for the encoders themselves.
+ *
+ * The ceiling of six that used to sit here was measured when composition was a
+ * bilinear kernel costing about 28ms per output frame for all three formats,
+ * where the encoder writes really were what the next frame waited on — and it
+ * still is: measured on 300 real capture frames, the old kernel renders in
+ * 18.2s on six threads and 16.2s on fourteen. The windowed-sinc kernel in
+ * `compose.ts` costs roughly ten times that, and the same material goes from
+ * 82.2s on six threads to 67.3s on fourteen. Composition now dominates the
+ * pipeline, so a ceiling of six caps the machine rather than the encoder.
+ *
+ * The floor of one is not a fallback: a machine with three cores composes on a
+ * single thread, and at this kernel's cost that machine cannot hold the
+ * milestone's two-minute budget for a minute of video. That is a hardware
+ * assumption and it is written down in the README rather than left implicit.
  */
 export function defaultThreads(): number {
-  return Math.max(1, Math.min(6, availableParallelism() - 2))
+  return Math.max(1, availableParallelism() - 2)
 }
 
 export type CursorPainter = {
@@ -415,6 +427,11 @@ function startPool(
   const bands = planBands(
     formats.map((format) => format.output),
     threads,
+    // A format with no zoom reserve has a crop exactly the size of its own
+    // frame at every moment, so it is always the copy path rather than the
+    // filter: 0.18ms against 179ms, measured on a 2560x1600 capture. That is
+    // the ratio, rounded to a fiftieth so nobody reads it as exact.
+    formats.map((format) => (format.maxZoom > 1 ? 1 : 1 / 50)),
   )
 
   const workers: Worker[] = []

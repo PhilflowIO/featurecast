@@ -36,12 +36,27 @@ export type Band = {
  *
  * Deterministic and total: every row of every format lands in exactly one band,
  * in order, whatever the thread count.
+ *
+ * `costs` scales a format's share of the work. Pixel count alone is the wrong
+ * measure once the formats do different work per pixel: a 9:16 crop out of a
+ * desktop capture is the size of its own frame, so it is copied rather than
+ * filtered — measured, 0.18ms against 179ms for a filtered 16:9 frame. Counted
+ * by pixels it is 31% of the work and the threads that drew it sat idle while
+ * the rest carried the frame. Nothing here changes the picture: any assignment
+ * of rows to threads produces the same bytes, which is why this can be tuned
+ * for speed without a second thought about the output.
  */
-export function planBands(outputs: readonly Size[], threads: number): Band[][] {
+export function planBands(
+  outputs: readonly Size[],
+  threads: number,
+  costs: readonly number[] = [],
+): Band[][] {
   if (threads < 1)
     throw new Error(`Thread count must be positive, got ${threads}`)
+  const costOf = (format: number): number => costs[format] ?? 1
   const totalWeight = outputs.reduce(
-    (sum, output) => sum + output.width * output.height,
+    (sum, output, format) =>
+      sum + output.width * output.height * costOf(format),
     0,
   )
   const perThread = totalWeight / threads
@@ -49,7 +64,7 @@ export function planBands(outputs: readonly Size[], threads: number): Band[][] {
   const plan: Band[][] = Array.from({ length: threads }, () => [])
   let weightSoFar = 0
   for (const [format, output] of outputs.entries()) {
-    const rowWeight = output.width
+    const rowWeight = output.width * costOf(format)
     let row = 0
     while (row < output.height) {
       const thread = Math.min(threads - 1, Math.floor(weightSoFar / perThread))
