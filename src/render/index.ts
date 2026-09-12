@@ -8,11 +8,19 @@ export {
   screenToVideoUV,
 } from './cursor.js'
 export type { CursorKind, CursorLook, CursorTransform } from './cursor.js'
+export {
+  compositeSprite,
+  createRaster,
+  rasterByteLength,
+  resample,
+} from './compose.js'
+export type { Raster, RgbaRaster } from './compose.js'
 export { parseEventLine, parseEventLog } from './events.js'
 export {
-  buildFfmpegPlan,
-  buildGeometryCommands,
-  buildRenderTimeline,
+  buildDecodePlan,
+  buildEncodePlan,
+  buildSourceList,
+  sourceFrameForOutput,
 } from './ffmpeg.js'
 export { aspectRatio, DEFAULT_FORMATS, resolveFormat } from './format.js'
 export type { AspectName, FormatSpec, ResolvedFormat } from './format.js'
@@ -27,6 +35,8 @@ export type {
   PlanOptions,
   RenderPlan,
 } from './plan.js'
+export { composeFrame, runPipeline } from './pipeline.js'
+export type { CursorPainter } from './pipeline.js'
 export { aspectSlug, renderRecording } from './render.js'
 export type { RenderOptions, RenderResult } from './render.js'
 export { detectRestZones } from './rest.js'

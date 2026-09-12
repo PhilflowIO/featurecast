@@ -2,10 +2,12 @@
   "compilerOptions": {
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "target": "ES2023",
+    "target": "ES2024",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "skipLibCheck": true
   },
   "include": ["demo/**/*.ts", "src/**/*.ts", "tests/**/*.ts"]

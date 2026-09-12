@@ -1,10 +1,8 @@
 import { join, resolve } from 'node:path'
 
-import type { FormatPlan, RenderPlan } from './plan.js'
-import type { SpriteGeometry } from './sprite.js'
+import type { RenderPlan } from './plan.js'
 
-/** Where an invisible cursor is parked: far enough out to never clip in. */
-const OFFSCREEN = -20000
+import type { Size } from './geometry.js'
 
 export type EncoderOptions = {
   /** x264 constant-rate factor. Lower is better and bigger. */
@@ -21,20 +19,22 @@ export const DEFAULT_ENCODER: Required<EncoderOptions> = {
 }
 
 /**
- * The retimed frame list.
+ * The list of source frames to decode, in capture order, each exactly once.
  *
- * Mirrors the two hard-won details documented on `buildCaptureTimeline` in
- * `src/assemble.ts`: paths are absolute, because the concat demuxer resolves
- * relative entries against the list file's own directory rather than the
- * process cwd; and every entry carries `option framerate 1000`, because
- * without it the mjpeg demuxer assumes 25 fps and quantises our
- * millisecond-resolution durations onto 40 ms boundaries.
+ * Two details are inherited from `buildCaptureTimeline` in `src/assemble.ts`:
+ * paths are absolute, because the concat demuxer resolves relative entries
+ * against the list file's own directory rather than the process cwd; and every
+ * entry carries a duration, without which the demuxer hands the rawvideo muxer
+ * non-monotonic timestamps and floods the log.
  *
- * The durations come from the plan's *output* timestamps, so idle trimming is
- * already baked into this list — there is no second mechanism that could
- * disagree with the crop decisions about what time it is.
+ * What is *not* inherited is any notion of output timing. This list says
+ * nothing about when a frame is shown or how long for. Retiming — idle
+ * trimming included — happens in `sourceFrameForOutput`, in our own code, on
+ * the same decision data the crops come from. There is exactly one mechanism
+ * that decides what time it is, so there is nothing for a second one to
+ * disagree with.
  */
-export function buildRenderTimeline(
+export function buildSourceList(
   framesDirectory: string,
   plan: RenderPlan,
 ): string {
@@ -42,64 +42,43 @@ export function buildRenderTimeline(
     throw new Error('Render plan contains no frames')
   }
   const lines = ['ffconcat version 1.0']
-  const escape = (file: string): string =>
-    resolve(join(framesDirectory, file)).replaceAll("'", "'\\\\''")
-  for (const [index, frame] of plan.frames.entries()) {
-    lines.push(`file '${escape(frame.file)}'`, 'option framerate 1000')
-    const next = plan.frames[index + 1]
-    const end = next?.outputMs ?? plan.idle.outputDurationMs
-    const duration = (end - frame.outputMs) / 1000
-    if (duration > 0) lines.push(`duration ${duration}`)
+  for (const frame of plan.frames) {
+    const file = resolve(join(framesDirectory, frame.file)).replaceAll(
+      "'",
+      "'\\\\''",
+    )
+    lines.push(`file '${file}'`, 'duration 1')
   }
-  const last = plan.frames[plan.frames.length - 1]
-  if (last === undefined)
-    throw new Error('unreachable: frame list is non-empty')
-  lines.push(`file '${escape(last.file)}'`, 'option framerate 1000')
   return `${lines.join('\n')}\n`
 }
 
 /**
- * The per-frame geometry, as a command script for ffmpeg's `sendcmd`.
+ * Which source frame is on screen at each output frame.
  *
- * `crop` and `overlay` both accept their geometry as runtime commands, so one
- * pass over the frames can carry a different crop rectangle and a different
- * cursor position on every single frame while the filter chain downstream
- * stays a fixed size. Only changed values are written, which is why a
- * recording without a single zoom produces a handful of lines instead of
- * thousands.
+ * The plan already carries every source frame's output timestamp, with idle
+ * stretches compressed. An output frame shows the last source frame whose
+ * output time has arrived — a held frame simply repeats, a trimmed stretch
+ * simply skips. The result is a non-decreasing index, which is what lets the
+ * renderer stream the decoder once, forwards, without ever seeking.
  */
-export function buildGeometryCommands(
-  format: FormatPlan,
-  fps: number,
-  sprite: SpriteGeometry | null,
-): string {
-  const lines: string[] = []
-  let previous: string[] | null = null
-  for (const frame of format.frames) {
-    const commands = [
-      `crop w ${frame.crop.width}`,
-      `crop h ${frame.crop.height}`,
-      `crop x ${frame.crop.x}`,
-      `crop y ${frame.crop.y}`,
-    ]
-    if (sprite !== null) {
-      const visible = frame.cursor !== null
-      commands.push(
-        `overlay x ${visible ? (frame.cursor?.screenX ?? 0) - sprite.hotspotX : OFFSCREEN}`,
-        `overlay y ${visible ? (frame.cursor?.screenY ?? 0) - sprite.hotspotY : OFFSCREEN}`,
-      )
+export function sourceFrameForOutput(plan: RenderPlan): Int32Array {
+  const frameCount = Math.max(
+    1,
+    Math.round((plan.idle.outputDurationMs / 1000) * plan.fps),
+  )
+  const indices = new Int32Array(frameCount)
+  let source = 0
+  for (let n = 0; n < frameCount; n += 1) {
+    const timeMs = (n * 1000) / plan.fps
+    while (
+      source + 1 < plan.frames.length &&
+      (plan.frames[source + 1]?.outputMs ?? Infinity) <= timeMs
+    ) {
+      source += 1
     }
-    const changed =
-      previous === null
-        ? commands
-        : commands.filter((command, index) => command !== previous?.[index])
-    previous = commands
-    if (changed.length === 0) continue
-    const start = (frame.n / fps).toFixed(6)
-    const end = ((frame.n + 0.5) / fps).toFixed(6)
-    lines.push(`${start}-${end} [enter] ${changed.join(', ')};`)
+    indices[n] = source
   }
-  return `${lines.join('\n')}\n`
+  return indices
 }
 
 export type FfmpegPlan = {
@@ -108,78 +87,92 @@ export type FfmpegPlan = {
 }
 
 /**
- * The encode for one format. One pass: retimed frames in, crop and scale
- * driven per frame, cursor composited on top, constant-rate video out.
+ * The decoder: JPEG frames in, packed RGB out, one frame per file, in order.
+ *
+ * `-fps_mode passthrough` is what guarantees the one-to-one mapping; anything
+ * that resamples the frame rate here would put ffmpeg back in charge of time.
  */
-export function buildFfmpegPlan(
-  format: FormatPlan,
-  plan: RenderPlan,
-  paths: {
-    commands: string
-    cursorPattern: string | null
-    outputPath: string
-    timeline: string
-  },
+export function buildDecodePlan(listPath: string): FfmpegPlan {
+  return {
+    arguments: [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      listPath,
+      '-fps_mode',
+      'passthrough',
+      '-f',
+      'rawvideo',
+      '-pix_fmt',
+      'rgb24',
+      '-',
+    ],
+    command: 'ffmpeg',
+  }
+}
+
+/**
+ * The encoder: finished frames in, one constant-rate video out.
+ *
+ * The frames arriving on stdin are already cropped, scaled and carry the
+ * pointer, so there is no filter graph left to get wrong — only the colour
+ * conversion. mjpeg decodes full-range, so the range remap belongs on the
+ * scale filter; relabelling alone would crush blacks. Same reasoning as
+ * `src/assemble.ts`.
+ *
+ * `-fflags +bitexact -flags +bitexact` keeps libavformat's version string out
+ * of the container, so that two renders of the same decision data produce not
+ * merely equivalent video but the identical file. That is the determinism
+ * claim this milestone owes, and it is checkable with a hash.
+ */
+export function buildEncodePlan(
+  output: Size,
+  fps: number,
+  outputPath: string,
   encoder: EncoderOptions = {},
 ): FfmpegPlan {
   const { crf, preset, videoCodec } = { ...DEFAULT_ENCODER, ...encoder }
-  const chain = [
-    `fps=${plan.fps}`,
-    `sendcmd=f=${paths.commands}`,
-    `crop=${format.base.width}:${format.base.height}:${format.base.x}:${format.base.y}`,
-    // mjpeg decodes full-range; the range remap belongs on the scale filter,
-    // relabelling alone would crush blacks. Same reasoning as src/assemble.ts.
-    `scale=${format.output.width}:${format.output.height}:flags=lanczos:in_range=full:out_range=tv`,
-  ]
-  const filters: string[] = []
-  const args = [
-    '-hide_banner',
-    '-y',
-    '-f',
-    'concat',
-    '-safe',
-    '0',
-    '-i',
-    paths.timeline,
-  ]
-  if (paths.cursorPattern === null) {
-    filters.push(`[0:v]${chain.join(',')},format=yuv420p[v]`)
-  } else {
-    args.push(
+  return {
+    arguments: [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-y',
+      '-f',
+      'rawvideo',
+      '-pix_fmt',
+      'rgb24',
+      '-s',
+      `${output.width}x${output.height}`,
       '-framerate',
-      String(plan.fps),
-      '-start_number',
-      '0',
+      String(fps),
       '-i',
-      paths.cursorPattern,
-    )
-    filters.push(
-      `[0:v]${chain.join(',')}[base]`,
-      `[base][1:v]overlay=x=${OFFSCREEN}:y=${OFFSCREEN}:eval=frame:format=auto,format=yuv420p[v]`,
-    )
+      '-',
+      '-vf',
+      'scale=in_range=full:out_range=tv,format=yuv420p',
+      '-c:v',
+      videoCodec,
+      '-crf',
+      String(crf),
+      '-preset',
+      preset,
+      '-pix_fmt',
+      'yuv420p',
+      '-color_range',
+      'tv',
+      '-r',
+      String(fps),
+      '-fflags',
+      '+bitexact',
+      '-flags',
+      '+bitexact',
+      outputPath,
+    ],
+    command: 'ffmpeg',
   }
-  args.push(
-    '-filter_complex',
-    filters.join(';'),
-    '-map',
-    '[v]',
-    '-c:v',
-    videoCodec,
-    '-crf',
-    String(crf),
-    '-preset',
-    preset,
-    '-pix_fmt',
-    'yuv420p',
-    '-color_range',
-    'tv',
-    '-r',
-    String(plan.fps),
-    // The timeline repeats its last entry so the true final frame keeps its
-    // duration; `-t` is what actually bounds the output.
-    '-t',
-    String(plan.idle.outputDurationMs / 1000),
-    paths.outputPath,
-  )
-  return { arguments: args, command: 'ffmpeg' }
 }

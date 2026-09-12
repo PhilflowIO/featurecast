@@ -19,6 +19,7 @@ Options
   --idle-threshold <ms>     Stillness this long may be trimmed (600)
   --idle-hold <ms>          What a trimmed stretch is compressed to (250)
   --fps <n>                 Output frame rate (60)
+  --threads <n>             Composition threads (what the machine can spare)
   --crf <n>                 x264 quality, lower is better (18)
   --preset <name>           x264 preset (medium)
   --dry-run                 Write decisions and commands, skip the encode
@@ -103,6 +104,10 @@ export function parseArguments(argv: readonly string[]): Parsed {
         break
       case '--fps':
         options.fps = readNumber(argument, next)
+        index += 1
+        break
+      case '--threads':
+        options.threads = readNumber(argument, next)
         index += 1
         break
       case '--crf':

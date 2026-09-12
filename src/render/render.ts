@@ -1,13 +1,13 @@
-import { spawn } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { DEFAULT_CURSOR_LOOK, type CursorLook } from './cursor.js'
 import { parseEventLog } from './events.js'
 import {
-  buildFfmpegPlan,
-  buildGeometryCommands,
-  buildRenderTimeline,
+  buildDecodePlan,
+  buildEncodePlan,
+  buildSourceList,
+  sourceFrameForOutput,
   type EncoderOptions,
 } from './ffmpeg.js'
 import type { AspectName } from './format.js'
@@ -17,18 +17,25 @@ import {
   type PlanOptions,
   type RenderPlan,
 } from './plan.js'
+import {
+  runPipeline,
+  type CursorPainter,
+  type PipelineSpawn,
+} from './pipeline.js'
 import { SpriteCache } from './sprite.js'
-
-export type CommandRunner = (
-  command: string,
-  arguments_: readonly string[],
-) => Promise<void>
 
 export type RenderOptions = PlanOptions & {
   encoder?: EncoderOptions
-  /** Write every decision and every command, but do not encode. */
+  /** Write the decisions and the frame list, but do not encode. */
   dryRun?: boolean
-  runner?: CommandRunner
+  /** Test seam: how child processes are started. */
+  spawn?: PipelineSpawn
+  /**
+   * Composition threads. Defaults to what the machine can spare. The picture
+   * does not depend on it — any count produces the same bytes — so this is a
+   * speed dial and nothing else.
+   */
+  threads?: number
 }
 
 export type RenderOutput = {
@@ -117,10 +124,10 @@ export async function renderRecording(
   const decisionsPath = join(outDirectory, 'decisions.json')
   await writeFile(decisionsPath, serializePlan(plan), 'utf8')
 
-  const timelinePath = join(outDirectory, 'render-timeline.ffconcat')
+  const listPath = join(outDirectory, 'source-frames.ffconcat')
   await writeFile(
-    timelinePath,
-    buildRenderTimeline(join(captureDirectory, 'frames'), plan),
+    listPath,
+    buildSourceList(join(captureDirectory, 'frames'), plan),
     'utf8',
   )
 
@@ -128,61 +135,47 @@ export async function renderRecording(
     ...DEFAULT_CURSOR_LOOK,
     ...options.cursor,
   }
-  const reference = plan.formats[0]
-  const drawsCursor =
-    reference !== undefined &&
-    reference.frames.some((frame) => frame.cursor !== null)
-  let cursorPattern: string | null = null
-  let spriteGeometry = null
-  if (drawsCursor && reference !== undefined) {
-    const cache = new SpriteCache(cursorLook)
-    spriteGeometry = cache.geometry
-    const cursorDirectory = join(outDirectory, 'cursor')
-    await mkdir(cursorDirectory, { recursive: true })
-    for (const frame of reference.frames) {
-      const png =
-        frame.cursor === null
-          ? cache.png(cursorLook.kind, null)
-          : cache.png(frame.cursor.kind, frame.cursor.ripplePhase)
-      await writeFile(
-        join(cursorDirectory, `${String(frame.n).padStart(6, '0')}.png`),
-        png,
-      )
-    }
-    cursorPattern = join(cursorDirectory, '%06d.png')
+  const drawsCursor = plan.formats.some((format) =>
+    format.frames.some((frame) => frame.cursor !== null),
+  )
+  let cursor: CursorPainter | null = null
+  if (drawsCursor) {
+    const sprites = new SpriteCache(cursorLook)
+    cursor = { geometry: sprites.geometry, sprites }
   }
 
-  const runner = options.runner ?? runCommand
-  const outputs: RenderOutput[] = []
-  for (const format of plan.formats) {
-    const slug = aspectSlug(format.aspect)
-    const commandsPath = join(outDirectory, `geometry-${slug}.cmds`)
-    await writeFile(
-      commandsPath,
-      buildGeometryCommands(format, plan.fps, spriteGeometry),
-      'utf8',
-    )
-    const outputPath = join(outDirectory, `${slug}.mp4`)
-    const ffmpeg = buildFfmpegPlan(
-      format,
+  const outputs: RenderOutput[] = plan.formats.map((format) => ({
+    aspect: format.aspect,
+    clamps: format.clamps,
+    height: format.output.height,
+    outputPath: join(outDirectory, `${aspectSlug(format.aspect)}.mp4`),
+    width: format.output.width,
+  }))
+
+  if (options.dryRun !== true) {
+    await runPipeline({
+      cursor,
+      decode: buildDecodePlan(listPath),
+      encode: plan.formats.map((format, index) => {
+        const output = outputs[index]
+        if (output === undefined) {
+          throw new Error('unreachable: one output per format')
+        }
+        return {
+          ...buildEncodePlan(
+            format.output,
+            plan.fps,
+            output.outputPath,
+            options.encoder,
+          ),
+          format,
+        }
+      }),
       plan,
-      {
-        commands: commandsPath,
-        cursorPattern,
-        outputPath,
-        timeline: timelinePath,
-      },
-      options.encoder,
-    )
-    if (options.dryRun !== true) {
-      await runner(ffmpeg.command, ffmpeg.arguments)
-    }
-    outputs.push({
-      aspect: format.aspect,
-      clamps: format.clamps,
-      height: format.output.height,
-      outputPath,
-      width: format.output.width,
+      source: manifest.captureSize,
+      sourceForOutput: sourceFrameForOutput(plan),
+      ...(options.spawn === undefined ? {} : { spawn: options.spawn }),
+      ...(options.threads === undefined ? {} : { threads: options.threads }),
     })
   }
 
@@ -193,21 +186,4 @@ export async function renderRecording(
     plan,
     removedIdleSeconds: plan.idle.removedMs / 1000,
   }
-}
-
-function runCommand(
-  command: string,
-  arguments_: readonly string[],
-): Promise<void> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, arguments_, { stdio: 'inherit' })
-    child.once('error', reject)
-    child.once('exit', (code) => {
-      if (code === 0) {
-        resolvePromise()
-        return
-      }
-      reject(new Error(`${command} exited with code ${String(code)}`))
-    })
-  })
 }

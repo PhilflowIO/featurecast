@@ -1,5 +1,6 @@
 import { deflateSync } from 'node:zlib'
 
+import type { RgbaRaster } from './compose.js'
 import type { CursorKind, CursorLook } from './cursor.js'
 
 /**
@@ -294,17 +295,42 @@ export function drawCursorSprite(
  * rather than one per frame.
  */
 export class SpriteCache {
-  private readonly cache = new Map<string, Buffer>()
+  private readonly pngs = new Map<string, Buffer>()
+  private readonly rasters = new Map<string, RgbaRaster>()
 
   constructor(private readonly look: Required<CursorLook>) {}
 
+  private static key(kind: CursorKind, ripplePhase: number | null): string {
+    return `${kind}|${ripplePhase === null ? 'rest' : ripplePhase.toFixed(6)}`
+  }
+
   png(kind: CursorKind, ripplePhase: number | null): Buffer {
-    const key = `${kind}|${ripplePhase === null ? 'rest' : ripplePhase.toFixed(6)}`
-    const cached = this.cache.get(key)
+    const key = SpriteCache.key(kind, ripplePhase)
+    const cached = this.pngs.get(key)
     if (cached !== undefined) return cached
     const png = drawCursorSprite(kind, ripplePhase, this.look).toPng()
-    this.cache.set(key, png)
+    this.pngs.set(key, png)
     return png
+  }
+
+  /**
+   * The sprite as raw RGBA, which is what the compositor wants. Nothing is
+   * written to disk any more: the pointer is blended onto the frame in this
+   * process, so the PNG encoder is only left for tests and for anyone who
+   * wants to look at a sprite.
+   */
+  rgba(kind: CursorKind, ripplePhase: number | null): RgbaRaster {
+    const key = SpriteCache.key(kind, ripplePhase)
+    const cached = this.rasters.get(key)
+    if (cached !== undefined) return cached
+    const canvas = drawCursorSprite(kind, ripplePhase, this.look)
+    const raster: RgbaRaster = {
+      data: canvas.pixels,
+      height: canvas.height,
+      width: canvas.width,
+    }
+    this.rasters.set(key, raster)
+    return raster
   }
 
   get geometry(): SpriteGeometry {
