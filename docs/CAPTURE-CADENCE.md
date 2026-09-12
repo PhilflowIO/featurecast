@@ -626,10 +626,12 @@ a few points in the same shape.
 | a new picture                                                 | 70.7% |
 
 The first row is the ceiling: what the run would still repeat if every
-presented frame reached the video perfectly timed. Measured per run it is
-**10.4%, 8.3% and 18.2%** — so the 10% target is within reach of the
-content on two of three runs and out of reach on the third, and any claim
-that rests on a single run's ceiling is not safe.
+presented frame reached the video perfectly timed. It is measurable only
+where the run kept its denominator, which is `r2b` and `r2c` here plus an
+earlier run of the same path (`vt1`, 2026-09-12 11:53): **10.4%, 8.3% and
+18.2%**. So the 10% target is within reach of the content on two of those
+three and out of reach on the third, and any claim that rests on one run's
+ceiling is not safe.
 
 The second row is this pipeline's own loss and the largest fixable part.
 With the corrected denominator the three runs score **84.2%, 87.1% and
@@ -664,8 +666,10 @@ jitter mostly shifts a frame by less than one slot rather than deleting it —
 and snapping frames onto the compositor's own 16.7 ms grid lines them up
 against the output grid, where a sub-millisecond phase decides whether a
 span contains an output instant at all. A finer ffconcat timebase
-(`option framerate 1000000` instead of `1000`) changes neither timeline by
-more than 0.2 points, so the 1 ms quantisation is not the cause either.
+(`option framerate 1000000` instead of `1000`) moves each timeline by about
+a point, in opposite directions (arrival 23.5% -> 24.4%, presentation
+25.2% -> 24.2% on `vt1`), so the 1 ms quantisation is not the cause and
+closing it does not rescue the re-basing either.
 
 So the clock is not what the finished video is losing, and this is measured
 rather than argued. Round one's original reading — supply, not clock — was
