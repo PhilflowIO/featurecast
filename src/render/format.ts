@@ -41,6 +41,31 @@ export type ResolvedFormat = {
   maxZoom: number
   output: Size
   /**
+   * How far the camera may travel, which is *not* the same rectangle as where
+   * it rests.
+   *
+   * Round one used `base` for both, and that conflation made the portrait
+   * deliverable useless: a 9:16 output of a 2560x1600 capture has no zoom
+   * reserve at all (`maxZoom` is exactly 1), so every crop came out the size of
+   * `base` — and a crop the size of its bounds cannot move. The portrait video
+   * was a frozen centre strip, 900 pixels out of 2560, and a click on a left
+   * hand nav produced a video of a click on nothing.
+   *
+   * A format with no zoom reserve still has pan reserve, and pan costs nothing:
+   * a 900x1600 window can sit anywhere across a 2560 pixel wide raster. So the
+   * crop *size* stays capped by `base` — that is the no-upscale rule — while
+   * the crop *position* is bounded by how much raster there actually is
+   * sideways.
+   *
+   * Vertically the bounds stay at `base`, and that is deliberate rather than
+   * timid. `baseRect` anchors the 16:9 window at the top of the capture because
+   * app chrome — nav bars, toolbars — lives exactly there; letting the camera
+   * drift down would undo a decision that was made on purpose. Sideways there
+   * was never a decision to undo: the horizontal placement is a plain centring,
+   * an arbitrary default, and nothing is lost by letting the camera leave it.
+   */
+  panBounds: Rect
+  /**
    * Set when `desired` could not be met without upscaling, with the reason in
    * plain words. Never silently swallowed: the plan carries it and the CLI
    * prints it.
@@ -67,11 +92,17 @@ function evenFloor(value: number): number {
 export function resolveFormat(spec: FormatSpec, source: Size): ResolvedFormat {
   const aspect = aspectRatio(spec.aspect)
   const raw = baseRect(source, aspect)
+  // The height follows from the rounded width rather than being rounded on its
+  // own. Rounding both independently leaves the resting frame slightly off its
+  // own ratio — a 9:16 window of a 1280x720 viewport came out 404x720 instead
+  // of 404x718 — and every crop downstream then inherits a ratio it can never
+  // satisfy.
+  const baseWidth = evenFloor(raw.width)
   const base: Rect = {
     x: Math.round(raw.x),
     y: Math.round(raw.y),
-    width: evenFloor(raw.width),
-    height: evenFloor(raw.height),
+    width: baseWidth,
+    height: Math.min(evenFloor(raw.height), evenFloor(baseWidth / aspect)),
   }
 
   let width = evenFloor(spec.desired.width)
@@ -97,6 +128,12 @@ export function resolveFormat(spec: FormatSpec, source: Size): ResolvedFormat {
     base,
     maxZoom: base.width / width,
     output: { width, height },
+    panBounds: {
+      x: 0,
+      y: base.y,
+      width: source.width,
+      height: base.height,
+    },
     ...(upscaleClamp === undefined ? {} : { upscaleClamp }),
   }
 }

@@ -77,6 +77,8 @@ export type FormatPlan = {
   frames: readonly FrameDecision[]
   maxZoom: number
   output: Size
+  /** How far the camera may travel; see `ResolvedFormat.panBounds`. */
+  panBounds: Rect
   segments: readonly ZoomSegment[]
 }
 
@@ -183,7 +185,9 @@ export function planRender(
       const timeMs = (n * 1000) / fps
       const crop = roundOutward(
         cropAt(timeMs, segments, format, zoomLook),
-        format.base,
+        format.panBounds,
+        true,
+        format.output.width / format.output.height,
       )
       const drawn = cursorAt(timeMs, samples, ripples, cursorLook)
       decisions.push({
@@ -213,6 +217,7 @@ export function planRender(
       frames: decisions,
       maxZoom: format.maxZoom,
       output: format.output,
+      panBounds: format.panBounds,
       segments,
     })
   }
@@ -233,9 +238,14 @@ export function planRender(
 
 /**
  * Canonical serialisation of the decision data: fixed key order, fixed number
- * formatting. Two renders of the same input produce byte-identical text, which
- * is the determinism claim that can actually be checked exactly — unlike the
- * encoded video, whose bytes an encoder is free to vary.
+ * formatting. Two renders of the same input produce byte-identical text.
+ *
+ * Since round two that is no longer the *only* thing that is reproducible.
+ * Every crop and every pointer position in this file is applied to pixels by
+ * `src/render/compose.ts` rather than handed to ffmpeg as timed commands, so
+ * identical decision data now implies an identical video as well. This file
+ * stays the readable form of the claim: when two videos differ, these numbers
+ * say whether the decision or the encode is responsible.
  */
 export function serializePlan(plan: RenderPlan): string {
   const number = (value: number): number =>
@@ -267,6 +277,7 @@ export function serializePlan(plan: RenderPlan): string {
         aspect: format.aspect,
         output: { width: format.output.width, height: format.output.height },
         base: rect(format.base),
+        panBounds: rect(format.panBounds),
         maxZoom: number(format.maxZoom),
         clamps: [...format.clamps],
         segments: format.segments.map((segment) => ({

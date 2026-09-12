@@ -115,12 +115,19 @@ function clamp01(value: number): number {
 /**
  * The framing for one logged bounding box.
  *
- * The box is the element's *resting extent*, not its geometry in the frame the
- * click happened to land on — a bounded-animating element (a pop-in call to
- * action, a pulsing badge) is logged by its envelope upstream. So this
- * function depends on nothing but the box, the format and the look: the same
- * box always yields the same rectangle, which is exactly why the crop stands
- * still while the element pulses. Never widen it from per-frame observation.
+ * The box is the element's *resting extent*: the geometry it spends most of its
+ * time at, picked by dwell share out of an observation window upstream — not
+ * its geometry in the frame the click happened to land on, and emphatically not
+ * an average of its extremes. On an asymmetric animation an average is a size
+ * the element is never at in any single frame; the most-dwelt box is the one a
+ * viewer would call its size.
+ *
+ * So this function depends on nothing but the box, the format and the look: the
+ * same box always yields the same rectangle, which is exactly why the crop
+ * stands still while the element pulses. Never widen it from per-frame
+ * observation, and never derive a framing by interpolating between two observed
+ * extremes — the dwell-weighted choice upstream already did that work, and
+ * doing it again here is what would put the breathing back.
  *
  * Zoom is a crop out of the original raster. The rectangle is therefore never
  * allowed below the output size; a request that would need more magnification
@@ -158,12 +165,15 @@ export function frameBoundingBox(
   const centerX = padded.x + padded.width / 2
   const centerY = padded.y + padded.height / 2
 
+  // Size is capped by the resting frame — that is the no-upscale rule. Position
+  // is bounded by how much raster there is, which is a different and usually
+  // larger rectangle. Conflating the two is what froze the portrait format.
   const placed = shiftInside(
     { x: centerX - width / 2, y: centerY - height / 2, width, height },
-    format.base,
+    format.panBounds,
   )
   return {
-    rect: roundOutward(placed, format.base),
+    rect: roundOutward(placed, format.panBounds, true, aspect),
     ...(clamp === undefined ? {} : { clamp }),
   }
 }
