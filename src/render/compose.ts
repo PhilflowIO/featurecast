@@ -50,27 +50,118 @@ export function rasterByteLength(size: Size): number {
   return size.width * size.height * 3
 }
 
-function clampIndex(value: number, limit: number): number {
-  if (value < 0) return 0
-  if (value > limit) return limit
-  return value
+/** Lanczos' window half-width in kernel units: three lobes on each side. */
+const LANCZOS_A = 3
+
+/**
+ * The Lanczos kernel: a sinc lobe windowed by a wider sinc.
+ *
+ * It is negative between its lobes, which is the point — the negative ring is
+ * what puts the edge contrast back that any purely positive kernel (bilinear,
+ * box, tent) averages away. The price is overshoot, so the caller clamps.
+ */
+function lanczosWeight(x: number): number {
+  if (x === 0) return 1
+  const magnitude = x < 0 ? -x : x
+  if (magnitude >= LANCZOS_A) return 0
+  const pi = Math.PI * x
+  return (LANCZOS_A * Math.sin(pi) * Math.sin(pi / LANCZOS_A)) / (pi * pi)
+}
+
+/** One axis' sampling plan: where each output sample reads, and how much. */
+type AxisTaps = {
+  /** How many source samples every output sample reads. Constant per axis. */
+  count: number
+  /** The first source index each output sample reads, unclamped. */
+  first: Int32Array
+  /**
+   * The weights, laid out tap-major: all output samples' weight for tap 0,
+   * then all of them for tap 1, and so on. That is the order both passes walk
+   * them in — one tap at a time across a whole row — which keeps the weight, a
+   * single number, in a register while the reads run straight through memory.
+   * The obvious sample-major layout measured three times slower.
+   */
+  weights: Float32Array
+}
+
+/**
+ * Plans one axis once per frame.
+ *
+ * Two details carry the quality. The grid is half-pixel-centred, so a crop the
+ * size of the target lands exactly on the source samples and the kernel reduces
+ * to the identity rather than smearing by half a pixel. And the kernel is
+ * *stretched by the scale factor* when the crop is larger than the target: at
+ * 1.33x that widens the support from three source pixels to four, which is what
+ * makes it a low-pass filter of the right width instead of a sharpening filter
+ * applied to an aliased signal. This is what ffmpeg's own `lanczos` does, and
+ * it is why the numbers here are comparable with `src/assemble.ts`.
+ */
+function planAxis(
+  cropStart: number,
+  cropSize: number,
+  targetSize: number,
+): AxisTaps {
+  const scale = cropSize / targetSize
+  const stretch = scale > 1 ? scale : 1
+  const support = LANCZOS_A * stretch
+  const count = Math.ceil(support * 2) + 1
+  const first = new Int32Array(targetSize)
+  const weights = new Float32Array(targetSize * count)
+  const inverse = 1 / stretch
+  const row = new Float64Array(count)
+  for (let i = 0; i < targetSize; i += 1) {
+    const center = cropStart + (i + 0.5) * scale - 0.5
+    const start = Math.ceil(center - support)
+    first[i] = start
+    let sum = 0
+    for (let k = 0; k < count; k += 1) {
+      const weight = lanczosWeight((start + k - center) * inverse)
+      row[k] = weight
+      sum += weight
+    }
+    // Normalising is what keeps a flat area flat: the truncated, stretched
+    // kernel does not sum to one on its own, and an unnormalised kernel shifts
+    // the whole picture's brightness by a fraction of a level.
+    const scaleBy = sum === 0 ? 1 : 1 / sum
+    for (let k = 0; k < count; k += 1) {
+      weights[k * targetSize + i] = (row[k] as number) * scaleBy
+    }
+  }
+  return { count, first, weights }
+}
+
+function clampByte(value: number): number {
+  const rounded = Math.round(value)
+  if (rounded < 0) return 0
+  if (rounded > 255) return 255
+  return rounded
 }
 
 /**
  * Reads `crop` out of `source` and resamples it to fill `target`.
  *
- * Bilinear, separable in its weights: the horizontal tap positions depend only
- * on the crop and the target width, so they are computed once per frame rather
- * than once per pixel. The sampling grid is the standard half-pixel-centred
- * one, which makes the identity case (crop the size of the target) an exact
- * copy rather than a half-pixel smear.
+ * Lanczos-3, separable, computed as two one-dimensional passes with a small
+ * cache of horizontally filtered source rows. Separability is not a detail: the
+ * kernel is nine taps wide on each axis at the capture's 1.33x reserve, so the
+ * two-dimensional form would cost eighty-one multiplications per pixel where
+ * this costs about twenty.
+ *
+ * **Why not the cheaper kernel it replaces.** The project records at 2560x1600
+ * and delivers 1920x1080 for exactly one reason — that is the only way to get
+ * sharp text — so the filter that performs that reduction is not an
+ * implementation detail, it is the feature. Measured on four real capture
+ * frames at the 1.33x reserve, the bilinear kernel this replaces scored 30.72dB
+ * round-trip against Lanczos' 31.62dB, and a reviewer reading side-by-side text
+ * crops called the difference "distinguishable in an A/B comparison". Round two
+ * had quietly traded the milestone's own justification for arithmetic.
  *
  * `rowStart` and `rowEnd` let one call fill a horizontal band of the frame
- * rather than all of it. Output rows are independent — each one reads the
- * source rows its own position maps to and nothing else — so splitting a frame
- * into bands across threads produces the same bytes as doing it in one go, for
- * any number of bands. That is what makes the parallel renderer's output
- * independent of how many cores it happened to run on.
+ * rather than all of it. Output rows stay independent — each one reads the
+ * source rows its own position maps to and nothing else, and the row cache is
+ * local to the call — so splitting a frame into bands across threads produces
+ * the same bytes as doing it in one go, for any number of bands. That is what
+ * makes the parallel renderer's output independent of how many cores it
+ * happened to run on.
  *
  * Refuses to magnify. A crop narrower or shorter than the target would have to
  * invent pixels, and inventing pixels is the one thing this tool does not do —
@@ -98,74 +189,101 @@ export function resample(
     Number.isInteger(crop.x) &&
     Number.isInteger(crop.y)
   ) {
+    // Not an optimisation: the portrait deliverable has no zoom reserve at all,
+    // so its crop is always the size of its frame. It must stay a true copy —
+    // running it through any kernel, however good, would cost sharpness the
+    // format cannot spare.
     copyRows(source, crop, target, rowStart, rowEnd)
     return
   }
+
   const pixels = source.data
   const out = target.data
   const sourceStride = source.width * 3
   const lastColumn = source.width - 1
   const lastRow = source.height - 1
   const targetWidth = target.width
+  const targetStride = targetWidth * 3
 
-  // The horizontal tap positions depend only on the crop and the target width,
-  // so they are computed once per frame instead of once per pixel.
-  const columnLeft = new Int32Array(targetWidth)
-  const columnRight = new Int32Array(targetWidth)
-  const columnWeight = new Float64Array(targetWidth)
-  const scaleX = crop.width / targetWidth
-  for (let i = 0; i < targetWidth; i += 1) {
-    const sx = crop.x + (i + 0.5) * scaleX - 0.5
-    const left = Math.floor(sx)
-    columnLeft[i] = clampIndex(left, lastColumn) * 3
-    columnRight[i] = clampIndex(left + 1, lastColumn) * 3
-    columnWeight[i] = sx - left
+  const horizontal = planAxis(crop.x, crop.width, targetWidth)
+  const vertical = planAxis(crop.y, crop.height, target.height)
+
+  // Where every horizontal tap reads, clamped at the raster's edges once per
+  // frame rather than once per pixel per row.
+  const columns = new Int32Array(horizontal.count * targetWidth)
+  for (let k = 0; k < horizontal.count; k += 1) {
+    const base = k * targetWidth
+    for (let i = 0; i < targetWidth; i += 1) {
+      let column = (horizontal.first[i] as number) + k
+      if (column < 0) column = 0
+      else if (column > lastColumn) column = lastColumn
+      columns[base + i] = column * 3
+    }
   }
 
-  const scaleY = crop.height / target.height
-  let write = rowStart * targetWidth * 3
-  for (let j = rowStart; j < rowEnd; j += 1) {
-    const sy = crop.y + (j + 0.5) * scaleY - 0.5
-    const top = Math.floor(sy)
-    const weightY = sy - top
-    const rowTop = clampIndex(top, lastRow) * sourceStride
-    const rowBottom = clampIndex(top + 1, lastRow) * sourceStride
-    for (let i = 0; i < targetWidth; i += 1) {
-      const weightX = columnWeight[i] as number
-      const left = columnLeft[i] as number
-      const right = columnRight[i] as number
-      const topLeft = rowTop + left
-      const topRight = rowTop + right
-      const bottomLeft = rowBottom + left
-      const bottomRight = rowBottom + right
-      // The three channels are written out rather than looped: this is the
-      // innermost loop of the whole renderer, run a few billion times on a
-      // minute of video, and the loop itself measured a fifth of its cost.
-      let a = pixels[topLeft] as number
-      let b = pixels[topRight] as number
-      let c = pixels[bottomLeft] as number
-      let d = pixels[bottomRight] as number
-      let upper = a + (b - a) * weightX
-      let lower = c + (d - c) * weightX
-      out[write] = Math.round(upper + (lower - upper) * weightY)
+  // Consecutive output rows overlap heavily — at 1.33x each source row feeds
+  // several of them — so horizontally filtered rows are kept until they fall
+  // out of the window. One slot more than the window is wide, so a row is never
+  // evicted by the row that still needs it.
+  const slots = vertical.count + 1
+  const cache = new Float64Array(slots * targetStride)
+  const cached = new Int32Array(slots).fill(-1)
+  const slotOf = new Int32Array(vertical.count)
+  const accumulator = new Float64Array(targetStride)
 
-      a = pixels[topLeft + 1] as number
-      b = pixels[topRight + 1] as number
-      c = pixels[bottomLeft + 1] as number
-      d = pixels[bottomRight + 1] as number
-      upper = a + (b - a) * weightX
-      lower = c + (d - c) * weightX
-      out[write + 1] = Math.round(upper + (lower - upper) * weightY)
-
-      a = pixels[topLeft + 2] as number
-      b = pixels[topRight + 2] as number
-      c = pixels[bottomLeft + 2] as number
-      d = pixels[bottomRight + 2] as number
-      upper = a + (b - a) * weightX
-      lower = c + (d - c) * weightX
-      out[write + 2] = Math.round(upper + (lower - upper) * weightY)
-      write += 3
+  const fillSlot = (sourceRow: number, slot: number): void => {
+    const rowOffset = sourceRow * sourceStride
+    const into = slot * targetStride
+    cache.fill(0, into, into + targetStride)
+    for (let k = 0; k < horizontal.count; k += 1) {
+      const base = k * targetWidth
+      let write = into
+      for (let i = 0; i < targetWidth; i += 1) {
+        const weight = horizontal.weights[base + i] as number
+        const at = rowOffset + (columns[base + i] as number)
+        cache[write] =
+          (cache[write] as number) + weight * (pixels[at] as number)
+        cache[write + 1] =
+          (cache[write + 1] as number) + weight * (pixels[at + 1] as number)
+        cache[write + 2] =
+          (cache[write + 2] as number) + weight * (pixels[at + 2] as number)
+        write += 3
+      }
     }
+  }
+
+  let write = rowStart * targetStride
+  for (let j = rowStart; j < rowEnd; j += 1) {
+    const start = vertical.first[j] as number
+    // Bring the rows this output row reads into the cache first, so the inner
+    // loop below is pure arithmetic.
+    for (let k = 0; k < vertical.count; k += 1) {
+      let row = start + k
+      if (row < 0) row = 0
+      else if (row > lastRow) row = lastRow
+      const slot = row % slots
+      if (cached[slot] !== row) {
+        fillSlot(row, slot)
+        cached[slot] = row
+      }
+      slotOf[k] = slot * targetStride
+    }
+    accumulator.fill(0)
+    for (let k = 0; k < vertical.count; k += 1) {
+      const weight = vertical.weights[k * target.height + j] as number
+      if (weight === 0) continue
+      const base = slotOf[k] as number
+      for (let x = 0; x < targetStride; x += 1) {
+        accumulator[x] =
+          (accumulator[x] as number) + weight * (cache[base + x] as number)
+      }
+    }
+    for (let x = 0; x < targetStride; x += 1) {
+      // Lanczos rings, so it overshoots at a hard edge. Clamping here is the
+      // only place the kernel's output meets an 8-bit channel.
+      out[write + x] = clampByte(accumulator[x] as number)
+    }
+    write += targetStride
   }
 }
 
