@@ -10,6 +10,15 @@ import {
 } from '../src/presented.js'
 
 /**
+ * What Chromium reports on `Tracing.tracingComplete` for a recording whose
+ * trace buffer held everything. Spelling it out at every call site is the
+ * point: the argument is required rather than defaulted, so a caller that
+ * has not thought about trace loss cannot accidentally assert there was
+ * none.
+ */
+const COMPLETE = { dataLossOccurred: false }
+
+/**
  * Every fixture below is shaped after real events pulled out of
  * `~/featurecast-bench/out/arm-sbpat-r1.trace.json.gz` on the AI box — a
  * full 69.6s recording of the product path against the patched Chromium
@@ -167,7 +176,7 @@ describe('extractPresentedFrameTimes', () => {
     // Bucketed at the `e` timestamp — the moment the frame was presented,
     // not the moment its pipeline began, which is 15ms earlier at the
     // measured median.
-    expect(extractPresentedFrameTimes(events)).toEqual([5_025])
+    expect(extractPresentedFrameTimes(events, COMPLETE)).toEqual([5_025])
   })
 
   it('counts partially presented frames, which are presented frames too', () => {
@@ -188,7 +197,7 @@ describe('extractPresentedFrameTimes', () => {
       }),
     ]
 
-    expect(extractPresentedFrameTimes(events)).toEqual([2, 4])
+    expect(extractPresentedFrameTimes(events, COMPLETE)).toEqual([2, 4])
   })
 
   it('ignores frames the compositor decided needed no update', () => {
@@ -208,7 +217,7 @@ describe('extractPresentedFrameTimes', () => {
       }),
     ]
 
-    expect(extractPresentedFrameTimes(events)).toEqual([])
+    expect(extractPresentedFrameTimes(events, COMPLETE)).toEqual([])
   })
 
   it("ignores the browser UI compositor's own presented frames", () => {
@@ -234,7 +243,7 @@ describe('extractPresentedFrameTimes', () => {
       }),
     ]
 
-    expect(extractPresentedFrameTimes(events)).toEqual([2])
+    expect(extractPresentedFrameTimes(events, COMPLETE)).toEqual([2])
   })
 
   it('pairs overlapping reporters without crossing them', () => {
@@ -257,15 +266,20 @@ describe('extractPresentedFrameTimes', () => {
       }),
     ]
 
-    expect(extractPresentedFrameTimes(events)).toEqual([5, 9])
+    expect(extractPresentedFrameTimes(events, COMPLETE)).toEqual([5, 9])
   })
 
-  it('lets a re-opened reporter id replace the record whose end was lost', () => {
-    // The trace buffer drops events under load, so a `b` can arrive for an
-    // `id2.local` that is still open — its `e` never made it. The newer
-    // record wins; the stale one is discarded rather than silently deciding
-    // a nesting order that no real trace ever produces (measured over nine
-    // full runs: no `id2.local` is ever open twice at once).
+  it('refuses a reporter id that is opened twice instead of dropping one', () => {
+    // No real trace produces this: over 24 recordings, in all four shapes
+    // checked, no `id2.local` is ever open twice at once. Round two removed
+    // the LIFO stack that handled it, which was right — but what replaced it
+    // kept the newer record and silently discarded the older one's
+    // presentation instant, one lost instant per overlapping pair. The
+    // counterexample below is the size of that: 20 pairs, 40 real
+    // presentations, and the silent version scores 20 — half a denominator,
+    // which doubles the capture efficiency built on it. An input shape
+    // nothing has ever produced is exactly the one that must not be guessed
+    // at quietly.
     const identity = {
       cat: FRAME_CATEGORY,
       id2: { local: '0x3' },
@@ -273,25 +287,30 @@ describe('extractPresentedFrameTimes', () => {
       pid: RENDERER_PID,
       tid: 189,
     }
-    const events: TraceEvent[] = [
-      clockSyncMark(0, 0),
-      {
-        ...identity,
-        args: { frame_reporter: { state: 'STATE_PRESENTED_ALL' } },
-        ph: 'b',
-        ts: 1_000,
-      },
-      {
-        ...identity,
-        args: { frame_reporter: { state: 'STATE_NO_UPDATE_DESIRED' } },
-        ph: 'b',
-        ts: 2_000,
-      },
-      { ...identity, ph: 'e', ts: 3_000 },
-    ]
+    const events: TraceEvent[] = [clockSyncMark(0, 0)]
+    for (let pair = 0; pair < 20; pair += 1) {
+      const base = 1_000 + pair * 100_000
+      events.push(
+        {
+          ...identity,
+          args: { frame_reporter: { state: 'STATE_PRESENTED_ALL' } },
+          ph: 'b',
+          ts: base,
+        },
+        {
+          ...identity,
+          args: { frame_reporter: { state: 'STATE_PRESENTED_ALL' } },
+          ph: 'b',
+          ts: base + 10_000,
+        },
+        { ...identity, ph: 'e', ts: base + 20_000 },
+        { ...identity, ph: 'e', ts: base + 30_000 },
+      )
+    }
 
-    // The surviving record is the damage-free one, so nothing is counted.
-    expect(extractPresentedFrameTimes(events)).toEqual([])
+    expect(() => extractPresentedFrameTimes(events, COMPLETE)).toThrow(
+      /two overlapping PipelineReporter records for id2\.local=0x3/,
+    )
   })
 
   it('does not let one begin record close twice', () => {
@@ -318,7 +337,7 @@ describe('extractPresentedFrameTimes', () => {
       { ...identity, ph: 'e', ts: 18_667 },
     ]
 
-    expect(extractPresentedFrameTimes(events)).toEqual([2])
+    expect(extractPresentedFrameTimes(events, COMPLETE)).toEqual([2])
   })
 
   it('averages several clock marks rather than trusting one', () => {
@@ -334,7 +353,7 @@ describe('extractPresentedFrameTimes', () => {
       }),
     ]
 
-    expect(extractPresentedFrameTimes(events)).toEqual([1_501])
+    expect(extractPresentedFrameTimes(events, COMPLETE)).toEqual([1_501])
   })
 
   it('counts one presented frame per presentation instant, not per report', () => {
@@ -369,7 +388,7 @@ describe('extractPresentedFrameTimes', () => {
     // kept, because a partial presentation that has no `ALL` twin is a real,
     // separate screen update (measured: 83 of them per run, 16.6ms after
     // their predecessor at the median).
-    expect(extractPresentedFrameTimes(events)).toEqual([4, 20.667])
+    expect(extractPresentedFrameTimes(events, COMPLETE)).toEqual([4, 20.667])
   })
 
   describe('against a verbatim excerpt of a real recording', () => {
@@ -388,7 +407,7 @@ describe('extractPresentedFrameTimes', () => {
       // 26 is not read back out of `src/presented.ts`: it is what the
       // pairing re-implemented in this file finds, and what the independent
       // Python extraction on the box reports for the same excerpt.
-      const times = extractPresentedFrameTimes(REAL_TRACE_EXCERPT)
+      const times = extractPresentedFrameTimes(REAL_TRACE_EXCERPT, COMPLETE)
       expect(times.length).toBe(26)
       expect(new Set(times).size).toBe(26)
       for (let index = 1; index < times.length; index += 1) {
@@ -401,7 +420,7 @@ describe('extractPresentedFrameTimes', () => {
       // not from the code under test. Over nine full runs the distinct
       // instants exceed it by at most 1.8 frames and the raw report count by
       // 35-51, so this separates the two by an order of magnitude.
-      const times = extractPresentedFrameTimes(REAL_TRACE_EXCERPT)
+      const times = extractPresentedFrameTimes(REAL_TRACE_EXCERPT, COMPLETE)
       const first = times[0] as number
       const last = times[times.length - 1] as number
       expect(times.length - 1).toBeLessThanOrEqual(
@@ -416,6 +435,50 @@ describe('extractPresentedFrameTimes', () => {
     })
   })
 
+  it('refuses a trace Chromium says it lost events from', () => {
+    // The denominator's lower bound, and the only direction no ratio can
+    // see. A short denominator moves capture efficiency *towards* the gate:
+    // on the `r2a` numbers 84.2% becomes 88.5% at 5% denominator loss, 93.2%
+    // at 10% and 105.4% at 20%. The counterexample is the pair — the very
+    // same events score 26 instants when Chromium says the buffer held, and
+    // are refused outright when it says it did not. A better number out of a
+    // worse recording is the failure this pipeline keeps shipping.
+    expect(
+      extractPresentedFrameTimes(REAL_TRACE_EXCERPT, {
+        dataLossOccurred: false,
+      }).length,
+    ).toBe(26)
+    expect(() =>
+      extractPresentedFrameTimes(REAL_TRACE_EXCERPT, {
+        dataLossOccurred: true,
+      }),
+    ).toThrow(/dataLossOccurred/)
+  })
+
+  it('refuses a recording whose page ran in two renderers', () => {
+    // The clock marks identify the renderer the recorded page lives in, and
+    // the presented frames of every other process are dropped. With marks
+    // from two processes that identification is a coin toss, and whichever
+    // way it lands the presentations of the other renderer are gone — a
+    // denominator missing roughly half its frames, which reads as roughly
+    // twice the capture efficiency. Round two picked the first mark's
+    // process; picking the last was a mutation no test could see, because
+    // nothing said the choice was wrong in the first place.
+    const events: TraceEvent[] = [
+      clockSyncMark(0, 0),
+      { ...clockSyncMark(0, 0), pid: BROWSER_UI_PID },
+      ...reporter({
+        beginMicros: 1_000,
+        endMicros: 2_000,
+        state: 'STATE_PRESENTED_ALL',
+      }),
+    ]
+
+    expect(() => extractPresentedFrameTimes(events, COMPLETE)).toThrow(
+      /clock marks from 2 processes/,
+    )
+  })
+
   it('refuses a trace with no clock marks instead of inventing an origin', () => {
     // Without the marks the trace's microsecond origin is arbitrary, every
     // presented frame would land outside every motion window, and the
@@ -428,6 +491,7 @@ describe('extractPresentedFrameTimes', () => {
           endMicros: 2_000,
           state: 'STATE_PRESENTED_ALL',
         }),
+        COMPLETE,
       ),
     ).toThrow(/no fcsync: clock marks/)
   })

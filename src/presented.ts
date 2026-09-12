@@ -69,6 +69,33 @@ export type PresentedFrameTrace = {
 }
 
 /**
+ * Whether Chromium dropped trace data before we read it.
+ *
+ * This is the denominator's *lower* bound, and it is the direction that
+ * cannot be caught by looking at the ratio. The refresh bound in
+ * `src/efficiency.ts` rejects a denominator that is too large; a denominator
+ * that is too **small** moves capture efficiency towards the gate instead of
+ * away from it — on the `r2a` numbers, 84.2% becomes 88.5% at 5% denominator
+ * loss, 93.2% at 10% and 105.4% at 20%. A silently truncated trace therefore
+ * reads as a better capture, which is precisely the failure this repository
+ * keeps repeating.
+ *
+ * Chromium reports it itself, so this is read rather than inferred.
+ * `Tracing.tracingComplete` carries `dataLossOccurred`
+ * (`content/browser/devtools/protocol/tracing_handler.cc:698-706`:
+ * `bool data_loss = session_->HasDataLossOccurred(); ... `
+ * `frontend_->TracingComplete(data_loss, stream_handle, ...)`), which is set
+ * from Perfetto's own buffer statistics — `chunks_overwritten`,
+ * `chunks_discarded`, `abi_violations` or `trace_writer_packet_loss` above
+ * zero (`services/tracing/public/cpp/perfetto/perfetto_session.cc:39-49`).
+ * The final statistics are requested after the last chunk has been streamed
+ * and before the completion notification is sent
+ * (`tracing_handler.cc:518-529`: "Request stats to check if data loss
+ * occurred"), so the flag on the notification covers the whole recording.
+ */
+export type TraceCompleteness = { dataLossOccurred: boolean }
+
+/**
  * Emits a `performance.mark` pairing the page's trace clock with
  * `Date.now()`. Trace timestamps are monotonic microseconds from an
  * arbitrary origin; the capture manifest and the motion windows are
@@ -121,23 +148,29 @@ export async function startPresentedFrameTrace(
   return {
     async stop(): Promise<number[]> {
       await markClockSync(page)
-      const events = await endTraceAndReadEvents(cdp)
-      return extractPresentedFrameTimes(events)
+      const { completeness, events } = await endTraceAndReadEvents(cdp)
+      return extractPresentedFrameTimes(events, completeness)
     },
   }
 }
 
-async function endTraceAndReadEvents(cdp: CDPSession): Promise<TraceEvent[]> {
-  const completed = new Promise<string>((resolve) => {
+async function endTraceAndReadEvents(
+  cdp: CDPSession,
+): Promise<{ completeness: TraceCompleteness; events: TraceEvent[] }> {
+  const completed = new Promise<{
+    dataLossOccurred?: boolean
+    stream?: string
+  }>((resolve) => {
     cdp.on(
       'Tracing.tracingComplete' as never,
-      ((event: { stream?: string }) => {
-        resolve(event.stream ?? '')
+      ((event: { dataLossOccurred?: boolean; stream?: string }) => {
+        resolve(event)
       }) as never,
     )
   })
   await cdp.send('Tracing.end' as never)
-  const handle = await completed
+  const completion = await completed
+  const handle = completion.stream ?? ''
   if (handle === '') {
     throw new Error('Tracing.tracingComplete arrived without a stream handle')
   }
@@ -162,7 +195,10 @@ async function endTraceAndReadEvents(cdp: CDPSession): Promise<TraceEvent[]> {
 
   const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as
     TraceEvent[] | { traceEvents?: TraceEvent[] }
-  return Array.isArray(parsed) ? parsed : (parsed.traceEvents ?? [])
+  return {
+    completeness: { dataLossOccurred: completion.dataLossOccurred === true },
+    events: Array.isArray(parsed) ? parsed : (parsed.traceEvents ?? []),
+  }
 }
 
 /**
@@ -193,18 +229,33 @@ async function endTraceAndReadEvents(cdp: CDPSession): Promise<TraceEvent[]> {
  *   entry here.
  *
  *   The outer check that settles this without reading any of the above: the
- *   compositor refreshes at 60Hz, so no stretch of a run can contain more
- *   presentations than 60 per second. Over nine full runs (three arms x three
- *   repeats) and every sub-3s stretch of each, the distinct instants exceed
- *   the 60Hz line by at most **1.8 frames**, while the raw record count
- *   exceeds it by **35 to 51 frames** — a window reporting 89.8 presented
- *   frames per second, as the un-deduplicated count did, is not a
- *   measurement, it is double-counting. `validateCaptureEfficiencyReport`
- *   enforces exactly that bound, so this collapse cannot silently regress.
+ *   compositor cannot put more frames on screen than it refreshes, so no
+ *   stretch of a run can contain more presentation instants than its own
+ *   length divided by the refresh interval, plus the one that can sit on the
+ *   opening edge. Over twelve full runs and every sliding 0.3-3.0s stretch of
+ *   each, the distinct instants exceed that line by at most **2 frames**,
+ *   while the raw record count exceeds it by **35 to 51** — a window
+ *   reporting 89.8 presented frames per second, as the un-deduplicated count
+ *   did, is not a measurement, it is double-counting.
+ *   `validateCaptureEfficiencyReport` enforces exactly that bound, so this
+ *   collapse cannot silently regress.
+ *
+ * - **Completeness.** `completeness.dataLossOccurred` is a required argument,
+ *   not an option with a default, for the same reason the efficiency
+ *   denominator is: a denominator whose trustworthiness can be omitted will
+ *   be omitted. A trace that lost events yields a denominator that is too
+ *   small, and too small is the direction that makes the capture look
+ *   *better* — see `TraceCompleteness`.
  */
 export function extractPresentedFrameTimes(
   events: readonly TraceEvent[],
+  completeness: TraceCompleteness,
 ): number[] {
+  if (completeness.dataLossOccurred) {
+    throw new Error(
+      'Chromium reported dataLossOccurred on Tracing.tracingComplete: the trace buffer dropped events, so an unknown number of presentations is missing from the denominator. A short denominator raises capture efficiency instead of lowering it, so this run cannot be scored — re-record with a larger trace buffer or fewer categories.',
+    )
+  }
   const clock = resolveClockSync(events)
   const openReporters = new Map<string, TraceEvent>()
   const presentedMicros = new Set<number>()
@@ -216,14 +267,25 @@ export function extractPresentedFrameTimes(
     // arms x three repeats, 8856-10482 renderer `PipelineReporter` events
     // each) every renderer record sits on a single thread, no `id2.local`
     // ever appears on two threads, and no `id2.local` is ever open twice at
-    // once. A `tid` component and a LIFO stack are therefore machinery no
-    // real input can exercise — and unexercised machinery is how this
-    // pipeline has repeatedly shipped a defect under a green suite. A second
-    // `b` for a still-open key means the first one's `e` was dropped from
-    // the trace buffer, so the newer record wins and the stale one is
-    // discarded, deterministically and without a guess about nesting order.
+    // once.
+    //
+    // So a second `b` for a still-open key is not a case this module knows
+    // how to score, and it is not allowed to guess: keeping the newer record
+    // silently drops the older one's presentation instant, which shrinks the
+    // denominator by one per overlapping pair — linear, and in the direction
+    // that flatters the capture (a synthetic 40-instant trace built entirely
+    // of overlapping pairs counts as 20). Round two removed the LIFO stack
+    // that no real input exercised, which was right; leaving a silent
+    // halving in its place was not. Loud is the only safe answer for an
+    // input shape nothing has ever produced.
     const key = event.id2?.local ?? ''
     if (event.ph === 'b') {
+      const alreadyOpen = openReporters.get(key)
+      if (alreadyOpen !== undefined) {
+        throw new Error(
+          `Trace has two overlapping PipelineReporter records for id2.local=${key} (opened at ${String(alreadyOpen.ts)}us and again at ${String(event.ts)}us) with no end in between. Every presentation instant this module has ever seen closes before its identity is reused; scoring this trace would silently drop one instant per overlapping pair and make the capture look better than it was.`,
+        )
+      }
       openReporters.set(key, event)
       continue
     }
@@ -245,12 +307,29 @@ export function extractPresentedFrameTimes(
     .map((micros) => micros / 1000 + clock.offsetMs)
 }
 
+/**
+ * Finds the recorded page's renderer process and the offset between the
+ * trace's monotonic clock and `Date.now()`.
+ *
+ * The process is not guessed by name: it is the one the `fcsync:` marks were
+ * emitted in, i.e. the one the recorded page runs in. Which is exactly why
+ * **more than one such process is an error rather than a choice.** The
+ * previous version took whichever process the first mark happened to be in
+ * (`pid ??= event.pid`), so a recording whose page lived in two renderers —
+ * an out-of-process iframe, a same-site navigation that swapped the
+ * RenderFrameHost — would have counted the presentations of one of them and
+ * silently halved the denominator. Halving the denominator makes capture
+ * efficiency read roughly twice as good, so the failure mode was a passing
+ * gate. Picking the *last* mark instead of the first was likewise a mutation
+ * no test could catch, because nothing distinguished the two: the arbitrary
+ * choice itself was the defect, and it is gone rather than tested.
+ */
 function resolveClockSync(events: readonly TraceEvent[]): {
   offsetMs: number
   pid: number
 } {
   const offsets: number[] = []
-  let pid: number | undefined
+  const pids = new Set<number>()
   for (const event of events) {
     if (
       event.name === undefined ||
@@ -262,15 +341,21 @@ function resolveClockSync(events: readonly TraceEvent[]): {
     const wallClockMs = Number(event.name.slice(CLOCK_SYNC_MARK_PREFIX.length))
     if (!Number.isFinite(wallClockMs)) continue
     offsets.push(wallClockMs - event.ts / 1000)
-    pid ??= event.pid
+    if (event.pid !== undefined) pids.add(event.pid)
   }
-  if (offsets.length === 0 || pid === undefined) {
+  if (offsets.length === 0 || pids.size === 0) {
     throw new Error(
       `Trace carries no ${CLOCK_SYNC_MARK_PREFIX} clock marks, so presented frames cannot be placed on the capture's clock; call markClockSync before and after the recording`,
     )
   }
+  if (pids.size > 1) {
+    throw new Error(
+      `Trace carries ${CLOCK_SYNC_MARK_PREFIX} clock marks from ${String(pids.size)} processes (${[...pids].join(', ')}), so the recorded page did not stay in one renderer. Counting the presentations of only one of them would shrink the denominator and make capture efficiency read better than it was.`,
+    )
+  }
+  const [pid] = [...pids]
   return {
     offsetMs: offsets.reduce((sum, value) => sum + value, 0) / offsets.length,
-    pid,
+    pid: pid ?? 0,
   }
 }
