@@ -1,0 +1,9 @@
+# Erzeugte Eichvideos. Reproduzierbar aus tests/synth_fixtures.py, deshalb
+# nicht im Repo -- ein eingechecktes MP4 ist ein Binaerklotz ohne Herkunft.
+.eichvideos/
+
+# Von uv angelegte Umgebung und Zwischenstaende der Werkzeuge.
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/

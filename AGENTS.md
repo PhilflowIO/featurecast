@@ -2,7 +2,7 @@
 
 ## Project Structure
 
-Featurecast is a TypeScript package for recording Playwright feature demos. Keep library code in `src/`, executable examples in `demo/`, and automated tests in `tests/`. Planning and acceptance criteria live in `PLAN.md` and `MILESTONES.md`; device presets and capture decisions belong in `docs/DEVICES.md`. Do not put credentials or saved browser sessions under version control; `auth/` is reserved for ignored local material.
+Featurecast is a TypeScript package for recording Playwright feature demos. Keep library code in `src/`, executable examples in `demo/`, and automated tests in `tests/`. Planning and acceptance criteria live in `PLAN.md` and `MILESTONES.md`; device presets and capture decisions belong in `docs/DEVICES.md`. Standalone check tools that are not part of the shipped package live in `tools/<name>/` with their own dependency manifest; `tools/smoothness/` measures motion smoothness on the finished video and is Python on purpose (see its README). Do not put credentials or saved browser sessions under version control; `auth/` is reserved for ignored local material.
 
 ## Build, Test, and Development Commands
 
