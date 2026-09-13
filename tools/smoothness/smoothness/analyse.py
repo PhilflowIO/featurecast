@@ -6,6 +6,7 @@ denselben Weg nehmen wie der Aufruf von Hand.
 from __future__ import annotations
 
 from dataclasses import asdict
+from itertools import chain
 from pathlib import Path
 
 from .frames import Ausschnitt, Skalierung, lies_graustufen, skalierung_bestimmen
@@ -32,10 +33,11 @@ def analysiere(video: str, ausschnitt: Ausschnitt | None = None, fps: float | No
     # nirgends sonst. src/assemble.ts erzeugt das Ausgabevideo mit genau
     # dieser konstanten Rate (`FRAME_RATE`).
     fps = k.fps_nominal if fps is None else fps
-    frames = lies_graustufen(video, ausschnitt)
-    breite = frames[0].shape[1]
+    bilder = lies_graustufen(video, ausschnitt)
+    erstes = next(bilder)
+    breite = erstes.shape[1]
     skal: Skalierung = skalierung_bestimmen(breite, aufnahme_breite, px_faktor)
-    pairs = messe_bildpaare(frames, k)
+    pairs = messe_bildpaare(chain([erstes], bilder), k)
 
     if lauf_verzeichnis is not None:
         fenster = aus_lauf(lauf_verzeichnis, fps, skal.faktor, len(pairs))
@@ -49,7 +51,7 @@ def analysiere(video: str, ausschnitt: Ausschnitt | None = None, fps: float | No
     bericht: dict[str, object] = {
         "video": video,
         "ausschnitt": ausschnitt.als_tupel() if ausschnitt else None,
-        "bilder": len(frames),
+        "bilder": len(pairs) + 1,
         "bildpaare": n,
         "fps": fps,
         "skalierung": {"faktor": skal.faktor, "herkunft": skal.herkunft},

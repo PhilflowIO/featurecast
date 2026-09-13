@@ -38,7 +38,7 @@ def test_naiver_schaetzer_ist_blind_wo_das_werkzeug_richtig_liegt(eichfall):
     sondern "falsche Frage, ohne es zu merken".
     """
     mp4, wahrheit = eichfall("c7_senkrecht")
-    frames = lies_graustufen(str(mp4))
+    frames = list(lies_graustufen(str(mp4)))
     assert all(dy == 7.0 for dy in wahrheit["dy"])
 
     naiv = [naive_mad(frames[i - 1], frames[i]) for i in range(1, 11)]
@@ -58,7 +58,7 @@ def test_werkzeug_verweigert_wo_der_naive_schaetzer_zuversichtlich_falsch_ist(ei
     dieselbe Bildinformation. Der naive Schaetzer waehlt trotzdem einen Wert
     und nennt ihn sicher; das Werkzeug verweigert die Mehrheit."""
     mp4, wahrheit = eichfall("c12_streng_alias_70px")
-    frames = lies_graustufen(str(mp4))
+    frames = list(lies_graustufen(str(mp4)))
     wahr = np.array(wahrheit["dx"][:12], dtype=float)
 
     naiv = np.array([naive_mad(frames[i - 1], frames[i]).dx for i in range(1, 13)])

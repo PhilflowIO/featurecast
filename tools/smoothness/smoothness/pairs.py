@@ -10,6 +10,7 @@ Bildpaaren ist nicht glatt, es ist ungemessen.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import numpy as np
@@ -48,8 +49,10 @@ class Pair:
     """Bild ist eine Wiederholung seines Vorgaengers (`mad <= dup_mad`)."""
 
 
-def messe_bildpaare(frames: list[np.ndarray], k: Knobs = KNOBS) -> list[Pair]:
+def messe_bildpaare(frames: Iterable[np.ndarray], k: Knobs = KNOBS) -> list[Pair]:
     """Misst jedes aufeinanderfolgende Bildpaar.
+
+    `frames` darf ein Strom sein; gehalten wird immer nur das Vorgaengerbild.
 
     Reihenfolge der Entscheidungen, und warum:
       1. Wiederholtes Bild? Dann ist der Versatz 0 und kein Schaetzer noetig.
@@ -65,31 +68,32 @@ def messe_bildpaare(frames: list[np.ndarray], k: Knobs = KNOBS) -> list[Pair]:
          Phasenkorrelation schon, und umgekehrt.
     """
     pairs: list[Pair] = []
-    for i in range(1, len(frames)):
-        a, b = frames[i - 1], frames[i]
-        mad = float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean())
-        if mad <= k.dup_mad:
-            pairs.append(Pair(i, 0.0, 0.0, "ok", 0.0, mad, True))
-            continue
-        p = phasecorr_gate(a, b, amb_ratio=k.amb_ratio)
-        ratio = 0.0
-        if p.tag.startswith("AMBIG"):
-            ratio = float(p.tag.split("=")[1].rstrip(")"))
-            pairs.append(Pair(i, math.nan, math.nan, "mehrdeutig", ratio, mad, False))
-            continue
-        lk = lk_median(a, b)
-        if not np.isfinite(lk.dx):
-            pairs.append(Pair(i, math.nan, math.nan, "wenig-punkte", ratio, mad, False))
-            continue
-        if abs(lk.dx - p.dx) > k.agree_px or abs(lk.dy - p.dy) > k.agree_px:
-            rp = residual_ratio(a, b, p.dx, p.dy)
-            rl = residual_ratio(a, b, lk.dx, lk.dy)
-            if min(rp, rl) > k.residual_max:
-                pairs.append(Pair(i, math.nan, math.nan, "uneinig", ratio, mad, False))
-                continue
-            sieger = p if rp <= rl else lk
-            pairs.append(Pair(i, float(sieger.dx), float(sieger.dy), "schiedsspruch",
-                              ratio, mad, False))
-            continue
-        pairs.append(Pair(i, float(lk.dx), float(lk.dy), "ok", ratio, mad, False))
+    bilder = iter(frames)
+    a = next(bilder, None)
+    for i, b in enumerate(bilder, start=1):
+        pairs.append(_miss_paar(i, a, b, k))
+        a = b
     return pairs
+
+
+def _miss_paar(i: int, a: np.ndarray, b: np.ndarray, k: Knobs) -> Pair:
+    """Ein Bildpaar, Entscheidungsreihenfolge siehe `messe_bildpaare`."""
+    mad = float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean())
+    if mad <= k.dup_mad:
+        return Pair(i, 0.0, 0.0, "ok", 0.0, mad, True)
+    p = phasecorr_gate(a, b, amb_ratio=k.amb_ratio)
+    ratio = 0.0
+    if p.tag.startswith("AMBIG"):
+        ratio = float(p.tag.split("=")[1].rstrip(")"))
+        return Pair(i, math.nan, math.nan, "mehrdeutig", ratio, mad, False)
+    lk = lk_median(a, b)
+    if not np.isfinite(lk.dx):
+        return Pair(i, math.nan, math.nan, "wenig-punkte", ratio, mad, False)
+    if abs(lk.dx - p.dx) > k.agree_px or abs(lk.dy - p.dy) > k.agree_px:
+        rp = residual_ratio(a, b, p.dx, p.dy)
+        rl = residual_ratio(a, b, lk.dx, lk.dy)
+        if min(rp, rl) > k.residual_max:
+            return Pair(i, math.nan, math.nan, "uneinig", ratio, mad, False)
+        sieger = p if rp <= rl else lk
+        return Pair(i, float(sieger.dx), float(sieger.dy), "schiedsspruch", ratio, mad, False)
+    return Pair(i, float(lk.dx), float(lk.dy), "ok", ratio, mad, False)
