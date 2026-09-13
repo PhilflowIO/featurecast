@@ -271,3 +271,36 @@ def mutiere(quelle: Path, art: str, ziel: Path) -> Path:
     pfad = ziel / f"{quelle.stem}_{art}.mp4"
     encode(m, pfad)
     return pfad
+
+
+# ------------------------------------------------------------- Laufdateien
+def schreibe_lauf_ueber_ganzes_video(ziel: Path, bilder: int, label: str,
+                                     strecke_aufnahme_px: float) -> Path:
+    """Laufdateien in der Form von demo/m1-capture.ts, EIN Fenster ueber das
+    ganze Video.
+
+    Fuer Tests, die ein synthetisches Video ueber den Produktpfad urteilen
+    lassen muessen: ohne Sollstrecke und externe Dauer gibt das Geraet kein
+    Urteil ab (#28). Beide Zahlen muessen deshalb von AUSSEN kommen --
+    `bilder` aus dem Erzeuger oder der Mutation, `strecke_aufnahme_px` aus
+    der Wahrheitsdatei. Keine davon stammt aus der Messung.
+    """
+    start = 2_000_000.0
+    schritt = 1000 / 60
+    # +0,5 ms, damit das letzte Bild nicht an Gleitkomma-Rundung aus dem
+    # Fenster faellt; die 60-Hz-Grenze bleibt dabei exakt `bilder`.
+    ende = start + (bilder - 1) * schritt + 0.5
+    ziel.mkdir(parents=True, exist_ok=True)
+    (ziel / "timestamps.json").write_text(json.dumps({
+        "captureSize": {"height": 1600, "width": 2560},
+        "frames": [{"file": f"frame-{i:05d}.jpg", "timestamp": start + i * schritt,
+                    "viewport": {"height": 1600, "width": 2560}} for i in range(bilder)],
+        "session": {"duration": ende - start, "endedAt": ende, "startedAt": start},
+        "version": 1}), encoding="utf-8")
+    (ziel / "motion-windows.json").write_text(json.dumps({
+        "windows": [{"label": label, "start": start, "end": ende,
+                     "durationSeconds": (ende - start) / 1000,
+                     "target": f"div.MuiDataGrid-virtualScroller "
+                               f"(x range {strecke_aufnahme_px:g}px)"}]}),
+        encoding="utf-8")
+    return ziel

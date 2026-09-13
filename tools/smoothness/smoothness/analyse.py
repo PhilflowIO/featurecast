@@ -12,7 +12,7 @@ from pathlib import Path
 from .frames import Ausschnitt, Skalierung, lies_graustufen, skalierung_bestimmen
 from .knobs import KNOBS, Knobs, erklaere
 from .pairs import STATUS_ALLE, STATUS_GUELTIG, messe_bildpaare
-from .report import beurteile_fenster
+from .report import beurteile_fenster, fasse_zusammen
 from .windows import QUELLE_EIGENE, QUELLE_PRODUKT, aus_lauf, eigene_zerlegung, richtungswechsel
 
 __all__ = ["analysiere"]
@@ -47,6 +47,7 @@ def analysiere(video: str, ausschnitt: Ausschnitt | None = None, fps: float | No
         quelle = QUELLE_EIGENE
 
     n = len(pairs)
+    urteile = [beurteile_fenster(pairs, f, fps, k) for f in fenster]
     gueltig = sum(1 for p in pairs if p.status in STATUS_GUELTIG)
     bericht: dict[str, object] = {
         "video": video,
@@ -64,7 +65,8 @@ def analysiere(video: str, ausschnitt: Ausschnitt | None = None, fps: float | No
         "verworfen": {s: sum(1 for p in pairs if p.status == s)
                       for s in STATUS_ALLE if s not in STATUS_GUELTIG},
         "richtungswechsel": richtungswechsel(pairs, k),
-        "fenster": [beurteile_fenster(pairs, f, fps, k) for f in fenster],
+        "zusammenfassung": fasse_zusammen(urteile),
+        "fenster": urteile,
         "paare": [asdict(p) for p in pairs],
     }
     return bericht

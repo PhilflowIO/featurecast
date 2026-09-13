@@ -2,12 +2,15 @@
 
 Zwei Regeln bestimmen diese Datei:
 
-1. VERWEIGERN STATT BENOTEN. Ein Fenster, das eine aeussere Schranke reisst
-   oder zu wenige gueltige Bildpaare hat, bekommt "NICHT MESSBAR" mit Grund
-   und KEIN Glaette-Urteil. Ein Lauf ganz ohne auswertbares Fenster sagt
-   ausdruecklich, dass das kein gutes Zeugnis ist.
-2. JEDE QUOTE NENNT IHREN NENNER, je Fenster, in der Ausgabe. Erzwungen
-   ueber den Typ `Quote` in hitches.py, nicht ueber Disziplin.
+1. VERWEIGERN STATT BENOTEN. Ein Fenster, dessen aeussere Schranke reisst
+   ODER NICHT GEPRUEFT WERDEN KONNTE, oder das zu wenige gueltige Bildpaare
+   hat, bekommt "NICHT MESSBAR" mit Grund und KEIN Glaette-Urteil. "Nicht
+   geprueft" ist nie "bestanden" -- die erste Fassung hat das nur fuer die
+   gerissene Schranke durchgesetzt und Sortier-Fenster, in denen sich nichts
+   bewegt, mit einem Haker benotet (#28). Ein Lauf ganz ohne auswertbares
+   Fenster sagt ausdruecklich, dass das kein gutes Zeugnis ist.
+2. JEDE QUOTE NENNT IHREN NENNER, je Fenster und in der Zusammenfassung.
+   Erzwungen ueber den Typ `Quote` in hitches.py, nicht ueber Disziplin.
 
 Links und rechts werden getrennt ausgewiesen und nie gemittelt: der Owner
 berichtet Haker in beiden Richtungen, und ein Mittelwert haette sie
@@ -15,6 +18,8 @@ gegeneinander aufgehoben.
 """
 
 from __future__ import annotations
+
+from collections import Counter
 
 import numpy as np
 
@@ -24,11 +29,19 @@ from .knobs import KNOBS, Knobs
 from .pairs import STATUS_ALLE, STATUS_GUELTIG, Pair
 from .windows import QUELLE_EIGENE, Fenster
 
-__all__ = ["als_text", "beurteile_fenster"]
+__all__ = ["NICHT_MESSBAR", "als_text", "beurteile_fenster", "fasse_zusammen"]
+
+NICHT_MESSBAR = "NICHT MESSBAR"
 
 MIN_GUELTIGE_BILDPAARE = 3
 """Unter drei gueltigen Bildpaaren traegt kein Median und kein oertliches
 Tempo. Kein Urteil ist dann die ehrliche Antwort."""
+
+RICHTUNGEN = ("rechts", "links", "runter", "hoch")
+
+
+def _verweigert(res: dict[str, object], code: str, grund: str) -> dict[str, object]:
+    return {**res, "urteil": NICHT_MESSBAR, "grund_code": code, "grund": grund}
 
 
 def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
@@ -46,12 +59,18 @@ def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
         achse = "y"
     komp = np.array([(p.dx if achse == "x" else p.dy) for p in gueltig], dtype=float)
     gerichtete_summe = float(komp.sum()) if len(komp) else 0.0
+    # Translation heisst: mindestens ein gueltiges Bildpaar bewegt sich ueber
+    # die Rauschgrenze hinaus. Eine Richtung aus einer Messung abzuleiten, die
+    # identisch null ist, hiesse sie zu erfinden (#28).
+    translation = bool(len(komp)) and bool(np.any(np.abs(komp) >= k.still_px))
     if fenster.richtung is not None:
         richtung, richtung_herkunft = fenster.richtung, "Fenstername"
-    else:
+    elif translation:
         richtung = {"x": ("rechts", "links"), "y": ("runter", "hoch")}[achse][
             0 if gerichtete_summe >= 0 else 1]
         richtung_herkunft = "aus der Messung abgeleitet"
+    else:
+        richtung, richtung_herkunft = None, "keine -- im Fenster wurde keine Translation gemessen"
 
     res: dict[str, object] = {
         "fenster": fenster.name,
@@ -59,6 +78,7 @@ def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
         "achse": achse,
         "richtung": richtung,
         "richtung_herkunft": richtung_herkunft,
+        "translation_gemessen": translation,
         "von_bildpaar": fenster.von_bildpaar,
         "bis_bildpaar": fenster.bis_bildpaar,
         "bildpaare": n_pairs,
@@ -69,7 +89,7 @@ def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
         res["hinweis_fenster"] = (
             "Fenstergrenzen stammen aus der Messung selbst, nicht aus "
             "motion-windows.json -- beide aeusseren Schranken bleiben damit "
-            "ungeprueft.")
+            "ungeprueft, und ohne sie gibt es kein Urteil.")
 
     res["schranke_60hz"] = pruefe_60hz(n_pairs + 1, fenster.dauer,
                                       fenster.bilder_extern,
@@ -77,13 +97,19 @@ def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
     res["schranke_strecke"] = pruefe_strecke(gerichtete_summe, fenster.soll_px,
                                              fenster.soll_herkunft, k)
 
+    ohne_bewegung = "" if translation else " -- im Fenster wurde keine Translation gemessen"
     if res["schranke_strecke"]["haelt"] is False:
-        return {**res, "urteil": "NICHT MESSBAR", "grund": "Strecke verfehlt"}
+        return _verweigert(res, "strecke_verfehlt", "Strecke verfehlt" + ohne_bewegung)
+    if res["schranke_strecke"]["haelt"] is None:
+        return _verweigert(res, "strecke_ungeprueft",
+                           "Streckenschranke ungeprueft (kein Sollwert)" + ohne_bewegung)
     if res["schranke_60hz"]["haelt"] is False:
-        return {**res, "urteil": "NICHT MESSBAR", "grund": "60-Hz-Schranke verletzt"}
+        return _verweigert(res, "60hz_verletzt", "60-Hz-Schranke verletzt")
+    if res["schranke_60hz"]["haelt"] is None:
+        return _verweigert(res, "60hz_ungeprueft", "60-Hz-Schranke ungeprueft")
     if n_ok < MIN_GUELTIGE_BILDPAARE:
-        return {**res, "urteil": "NICHT MESSBAR",
-                "grund": f"nur {n_ok} gueltige Bildpaare von {n_pairs}"}
+        return _verweigert(res, "zu_wenig_gueltig",
+                           f"nur {n_ok} gueltige Bildpaare von {n_pairs}")
 
     schritte = np.abs(komp)
     res["schritt_px"] = {
@@ -100,6 +126,7 @@ def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
                                       "Bildpaare im Fenster").als_dict()
 
     befund = finde_haker(schritte, fenster.von_bildpaar, fps, k)
+
     res["stoerstellen"] = befund.stoerstellen
     res["stoerstellen_anzahl"] = len(befund.stoerstellen)
     res["haker_ereignisse"] = befund.ereignisse
@@ -119,6 +146,37 @@ def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
     else:
         res["urteil"] = "glatt"
     return res
+
+
+def fasse_zusammen(urteile: list[dict]) -> dict[str, object]:
+    """Der Lauf in einem Blick -- mit Nenner, und je Richtung getrennt.
+
+    Gezaehlt werden nur BEURTEILTE Fenster; wie viele zurueckgehalten wurden
+    und warum, steht daneben. Eine Haker-Summe ohne diese Zahl liest sich wie
+    ein Urteil ueber den ganzen Lauf, obwohl sie womoeglich nur einen Bruchteil
+    davon abdeckt.
+    """
+    beurteilt = [u for u in urteile if u["urteil"] != NICHT_MESSBAR]
+    zurueck = Counter(str(u["grund_code"]) for u in urteile if u["urteil"] == NICHT_MESSBAR)
+
+    je_richtung: dict[str, object] = {}
+    for r in (*RICHTUNGEN, None):
+        alle = [u for u in urteile if u["richtung"] == r]
+        if not alle:
+            continue
+        drin = [u for u in alle if u["urteil"] != NICHT_MESSBAR]
+        je_richtung[r if r is not None else "ohne Richtung"] = {
+            "beurteilt": Quote(len(drin), len(alle), "Fenster dieser Richtung").als_dict(),
+            "haker": sum(int(u["stoerstellen_anzahl"]) for u in drin),
+        }
+
+    return {
+        "beurteilt": Quote(len(beurteilt), len(urteile), "Fenster des Laufs").als_dict(),
+        "zurueckgehalten": dict(sorted(zurueck.items())),
+        "haker": sum(int(u["stoerstellen_anzahl"]) for u in beurteilt),
+        "haker_bedeutung": "Stoerstellen in den beurteilten Fenstern",
+        "je_richtung": je_richtung,
+    }
 
 
 def als_text(bericht: dict) -> str:
@@ -144,11 +202,19 @@ def als_text(bericht: dict) -> str:
                  "gutes Zeugnis, sondern eine Verweigerung.")
         return "\n".join(z)
 
-    messbar = [w for w in bericht["fenster"] if w["urteil"] != "NICHT MESSBAR"]
-    if not messbar:
-        z.append("")
+    zf = bericht["zusammenfassung"]
+    b = zf["beurteilt"]
+    z.append("")
+    z.append(f"ZUSAMMENFASSUNG: beurteilt {b['anzahl']}/{b['von']} {b['nenner_bedeutung']}, "
+             f"zurueckgehalten {zf['zurueckgehalten']}")
+    if b["anzahl"] == 0:
         z.append("!! KEIN Fenster war messbar -- das ist KEIN gutes Zeugnis, "
                  "sondern eine Verweigerung. Gruende siehe unten.")
+    else:
+        z.append(f"   {zf['haker']} {zf['haker_bedeutung']}")
+        for r, jr in zf["je_richtung"].items():
+            q = jr["beurteilt"]
+            z.append(f"   {r}: beurteilt {q['anzahl']}/{q['von']}, {jr['haker']} Haker")
 
     for w in bericht["fenster"]:
         z.append("")
@@ -160,8 +226,8 @@ def als_text(bericht: dict) -> str:
                  f"verworfen {w['verworfen']}")
         z.append(f"   60-Hz-Schranke:   {w['schranke_60hz']}")
         z.append(f"   Streckenabgleich: {w['schranke_strecke']}")
-        if w["urteil"] == "NICHT MESSBAR":
-            z.append(f"   URTEIL: NICHT MESSBAR ({w['grund']})")
+        if w["urteil"] == NICHT_MESSBAR:
+            z.append(f"   URTEIL: {NICHT_MESSBAR} ({w['grund']})")
             continue
         sp = w["schritt_px"]
         z.append(f"   Schritt je Bild ({sp['einheit']}): Median {sp['median']}, "

@@ -54,9 +54,11 @@ def test_streckenschranke_haelt_wenn_die_strecke_stimmt():
     pairs = _gleichmaessige_paare(20, 4.0)
     fenster = Fenster(name="soll-getroffen", von_bildpaar=1, bis_bildpaar=20,
                       quelle=QUELLE_PRODUKT, soll_px=80.0,
-                      soll_herkunft="Test", richtung="rechts")
+                      soll_herkunft="Test", richtung="rechts",
+                      dauer=Dauer(20 / 60, "Test: echte Fensterdauer"))
     urteil = beurteile_fenster(pairs, fenster, 60.0)
     assert urteil["schranke_strecke"]["haelt"] is True
+    assert urteil["schranke_60hz"]["haelt"] is True
     assert urteil["urteil"] != "NICHT MESSBAR"
 
 
