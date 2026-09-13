@@ -64,7 +64,7 @@ pnpm demo:hello
 
 Der folgende manuelle Befehl zeichnet eine öffentliche, dichte Testoberfläche
 gut 20 Sekunden lang im festgelegten 2560×1600-Capture-Viewport auf. Er
-speichert JPEG-Frames, `timestamps.json` und `capture-stats.json` unter dem
+speichert JPEG-Frames, `timestamps.json`, `capture-stats.json` und `browser.json` unter dem
 angegebenen Artefaktordner und rendert daraus `output.mp4`. Der Render
 schneidet dabei mittig auf 16:9 (`2560×1440`, 80 Pixel oben und unten) und
 verkleinert anschließend auf 1920×1080; es wird nie hochskaliert.
@@ -84,6 +84,24 @@ Der Artefaktordner muss bei jedem Lauf neu sein oder vorher bewusst gelöscht
 werden; die Aufnahme überschreibt bestehende Artefakte nicht. Verwende dafür
 einen eindeutigen Pfad als zweites Argument, etwa
 `pnpm demo:m1-capture https://app.onlydash.io/ artifacts/m1-capture-001`.
+
+**Welcher Browser aufnimmt.** Ohne weitere Angabe startet Playwrights
+mitgelieferter Chromium. Ein anderes Binär — etwa der selbst gebaute,
+gepatchte Chromium aus #17 — wird über `CHROME_BIN` gewählt:
+
+```sh
+CHROME_BIN=/pfad/zu/chromium/src/out/Release/chrome \
+  pnpm demo:m1-capture https://app.onlydash.io/ artifacts/m1-capture-002
+```
+
+Ein `CHROME_BIN`, das leer ist oder kein ausführbares Binär benennt, bricht
+vor dem Start ab. Nach dem Start wird das tatsächlich laufende Binär beim
+Betriebssystem nachgefragt (`/proc`, deshalb nur unter Linux); weicht es vom
+angeforderten ab, bricht der Lauf ab. Jeder Lauf schreibt `browser.json` mit
+absolutem Pfad und `--version` des laufenden Binärs in den Artefaktordner,
+ebenso `record()` in seinen `out`-Ordner. Hintergrund: drei Tage Messungen
+wurden dem falschen Browser zugeschrieben, weil ein gesetztes `CHROME_BIN`
+still ignoriert wurde (#23, [docs/JOURNEY.md](docs/JOURNEY.md)).
 
 Frame-Erfassung und Festplatten-Schreiben sind entkoppelt: `onFrame` reiht nur
 synchron ein, ein separater Writer schreibt im Hintergrund, damit ein

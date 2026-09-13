@@ -1,8 +1,13 @@
 import { readFile, writeFile } from 'node:fs/promises'
 
-import { chromium, type Page } from 'playwright'
+import type { Page } from 'playwright'
 
 import { assembleScreencast } from '../src/assemble.js'
+import {
+  launchChromium,
+  resolveBrowserRequest,
+  writeBrowserProvenance,
+} from '../src/browser.js'
 import { captureScreencast, type TimestampManifest } from '../src/capture.js'
 import {
   computeMotionWindowCadence,
@@ -61,10 +66,17 @@ function capturedPageRuntime(page: Page): RecordRuntime {
   }
 }
 
-const browser = await chromium.launch({
-  args: [...HARDWARE_GL_LAUNCH_ARGS],
-  headless: true,
-})
+// Resolved and verified before anything is recorded: which binary runs is
+// read back from the operating system, and a CHROME_BIN that is not honoured
+// stops the run here instead of producing numbers attributed to the wrong
+// browser (#23).
+const { browser, provenance } = await launchChromium(
+  { args: [...HARDWARE_GL_LAUNCH_ARGS], headless: true },
+  resolveBrowserRequest(process.env),
+)
+console.log(
+  `browser: ${provenance.executablePath} (${provenance.version}; requested: ${provenance.request.source})`,
+)
 try {
   const context = await browser.newContext({
     viewport: { height: 1600, width: 2560 },
@@ -104,6 +116,9 @@ try {
       },
     )
   })
+  // The capture creates the output directory, so this is the first moment
+  // the provenance can be written next to the frames it describes.
+  await writeBrowserProvenance(outputDirectory, provenance)
   const paintTimestamps = await readPaintTimestamps(page)
   const presentedTimestamps = await presentedFrames.stop()
   const manifest = JSON.parse(
