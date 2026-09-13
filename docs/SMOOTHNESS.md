@@ -63,6 +63,38 @@ Entscheidung des Kodierers, keine Bewegungswahrheit.
 > Bilder auseinander liegen, sind **eine** Störstelle — das Auge kann zwei
 > Stolperer 50 ms auseinander nicht trennen. Gezählt werden Störstellen.
 
+## Schwere: wie schlimm, nicht nur wie oft
+
+Die Zahl der Haker allein ordnet falsch (#29). Am echten Material bekam der
+Standard-Browser, der die ganze Seitwärts-Strecke in einem Bild überspringt,
+**einen** Haker, der gepatchte Bau mit zwei kleinen Nachholern **zwei**. Die
+Zahl sagt, dass etwas geschah, nie wie schlimm.
+
+Jedes Urteil nennt deshalb den **größten Sprung in Gleichschritten**. Ein
+Gleichschritt ist die Sollstrecke geteilt durch die Bildpaare des Fensters —
+der Schritt, den eine vollkommen gleichmäßige Bewegung je Bild machen würde.
+Beide Größen kommen aus `motion-windows.json`, nicht aus der Messung. Ein
+Sprung von 15 Gleichschritten heißt: in einem Bild kommt die Strecke von 15
+Bildern an. Jede Störstelle trägt außerdem ihren größten Schritt in Pixeln
+und ihre stehende Zeit in Millisekunden.
+
+Liefert ein einzelnes Bildpaar **mindestens die Hälfte der Sollstrecke**
+(`teleport_anteil`), heißt das Urteil **Teleport**: zwischen den Sprüngen
+existiert die Bewegung nicht. Offenlegung: dieser Wert wurde nach dem Blick
+auf die drei Browser-Arme eingeführt (ungepatcht 82–95 %, gepatcht 20 %) und
+liegt absichtlich weit zwischen beiden.
+
+Den Sprungfaktor gegen das örtliche Tempo gibt es nur, wo es ein örtliches
+Tempo gibt. Stehen die Nachbarn still (unter `still_px`), teilte die erste
+Fassung durch 10⁻⁶ und meldete Nachholsprünge vom 110-millionenfachen Tempo.
+Dort steht jetzt kein Faktor, sondern der Schritt in Pixeln.
+
+**Läufe vergleichen.** `smoothness --vergleiche a.json b.json c.json` ordnet
+Berichte desselben Aufnahmeskripts von glatt nach hakelig, nach dem größten
+Sprung in Gleichschritten. Verglichen wird nur über Fenster, die in **jedem**
+Lauf beurteilt wurden, und deren Anzahl steht in der Ausgabe — sonst gewinnt
+der Lauf, dessen schlimmstes Fenster zufällig verweigert wurde.
+
 ## Die Stellschrauben und ihre Begründung
 
 Alle stehen in `tools/smoothness/smoothness/knobs.py`, jede genau einmal, und
@@ -79,8 +111,15 @@ die die Definition oben tragen:
 ## Die beiden äußeren Schranken
 
 Beides sind Kriterien, die **nicht** aus der Rechnung stammen, die sie
-prüfen. Ein Fenster, das eine von beiden reißt, bekommt **kein**
-Glätte-Urteil, sondern `NICHT MESSBAR` mit Grund.
+prüfen. Ein Fenster, das eine von beiden reißt **oder nicht prüfen kann**,
+bekommt **kein** Glätte-Urteil, sondern `NICHT MESSBAR` mit Grund.
+
+Der zweite Halbsatz kam am 2026-09-12 hinzu (#28): die erste Fassung hielt
+das Urteil nur bei einer _gerissenen_ Schranke zurück. Sortier-Fenster, in
+denen die Tabelle nur neu zeichnet, haben keine Sollstrecke — und bekamen
+trotzdem einen Haker samt einer Richtung, die aus einer Messung von exakt 0 px
+„abgeleitet" war. Damit liefert auch die eigene Zerlegung (ohne `--lauf`)
+nur noch Messwerte, kein Urteil: sie hat keine Sollstrecke.
 
 **Streckenabgleich.** Die Summe der gemessenen Einzelversätze muss die
 unabhängig bekannte Strecke treffen (Toleranz 10 %). Die Sollstrecke steht im
@@ -126,6 +165,13 @@ wörtlich: „KEIN auswertbares Bewegungsfenster gefunden — das ist KEIN gutes
 Zeugnis, sondern eine Verweigerung", und meldet dazu das Zappel-Maß (wie oft
 die Bewegung die Richtung wechselt).
 
+Jeder Bericht beginnt mit einer **Zusammenfassung**: wie viele Fenster des
+Laufs beurteilt und wie viele zurückgehalten wurden, mit Grund je Fenster
+(`strecke_ungeprueft`, `strecke_verfehlt`, `60hz_ungeprueft`,
+`60hz_verletzt`, `zu_wenig_gueltig`). Eine Haker-Summe ohne diesen Nenner
+läse sich wie ein Urteil über den ganzen Lauf, obwohl sie am echten Material
+nur 10 von 38 Fenstern abdeckt.
+
 Links und rechts werden getrennt ausgewiesen und nie gemittelt. Der Owner
 berichtet Haker in beiden Richtungen; ein Mittelwert hätte sie gegeneinander
 aufgehoben.
@@ -146,9 +192,14 @@ Liste ist der ehrliche Teil der Messung und wird nicht gekürzt.
   ist nicht geprüft.
 - **Die Schwelle ist nicht gegen das Auge geeicht.** Eine Eichreihe „ab hier
   nennt der Owner es hakelig" hat es in diesem Projekt nie gegeben. Die Werte
-  sind aus 60-Hz-Physik und aus dem Material begründet. Der Abgleich mit dem
-  Urteil des Owners (Akzeptanzkriterium 6 in Issue #24) steht aus und braucht
-  einen erreichbaren Aufnahmerechner.
+  sind aus 60-Hz-Physik und aus dem Material begründet. Gegen das Auge
+  festgenagelt ist bisher nur die **Reihenfolge** der drei Browser-Arme
+  (`tests/test_browser_arme.py`), keine Schwelle. Die Eichreihe steht in #30
+  aus und braucht einen erreichbaren Aufnahmerechner.
+- **Standard hinter ungepatcht hängt an einem Fenster.** Beide ungepatchten
+  Arme teleportieren; dass der Standard-Browser als der schlimmere gilt, wie
+  der Owner sagt, trägt allein `tasks:scroll-right:2` (128 gegen 111 px). Die
+  Trennung gepatcht gegen ungepatcht ist breit (4,7 gegen 15,6 Gleichschritte).
 - **Die Grenze des Verfahrens ist der Alias-Fall.** Bei exakt periodischem
   Inhalt und großem Versatz je Bild sind zwei verschiedene Versätze dieselbe
   Bildinformation (bei Rasterperiode 111 px: +70 und −41). Aus zwei Bildern
@@ -159,18 +210,17 @@ Liste ist der ehrliche Teil der Messung und wird nicht gekürzt.
 - **Viertelgeschwindigkeits-Videos taugen nicht.** In den Zeitlupendateien
   des Vergleichslaufs sind 61–71 % der Bilder Wiederholungen der Zeitlupe
   selbst. Gemessen, nicht angenommen.
-- **Die echten Laufdaten fehlen bislang.** `motion-windows.json`,
-  `timestamps.json` und `capture-efficiency.json` eines echten Laufs waren
-  beim Bau nicht erreichbar (der Aufnahmerechner war ausgefallen). Alle Tests
-  gegen die „Wahrheit des Produkts" laufen deshalb gegen nachgebaute
-  Laufdateien in der Form, die `demo/m1-capture.ts` schreibt — nicht gegen
-  einen echten Lauf. Der Streckenabgleich am echten Material ist damit
-  **ungeprüft**.
-- **Nur ein Vergleichsvideo.** Alle Aussagen des Prototyps zum echten
-  Material stammen aus einem einzigen Lauf. Wiederholbarkeit über mehrere
-  Aufnahmeläufe ist nicht gezeigt.
-- **Laufzeit.** Rund 80 s je Feld für ein Video von 2354 Bildern. Für CI ist
-  das nicht erprobt.
+- **Echte Laufdaten: drei Läufe, je einer pro Browser.** Seit 2026-09-13
+  prüft `tests/test_browser_arme.py` gegen die Bildpaare und Laufdateien
+  dreier echter Aufnahmen (Herkunft und Prüfsummen in
+  `tests/browser_arme/`). Der Streckenabgleich hält dort auf den
+  `tasks`-Scrolls und auf `invoices:scroll-down`; **`invoices:scroll-up`
+  reißt ihn in allen sechs Fällen mit derselben Abweichung** von rund 20 %.
+  Das ist systematisch, nicht Rauschen, und nicht geklärt (#31).
+  Wiederholbarkeit über mehrere Läufe _desselben_ Browsers ist nicht gezeigt.
+- **Laufzeit.** Ein ganzer Lauf (rund 4300 Bilder zu 1920×1080) braucht 130
+  bis 180 s und unter 300 MB Speicher. Für CI ist das nicht erprobt; die
+  Python-Tests laufen in der CI dieses Repos derzeit gar nicht (#32).
 
 ## Was der Prototyp am echten Material gemessen hat
 

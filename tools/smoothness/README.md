@@ -51,25 +51,30 @@ uv run --project tools/smoothness smoothness --erklaere-schwelle
 
 ## Optionen
 
-| Option                | Bedeutung                                                                                                               |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `--lauf DIR`          | Verzeichnis mit `motion-windows.json` + `timestamps.json`. Ohne das: eigene Zerlegung.                                  |
-| `--panel k/M`         | Feld `k` eines Dreiervergleichs (960×540 unter 96 px Kopfzeile). Geometrie der `compare3`-Videos aus featurecast-bench. |
-| `--crop x,y,w,h`      | Beliebiger Ausschnitt.                                                                                                  |
-| `--fps`               | Bildrate des Ausgabevideos. Ohne Angabe `fps_nominal` aus `knobs.py`.                                                   |
-| `--aufnahme-breite`   | Breite des Aufnahmefensters in CSS-Pixeln (Vorgabe 2560, siehe `CAPTURE_SIZE` in `src/capture.ts`).                     |
-| `--px-skala`          | Ausschnittspixel je Aufnahmepixel, ausdrücklich. Ohne Angabe abgeleitet — die Herkunft steht in jeder Ausgabe.          |
-| `--json DATEI`        | Vollständiger Bericht als JSON.                                                                                         |
-| `--erklaere-schwelle` | Jede Stellschraube mit Wert und Begründung.                                                                             |
+| Option                | Bedeutung                                                                                                                  |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `--lauf DIR`          | Verzeichnis mit `motion-windows.json` + `timestamps.json`. Ohne das: eigene Zerlegung.                                     |
+| `--panel k/M`         | Feld `k` eines Dreiervergleichs (960×540 unter 96 px Kopfzeile). Geometrie der `compare3`-Videos aus featurecast-bench.    |
+| `--crop x,y,w,h`      | Beliebiger Ausschnitt.                                                                                                     |
+| `--fps`               | Bildrate des Ausgabevideos. Ohne Angabe `fps_nominal` aus `knobs.py`.                                                      |
+| `--aufnahme-breite`   | Breite des Aufnahmefensters in CSS-Pixeln (Vorgabe 2560, siehe `CAPTURE_SIZE` in `src/capture.ts`).                        |
+| `--px-skala`          | Ausschnittspixel je Aufnahmepixel, ausdrücklich. Ohne Angabe abgeleitet — die Herkunft steht in jeder Ausgabe.             |
+| `--json DATEI`        | Vollständiger Bericht als JSON.                                                                                            |
+| `--erklaere-schwelle` | Jede Stellschraube mit Wert und Begründung.                                                                                |
+| `--vergleiche JSON…`  | Schon geschriebene Berichte desselben Aufnahmeskripts von glatt nach hakelig ordnen, über die überall beurteilten Fenster. |
 
 ## Was herauskommt
 
 Auf der Konsole ein lesbarer Bericht, mit `--json` derselbe Inhalt
 maschinenlesbar. Je Fenster:
 
-- **Urteil** — `glatt`, `N Haker`, `unruhig (…)` oder **`NICHT MESSBAR`** mit
-  Grund. Ein Fenster, das eine äußere Schranke reißt, gibt kein Glätte-Urteil
-  ab.
+- **Urteil** — `glatt`, `N Haker; schwerste Stelle: …`, `unruhig (…)`,
+  `Teleport: …` oder **`NICHT MESSBAR`** mit Grund. Ein Fenster, dessen
+  äußere Schranke reißt **oder ungeprüft bleibt**, gibt kein Glätte-Urteil ab
+  — ohne `--lauf` fehlt die Sollstrecke, dann gibt es nur Messwerte.
+- **Schwere** — größter Sprung in Gleichschritten (Sollstrecke / Bildpaare)
+  und als Anteil der Strecke. Die Haker-Zahl allein ordnet einen Teleport
+  besser ein als zwei kleine Nachholer.
 - **Beide äußeren Schranken** mit `haelt: true | false | null`. `null` heißt
   _nicht geprüft_ und ist kein Bestehen.
 - **Jede Quote mit ihrem eigenen Nenner** und dessen Bedeutung in Worten. Die
@@ -78,13 +83,16 @@ maschinenlesbar. Je Fenster:
 - **Richtung getrennt.** Links und rechts werden nie gemittelt.
 - **Maßstab mit Herkunft**, damit „abgeleitet" nie wie „gemessen" aussieht.
 
+Vorneweg steht eine **Zusammenfassung**: beurteilte und zurückgehaltene
+Fenster mit Grund, Haker, Teleporte und das schwerste Fenster, je Richtung.
+
 Findet das Werkzeug gar kein auswertbares Fenster, sagt es das ausdrücklich —
 Schweigen liest sich sonst wie ein Bestehen.
 
 ## Tests
 
 ```sh
-uv run --project tools/smoothness pytest            # alles, rund 40 s bei warmem Zwischenlager
+uv run --project tools/smoothness pytest            # alles, rund 70 s bei warmem Zwischenlager
 uv run --project tools/smoothness pytest -m "not langsam"   # ohne Videoerzeugung, unter 1 s
 uv run --project tools/smoothness pytest -m langsam         # nur die Videofälle
 ```

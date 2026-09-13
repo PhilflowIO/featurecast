@@ -243,6 +243,49 @@ named set of knobs, printable, not scattered through the code.
 
 ---
 
+## 2026-09-13 — the instrument ranked the arms backwards (#28, #29)
+
+The first run of the instrument across all three browser arms exposed two
+defects in its _summary_, not in its measurement:
+
+- **Sort windows got a hitch.** The table re-renders, nothing slides, and the
+  travel-distance bound had no expected value. "Not checked" was treated as
+  "passed" and a direction was inferred from exactly 0 px. Now an unchecked
+  bound withholds the verdict just as a broken one does (#28). On real runs
+  that leaves 10 of 38 windows judged — the report now says so up front.
+- **The hitch count ordered the arms the wrong way round.** The stock browser
+  teleports the whole horizontal travel in one frame and got _one_ hitch; the
+  patched build got _two_. The count records that something happened, never
+  how bad (#29). Verdicts now carry the largest step in _even steps_ (expected
+  travel ÷ frame pairs, both from `motion-windows.json`), and a frame that
+  delivers half the travel is called a teleport.
+
+Measured on the three real runs, over the 10 windows judged in all of them:
+
+| Browser                  | largest step, even steps | teleports | hitch count |
+| ------------------------ | ------------------------ | --------- | ----------- |
+| self-built, both patches | **4.7**                  | 0         | 13          |
+| self-built, unpatched    | 15.6                     | 2         | 15          |
+| Playwright bundle        | 17.1                     | 2         | 14          |
+
+That is the owner's order. The count alone would have put the stock browser
+ahead of the unpatched build. The stock-behind-unpatched margin rests on one
+window (128 px against 111 px); patched against unpatched is wide. The
+ordering is pinned by `tools/smoothness/tests/test_browser_arme.py` on
+fixtures extracted from the real runs.
+
+Also found on the way: the jump factor divided by 10⁻⁶ when the neighbouring
+frames stood still and reported catch-ups at 110 million times the local
+speed; and the instrument held a whole run in memory (over 9 GB), so the arms
+could not be re-measured on the workstation at all. Both fixed. The re-measured
+frame pairs match the earlier measurement exactly, 12,359 of 12,359.
+
+Still open: the threshold itself is not calibrated against the eye (#30), and
+`invoices:scroll-up` misses its travel bound by the same ~20 % in all six
+instances — systematic, unexplained (#31).
+
+---
+
 ## Where the truth lives
 
 | Question                                                          | Where                                        |
@@ -251,6 +294,8 @@ named set of knobs, printable, not scattered through the code.
 | Capture clock and the honest denominator                          | #21 (merged as #22)                          |
 | Browser provenance, the `CHROME_BIN` trap                         | #23                                          |
 | The smoothness instrument                                         | #24, [`SMOOTHNESS.md`](./SMOOTHNESS.md)      |
+| Instrument verdict: unchecked bounds, severity                    | #28, #29                                     |
+| Eye calibration of the hitch threshold                            | #30                                          |
 | Wheel pacing drift                                                | #25                                          |
 | M1 acceptance                                                     | #2, [`M1-VERDICT.md`](./M1-VERDICT.md)       |
 | One clock for capture and event log                               | #9                                           |
