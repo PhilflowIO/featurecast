@@ -1,6 +1,13 @@
 """Ein Lauf von vorne bis hinten: Video lesen, messen, Fenster bestimmen,
-urteilen. Die CLI ist nur eine Huelle um diese Funktion, damit die Tests
+urteilen. Die CLI ist nur eine Huelle um diese Funktionen, damit die Tests
 denselben Weg nehmen wie der Aufruf von Hand.
+
+Zweigeteilt, weil Messen und Urteilen verschieden teuer sind: `analysiere`
+liest das Video und misst die Bildpaare (Minuten fuer einen ganzen Lauf),
+`werte_aus` urteilt ueber schon gemessene Bildpaare (Millisekunden). Der
+Regressionstest ueber die drei Browser-Arme nimmt `werte_aus` mit den
+Bildpaaren der echten Laeufe -- denselben Weg, nur ohne das Video erneut zu
+dekodieren.
 """
 
 from __future__ import annotations
@@ -11,11 +18,11 @@ from pathlib import Path
 
 from .frames import Ausschnitt, Skalierung, lies_graustufen, skalierung_bestimmen
 from .knobs import KNOBS, Knobs, erklaere
-from .pairs import STATUS_ALLE, STATUS_GUELTIG, messe_bildpaare
+from .pairs import STATUS_ALLE, STATUS_GUELTIG, Pair, messe_bildpaare
 from .report import beurteile_fenster, fasse_zusammen
 from .windows import QUELLE_EIGENE, QUELLE_PRODUKT, aus_lauf, eigene_zerlegung, richtungswechsel
 
-__all__ = ["analysiere"]
+__all__ = ["analysiere", "werte_aus"]
 
 
 def analysiere(video: str, ausschnitt: Ausschnitt | None = None, fps: float | None = None,
@@ -29,16 +36,24 @@ def analysiere(video: str, ausschnitt: Ausschnitt | None = None, fps: float | No
     faellt das Werkzeug auf die eigene Zerlegung zurueck -- und schreibt das
     in jedes Fenster.
     """
+    bilder = lies_graustufen(video, ausschnitt)
+    erstes = next(bilder)
+    skal = skalierung_bestimmen(erstes.shape[1], aufnahme_breite, px_faktor)
+    pairs = messe_bildpaare(chain([erstes], bilder), k)
+    bericht = werte_aus(pairs, skal, fps, lauf_verzeichnis, k)
+    return {"video": video,
+            "ausschnitt": ausschnitt.als_tupel() if ausschnitt else None,
+            **bericht}
+
+
+def werte_aus(pairs: list[Pair], skal: Skalierung, fps: float | None = None,
+              lauf_verzeichnis: str | Path | None = None,
+              k: Knobs = KNOBS) -> dict[str, object]:
+    """Urteil ueber gemessene Bildpaare. Siehe Modul-Docstring."""
     # Ohne Angabe die nominale Bildrate aus knobs.py -- die 60 steht dort und
     # nirgends sonst. src/assemble.ts erzeugt das Ausgabevideo mit genau
     # dieser konstanten Rate (`FRAME_RATE`).
     fps = k.fps_nominal if fps is None else fps
-    bilder = lies_graustufen(video, ausschnitt)
-    erstes = next(bilder)
-    breite = erstes.shape[1]
-    skal: Skalierung = skalierung_bestimmen(breite, aufnahme_breite, px_faktor)
-    pairs = messe_bildpaare(chain([erstes], bilder), k)
-
     if lauf_verzeichnis is not None:
         fenster = aus_lauf(lauf_verzeichnis, fps, skal.faktor, len(pairs))
         quelle = QUELLE_PRODUKT
@@ -47,12 +62,10 @@ def analysiere(video: str, ausschnitt: Ausschnitt | None = None, fps: float | No
         quelle = QUELLE_EIGENE
 
     n = len(pairs)
-    urteile = [beurteile_fenster(pairs, f, fps, k) for f in fenster]
     gueltig = sum(1 for p in pairs if p.status in STATUS_GUELTIG)
-    bericht: dict[str, object] = {
-        "video": video,
-        "ausschnitt": ausschnitt.als_tupel() if ausschnitt else None,
-        "bilder": len(pairs) + 1,
+    urteile = [beurteile_fenster(pairs, f, fps, k) for f in fenster]
+    return {
+        "bilder": n + 1,
         "bildpaare": n,
         "fps": fps,
         "skalierung": {"faktor": skal.faktor, "herkunft": skal.herkunft},
@@ -69,4 +82,3 @@ def analysiere(video: str, ausschnitt: Ausschnitt | None = None, fps: float | No
         "fenster": urteile,
         "paare": [asdict(p) for p in pairs],
     }
-    return bericht
