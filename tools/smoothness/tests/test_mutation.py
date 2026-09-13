@@ -89,6 +89,10 @@ def test_wiederholte_bilder_verschlechtern_das_urteil(art, original, mutant, wah
     wdh = fenster["wiederholte_bilder"]
     assert wdh["anzahl"] > 0 and wdh["von"] == fenster["bildpaare"]
     assert wdh["quote"] > vorher["wiederholte_bilder"]["quote"]
+    # Schwere, nicht nur Anzahl: der Nachholsprung ist groesser als jeder
+    # Schritt des unversehrten Materials.
+    assert (fenster["schwere"]["groesster_sprung_gleichschritte"]
+            > vorher["schwere"]["groesster_sprung_gleichschritte"])
 
 
 @pytest.mark.langsam

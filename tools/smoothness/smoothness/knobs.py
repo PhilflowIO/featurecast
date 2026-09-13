@@ -103,6 +103,16 @@ class Knobs:
     Einzelereignisse in 0,3 s auftraten. Begruendet ist er mit der
     Fusionsgrenze der Wahrnehmung, nicht mit dem Ergebnis."""
 
+    # --- Schwere -----------------------------------------------------------
+    teleport_anteil: float = 0.50
+    """Liefert ein einzelnes Bildpaar mindestens diesen Anteil der
+    Sollstrecke, heisst das Urteil "Teleport": die Bewegung existiert
+    zwischen den Spruengen nicht. Mehr als die Haelfte der Strecke in einem
+    Bild ist die woertliche Fassung von "schluckt den groessten Teil der
+    Strecke" (#29). Offenlegung: eingefuehrt NACH dem Blick auf die drei
+    Browser-Arme (Standard und ungepatcht 82-95 %, gepatcht 20 %); der Wert
+    liegt absichtlich weit zwischen beiden, statt an einen davon angelegt."""
+
     # --- Aeussere Schranken ----------------------------------------------
     path_tol: float = 0.10
     """Zulaessige Abweichung der gemessenen Gesamtstrecke von der
