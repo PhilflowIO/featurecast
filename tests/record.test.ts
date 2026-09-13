@@ -1023,3 +1023,151 @@ describe('record', () => {
     )
   })
 })
+
+describe('input pacing on the 60 Hz tick (#25)', () => {
+  // Chromium acknowledges an input event only after processing it, tied to
+  // the next frame: measured 16.5–17.8 ms per step on the patched build. The
+  // fake page reproduces exactly that, on a fake clock, so the test is a
+  // statement about the pacing logic and not about this machine's timing.
+  const ACK_MS = 17.5
+  const SLOT_MS = 1000 / 60
+
+  function slowAcknowledgingPage() {
+    const page = fakePage()
+    // Kept apart per input kind: a scroll is preceded by the pointer's move
+    // to the viewport center, and each is paced on its own grid.
+    const dispatchedAt = { move: [] as number[], wheel: [] as number[] }
+    const acknowledgedAt: number[] = []
+    const slow = (kind: keyof typeof dispatchedAt) => (): Promise<void> => {
+      dispatchedAt[kind].push(Date.now())
+      return new Promise((resolve) =>
+        setTimeout(() => {
+          acknowledgedAt.push(Date.now())
+          resolve()
+        }, ACK_MS),
+      )
+    }
+    page.mouse.wheel = vi.fn(slow('wheel'))
+    page.mouse.move = vi.fn(slow('move'))
+    page.waitForTimeout = vi.fn(
+      (milliseconds: number) =>
+        new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
+    )
+    return { acknowledgedAt, dispatchedAt, page }
+  }
+
+  /**
+   * The defect accumulates: one step late by (ACK_MS - SLOT_MS) is under a
+   * millisecond and invisible per gap, n steps late are not. So the check is
+   * the drift of every sample against the first one's slot grid.
+   */
+  function expectOnSlotGrid(samples: number[]): void {
+    const first = samples[0] as number
+    samples.forEach((time, index) => {
+      expect(Math.abs(time - (first + index * SLOT_MS))).toBeLessThan(1)
+    })
+    // Reachability: awaited one by one, the last sample would be this far
+    // behind -- far outside the tolerance above.
+    expect((ACK_MS - SLOT_MS) * (samples.length - 1)).toBeGreaterThan(5)
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** Advances the fake clock one millisecond at a time until `run` settles. */
+  async function settle(run: Promise<unknown>): Promise<void> {
+    let settled = false
+    void run.then(
+      () => (settled = true),
+      () => (settled = true),
+    )
+    for (let step = 0; step < 60_000 && !settled; step += 1) {
+      await vi.advanceTimersByTimeAsync(1)
+    }
+  }
+
+  it('dispatches every wheel step on its own slot although each acknowledgement takes longer than a slot', async () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    const output = await temporaryDirectory()
+    const { acknowledgedAt, dispatchedAt, page } = slowAcknowledgingPage()
+    let finishedAt = 0
+    const run = createRecorder(runtimeFor(page))(
+      { out: output },
+      async (_page, demo) => {
+        await demo.scroll(0, 600)
+        finishedAt = Date.now()
+      },
+    )
+    await settle(run)
+    await run
+
+    expect(dispatchedAt.wheel.length).toBeGreaterThan(10)
+    // Within a millisecond of its slot (the fake clock truncates timer
+    // delays to whole milliseconds).
+    expectOnSlotGrid(dispatchedAt.wheel)
+    // The scroll has fully arrived before demo.scroll returns.
+    expect(acknowledgedAt).toHaveLength(
+      dispatchedAt.wheel.length + dispatchedAt.move.length,
+    )
+    expect(finishedAt).toBeGreaterThanOrEqual(Math.max(...acknowledgedAt))
+  })
+
+  it('keeps pointer samples on their slots the same way', async () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    const output = await temporaryDirectory()
+    const { dispatchedAt, page } = slowAcknowledgingPage()
+    const run = createRecorder(runtimeFor(page))(
+      { out: output },
+      async (_page, demo) => {
+        await demo.point('#button')
+      },
+    )
+    await settle(run)
+    await run
+
+    expect(dispatchedAt.move.length).toBeGreaterThan(10)
+    // Each move is paced from its own start; within one move every sample
+    // must sit on its slot. A move starts where the gap to the previous
+    // dispatch exceeds a slot by more than the acknowledgement time.
+    const moves: number[][] = []
+    for (const time of dispatchedAt.move) {
+      const current = moves.at(-1)
+      if (!current || time - (current.at(-1) as number) > SLOT_MS + ACK_MS) {
+        moves.push([time])
+      } else {
+        current.push(time)
+      }
+    }
+    const longest = moves.reduce((a, b) => (b.length > a.length ? b : a))
+    expect(longest.length).toBeGreaterThan(10)
+    expectOnSlotGrid(longest)
+  })
+
+  it('surfaces a failed dispatch instead of losing it, and stops dispatching', async () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    const output = await temporaryDirectory()
+    const page = fakePage()
+    let calls = 0
+    page.mouse.wheel = vi.fn(() => {
+      calls += 1
+      return calls === 3
+        ? Promise.reject(new Error('Target closed'))
+        : Promise.resolve()
+    })
+    page.waitForTimeout = vi.fn(
+      (milliseconds: number) =>
+        new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
+    )
+    const run = createRecorder(runtimeFor(page))(
+      { out: output },
+      async (_page, demo) => {
+        await demo.scroll(0, 600)
+      },
+    )
+    const outcome = expect(run).rejects.toThrow('Target closed')
+    await settle(run)
+    await outcome
+    expect(calls).toBe(3)
+  })
+})
