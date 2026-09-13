@@ -13,6 +13,7 @@ Ausgabe.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import cv2
@@ -86,27 +87,34 @@ def skalierung_bestimmen(ausschnitt_breite: int, aufnahme_breite: int = AUFNAHME
     )
 
 
-def lies_graustufen(pfad: str, ausschnitt: Ausschnitt | None = None) -> list[np.ndarray]:
-    """Alle Bilder des Videos als Graustufen.
+def lies_graustufen(pfad: str, ausschnitt: Ausschnitt | None = None) -> Iterator[np.ndarray]:
+    """Die Bilder des Videos als Graustufen, eines nach dem anderen.
 
     Graustufen ist eine Grenze, keine Vereinfachung: eine Bewegung, die sich
     nur im Farbkanal zeigt, sieht dieses Werkzeug nicht (docs/SMOOTHNESS.md,
     "Grenzen").
+
+    Ein Strom und keine Liste, weil die Messung nie mehr als zwei Bilder
+    zugleich braucht. Ein ganzer Aufnahmelauf sind rund 4400 Bilder zu
+    1920x1080 -- als Liste gut 9 GB, und genau diese Laeufe sind das Material,
+    an dem das Geraet sich bewaehren muss.
     """
     cap = cv2.VideoCapture(pfad)
     if not cap.isOpened():
         raise SystemExit(f"Video nicht lesbar: {pfad}")
-    aus: list[np.ndarray] = []
-    while True:
-        ok, f = cap.read()
-        if not ok:
-            break
-        g = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
-        if ausschnitt is not None:
-            x, y, w, h = ausschnitt.als_tupel()
-            g = g[y : y + h, x : x + w]
-        aus.append(np.ascontiguousarray(g))
-    cap.release()
-    if len(aus) < 2:
-        raise SystemExit(f"Zu wenige Bilder in {pfad}: {len(aus)}")
-    return aus
+    gelesen = 0
+    try:
+        while True:
+            ok, f = cap.read()
+            if not ok:
+                break
+            g = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+            if ausschnitt is not None:
+                x, y, w, h = ausschnitt.als_tupel()
+                g = g[y : y + h, x : x + w]
+            gelesen += 1
+            yield np.ascontiguousarray(g)
+    finally:
+        cap.release()
+    if gelesen < 2:
+        raise SystemExit(f"Zu wenige Bilder in {pfad}: {gelesen}")

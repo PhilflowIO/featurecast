@@ -143,6 +143,44 @@ def test_starke_beschleunigung_innerhalb_der_reisestrecke_ist_kein_haker():
         "Test kein Beleg fuer das oertliche Tempo")
 
 
+def test_gegen_stehende_nachbarn_wird_kein_faktor_behauptet():
+    """Ein Teleport: die Nachbarn stehen, dann springt das Bild. Die erste
+    Fassung teilte durch 1e-6 und meldete den Nachsprung als 110-millionenfaches
+    Tempo -- eine Zahl, die aussieht wie eine Messung und keine ist."""
+    schritte = np.array([0.0] * 8 + [111.0] + [0.0] * 9)
+    befund = finde_haker(schritte, 1, FPS)
+    assert befund.ereignisse, "der Teleport muss als Ereignis erscheinen"
+    (nachsprung,) = [e for e in befund.ereignisse if e.get("nachsprung_px") == 111.0]
+    # Kein Faktor, nicht bloss ein kleinerer: gegen die Rauschgrenze gerechnet
+    # waeren es 444 -- ebenso eine Zahl, die nichts misst.
+    assert nachsprung["nachsprung_x"] is None, nachsprung
+    (stelle,) = [s for s in befund.stoerstellen if s["groesster_schritt_px"] > 0]
+    assert stelle["groesster_schritt_px"] == 111.0
+    assert stelle["stillstand_ms"] > 0
+
+
+def test_zusammengefasste_stoerstelle_behaelt_ihren_schwersten_sprung():
+    """Zwei nahe Ereignisse werden EINE Stoerstelle. Deren Schwere ist der
+    groessere der beiden Spruenge, gleich in welcher Reihenfolge sie kommen
+    -- sonst entscheidet die Reihenfolge ueber das Urteil."""
+    schritte = _reise(40)
+    schritte[14] = TEMPO * 3
+    schritte[14 + KNOBS.merge_gap] = TEMPO * 5
+    (stelle,) = finde_haker(np.array(schritte), 1, FPS).stoerstellen
+    assert stelle["ereignisse"] == 2
+    assert stelle["groesster_schritt_px"] == TEMPO * 5
+    assert stelle["stillstand_ms"] == 0.0
+
+
+def test_rauschen_neben_stehenden_nachbarn_ist_kein_sprung():
+    """Die Rauschgrenze `still_px` ist der Bezug, wenn die Nachbarn stehen --
+    ein Zehntelpixel ist dann Messrauschen, kein Nachholsprung."""
+    schritte = [TEMPO] * 10 + [0.0] * 3 + [0.1] + [0.0] * 3 + [TEMPO] * 10
+    befund = finde_haker(np.array(schritte), 1, FPS)
+    assert not [e for e in befund.ereignisse if "prung" in e["art"]], befund.ereignisse
+    assert befund.ereignisse, "der Stillstand selbst muss weiter erscheinen"
+
+
 def test_die_reisestrecke_ist_der_nenner_nicht_das_ganze_fenster():
     """Sonst verduennt jede lange Anlaufkurve die Haker-Quote."""
     t = np.linspace(0.0, 1.0, 40)

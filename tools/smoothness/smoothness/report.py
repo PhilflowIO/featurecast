@@ -1,13 +1,21 @@
 """Das Urteil je Fenster und der Gesamtbericht.
 
-Zwei Regeln bestimmen diese Datei:
+Drei Regeln bestimmen diese Datei:
 
-1. VERWEIGERN STATT BENOTEN. Ein Fenster, das eine aeussere Schranke reisst
-   oder zu wenige gueltige Bildpaare hat, bekommt "NICHT MESSBAR" mit Grund
-   und KEIN Glaette-Urteil. Ein Lauf ganz ohne auswertbares Fenster sagt
-   ausdruecklich, dass das kein gutes Zeugnis ist.
-2. JEDE QUOTE NENNT IHREN NENNER, je Fenster, in der Ausgabe. Erzwungen
-   ueber den Typ `Quote` in hitches.py, nicht ueber Disziplin.
+1. VERWEIGERN STATT BENOTEN. Ein Fenster, dessen aeussere Schranke reisst
+   ODER NICHT GEPRUEFT WERDEN KONNTE, oder das zu wenige gueltige Bildpaare
+   hat, bekommt "NICHT MESSBAR" mit Grund und KEIN Glaette-Urteil. "Nicht
+   geprueft" ist nie "bestanden" -- die erste Fassung hat das nur fuer die
+   gerissene Schranke durchgesetzt und Sortier-Fenster, in denen sich nichts
+   bewegt, mit einem Haker benotet (#28). Ein Lauf ganz ohne auswertbares
+   Fenster sagt ausdruecklich, dass das kein gutes Zeugnis ist.
+2. JEDE QUOTE NENNT IHREN NENNER, je Fenster und in der Zusammenfassung.
+   Erzwungen ueber den Typ `Quote` in hitches.py, nicht ueber Disziplin.
+3. SCHWERE, NICHT NUR ANZAHL. Die Zahl der Haker allein sortiert einen
+   Teleport ueber die ganze Strecke besser ein als zwei kleine Nachholer
+   (#29). Jedes Urteil nennt deshalb den groessten Sprung, gemessen am
+   GLEICHSCHRITT: Sollstrecke durch Bildpaare des Fensters. Beide Groessen
+   kommen von aussen (motion-windows.json), nicht aus dieser Messung.
 
 Links und rechts werden getrennt ausgewiesen und nie gemittelt: der Owner
 berichtet Haker in beiden Richtungen, und ein Mittelwert haette sie
@@ -15,6 +23,8 @@ gegeneinander aufgehoben.
 """
 
 from __future__ import annotations
+
+from collections import Counter
 
 import numpy as np
 
@@ -24,16 +34,25 @@ from .knobs import KNOBS, Knobs
 from .pairs import STATUS_ALLE, STATUS_GUELTIG, Pair
 from .windows import QUELLE_EIGENE, Fenster
 
-__all__ = ["als_text", "beurteile_fenster"]
+__all__ = ["NICHT_MESSBAR", "als_text", "beurteile_fenster", "fasse_zusammen",
+           "vergleiche_laeufe"]
+
+NICHT_MESSBAR = "NICHT MESSBAR"
 
 MIN_GUELTIGE_BILDPAARE = 3
 """Unter drei gueltigen Bildpaaren traegt kein Median und kein oertliches
 Tempo. Kein Urteil ist dann die ehrliche Antwort."""
 
+RICHTUNGEN = ("rechts", "links", "runter", "hoch")
+
+
+def _verweigert(res: dict[str, object], code: str, grund: str) -> dict[str, object]:
+    return {**res, "urteil": NICHT_MESSBAR, "grund_code": code, "grund": grund}
+
 
 def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
                       k: Knobs = KNOBS) -> dict[str, object]:
-    """Urteil ueber ein Fenster. Siehe Modul-Docstring fuer die zwei Regeln."""
+    """Urteil ueber ein Fenster. Siehe Modul-Docstring fuer die drei Regeln."""
     seg = [p for p in pairs if fenster.von_bildpaar <= p.i <= fenster.bis_bildpaar]
     n_pairs = len(seg)
     gueltig = [p for p in seg if p.status in STATUS_GUELTIG]
@@ -46,12 +65,18 @@ def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
         achse = "y"
     komp = np.array([(p.dx if achse == "x" else p.dy) for p in gueltig], dtype=float)
     gerichtete_summe = float(komp.sum()) if len(komp) else 0.0
+    # Translation heisst: mindestens ein gueltiges Bildpaar bewegt sich ueber
+    # die Rauschgrenze hinaus. Eine Richtung aus einer Messung abzuleiten, die
+    # identisch null ist, hiesse sie zu erfinden (#28).
+    translation = bool(len(komp)) and bool(np.any(np.abs(komp) >= k.still_px))
     if fenster.richtung is not None:
         richtung, richtung_herkunft = fenster.richtung, "Fenstername"
-    else:
+    elif translation:
         richtung = {"x": ("rechts", "links"), "y": ("runter", "hoch")}[achse][
             0 if gerichtete_summe >= 0 else 1]
         richtung_herkunft = "aus der Messung abgeleitet"
+    else:
+        richtung, richtung_herkunft = None, "keine -- im Fenster wurde keine Translation gemessen"
 
     res: dict[str, object] = {
         "fenster": fenster.name,
@@ -59,6 +84,7 @@ def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
         "achse": achse,
         "richtung": richtung,
         "richtung_herkunft": richtung_herkunft,
+        "translation_gemessen": translation,
         "von_bildpaar": fenster.von_bildpaar,
         "bis_bildpaar": fenster.bis_bildpaar,
         "bildpaare": n_pairs,
@@ -69,7 +95,7 @@ def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
         res["hinweis_fenster"] = (
             "Fenstergrenzen stammen aus der Messung selbst, nicht aus "
             "motion-windows.json -- beide aeusseren Schranken bleiben damit "
-            "ungeprueft.")
+            "ungeprueft, und ohne sie gibt es kein Urteil.")
 
     res["schranke_60hz"] = pruefe_60hz(n_pairs + 1, fenster.dauer,
                                       fenster.bilder_extern,
@@ -77,13 +103,19 @@ def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
     res["schranke_strecke"] = pruefe_strecke(gerichtete_summe, fenster.soll_px,
                                              fenster.soll_herkunft, k)
 
+    ohne_bewegung = "" if translation else " -- im Fenster wurde keine Translation gemessen"
     if res["schranke_strecke"]["haelt"] is False:
-        return {**res, "urteil": "NICHT MESSBAR", "grund": "Strecke verfehlt"}
+        return _verweigert(res, "strecke_verfehlt", "Strecke verfehlt" + ohne_bewegung)
+    if res["schranke_strecke"]["haelt"] is None:
+        return _verweigert(res, "strecke_ungeprueft",
+                           "Streckenschranke ungeprueft (kein Sollwert)" + ohne_bewegung)
     if res["schranke_60hz"]["haelt"] is False:
-        return {**res, "urteil": "NICHT MESSBAR", "grund": "60-Hz-Schranke verletzt"}
+        return _verweigert(res, "60hz_verletzt", "60-Hz-Schranke verletzt")
+    if res["schranke_60hz"]["haelt"] is None:
+        return _verweigert(res, "60hz_ungeprueft", "60-Hz-Schranke ungeprueft")
     if n_ok < MIN_GUELTIGE_BILDPAARE:
-        return {**res, "urteil": "NICHT MESSBAR",
-                "grund": f"nur {n_ok} gueltige Bildpaare von {n_pairs}"}
+        return _verweigert(res, "zu_wenig_gueltig",
+                           f"nur {n_ok} gueltige Bildpaare von {n_pairs}")
 
     schritte = np.abs(komp)
     res["schritt_px"] = {
@@ -100,6 +132,24 @@ def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
                                       "Bildpaare im Fenster").als_dict()
 
     befund = finde_haker(schritte, fenster.von_bildpaar, fps, k)
+
+    # Die Streckenschranke haelt hier, also ist soll_px bekannt und positiv.
+    soll = float(fenster.soll_px or 0.0)
+    gleichschritt = soll / n_pairs
+    groesster = float(schritte.max())
+    for s in befund.stoerstellen:
+        s["gleichschritte"] = round(s["groesster_schritt_px"] / gleichschritt, 2)
+    teleport = groesster / soll >= k.teleport_anteil
+    res["schwere"] = {
+        "gleichschritt_px": round(gleichschritt, 3),
+        "gleichschritt_herkunft": "Sollstrecke / Bildpaare im Fenster (beides von aussen)",
+        "groesster_sprung_px": round(groesster, 3),
+        "groesster_sprung_gleichschritte": round(groesster / gleichschritt, 2),
+        "groesster_sprung_anteil_strecke": round(groesster / soll, 3),
+        "teleport": bool(teleport),
+        "teleport_ab_anteil": k.teleport_anteil,
+    }
+
     res["stoerstellen"] = befund.stoerstellen
     res["stoerstellen_anzahl"] = len(befund.stoerstellen)
     res["haker_ereignisse"] = befund.ereignisse
@@ -110,15 +160,101 @@ def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
     res["reisestrecke_bildpaare"] = befund.reisestrecke_bildpaare
 
     mq = befund.mikro.quote or 0.0
-    if befund.stoerstellen:
+    if teleport:
+        res["urteil"] = (f"Teleport: {groesster / soll * 100:.0f} % der Strecke in einem Bild "
+                         f"({groesster / gleichschritt:.1f} Gleichschritte)")
+    elif befund.stoerstellen:
         zusatz = (f" ({len(befund.ereignisse)} Einzelereignisse)"
                   if len(befund.ereignisse) != len(befund.stoerstellen) else "")
-        res["urteil"] = f"{len(befund.stoerstellen)} Haker{zusatz}"
+        schwerste = max(befund.stoerstellen,
+                        key=lambda s: (s["gleichschritte"], s["stillstand_ms"]))
+        res["urteil"] = (f"{len(befund.stoerstellen)} Haker{zusatz}; schwerste Stelle: "
+                         f"Sprung {schwerste['gleichschritte']:.1f} Gleichschritte, "
+                         f"Stillstand {schwerste['stillstand_ms']:.0f} ms")
     elif mq > k.mikro_quote_max:
         res["urteil"] = f"unruhig ({befund.mikro.zaehler} Mikro-Aussetzer, {mq * 100:.1f} %)"
     else:
         res["urteil"] = "glatt"
     return res
+
+
+def _schwerstes(urteile: list[dict]) -> dict[str, object] | None:
+    if not urteile:
+        return None
+    w = max(urteile, key=lambda u: u["schwere"]["groesster_sprung_gleichschritte"])
+    return {"fenster": w["fenster"],
+            "gleichschritte": w["schwere"]["groesster_sprung_gleichschritte"],
+            "anteil_strecke": w["schwere"]["groesster_sprung_anteil_strecke"],
+            "urteil": w["urteil"]}
+
+
+def fasse_zusammen(urteile: list[dict]) -> dict[str, object]:
+    """Der Lauf in einem Blick -- mit Nenner, und je Richtung getrennt.
+
+    Gezaehlt werden nur BEURTEILTE Fenster; wie viele zurueckgehalten wurden
+    und warum, steht daneben. Eine Haker-Summe ohne diese Zahl liest sich wie
+    ein Urteil ueber den ganzen Lauf, obwohl sie womoeglich nur einen Bruchteil
+    davon abdeckt.
+    """
+    beurteilt = [u for u in urteile if u["urteil"] != NICHT_MESSBAR]
+    zurueck = Counter(str(u["grund_code"]) for u in urteile if u["urteil"] == NICHT_MESSBAR)
+
+    je_richtung: dict[str, object] = {}
+    for r in (*RICHTUNGEN, None):
+        alle = [u for u in urteile if u["richtung"] == r]
+        if not alle:
+            continue
+        drin = [u for u in alle if u["urteil"] != NICHT_MESSBAR]
+        je_richtung[r if r is not None else "ohne Richtung"] = {
+            "beurteilt": Quote(len(drin), len(alle), "Fenster dieser Richtung").als_dict(),
+            "haker": sum(int(u["stoerstellen_anzahl"]) for u in drin),
+            "teleporte": sum(1 for u in drin if u["schwere"]["teleport"]),
+            "schwerstes_fenster": _schwerstes(drin),
+        }
+
+    return {
+        "beurteilt": Quote(len(beurteilt), len(urteile), "Fenster des Laufs").als_dict(),
+        "zurueckgehalten": dict(sorted(zurueck.items())),
+        "haker": sum(int(u["stoerstellen_anzahl"]) for u in beurteilt),
+        "haker_bedeutung": "Stoerstellen in den beurteilten Fenstern",
+        "teleporte": [u["fenster"] for u in beurteilt if u["schwere"]["teleport"]],
+        "schwerstes_fenster": _schwerstes(beurteilt),
+        "je_richtung": je_richtung,
+    }
+
+
+def vergleiche_laeufe(berichte: dict[str, dict]) -> dict[str, object]:
+    """Ordnet Laeufe desselben Aufnahmeskripts von glatt nach hakelig.
+
+    Verglichen wird nur ueber Fenster, die in JEDEM Lauf beurteilt wurden --
+    sonst gewinnt der Lauf, dessen schlimmstes Fenster zufaellig verweigert
+    wurde. Massstab je Lauf ist der groesste Sprung in Gleichschritten ueber
+    diese gemeinsamen Fenster: die Schwere der schlimmsten Stelle, nicht die
+    Zahl der Stellen (#29).
+    """
+    urteile = {name: {u["fenster"]: u for u in b["fenster"]} for name, b in berichte.items()}
+    alle_namen = set().union(*(set(u) for u in urteile.values())) if urteile else set()
+    gemeinsam = sorted(
+        n for n in alle_namen
+        if all(n in u and u[n]["urteil"] != NICHT_MESSBAR for u in urteile.values()))
+
+    rang = []
+    for name, u in urteile.items():
+        drin = [u[n] for n in gemeinsam]
+        s = _schwerstes(drin)
+        rang.append({"lauf": name,
+                     "groesster_sprung_gleichschritte": s["gleichschritte"] if s else None,
+                     "schwerstes_fenster": s["fenster"] if s else None,
+                     "haker": sum(int(w["stoerstellen_anzahl"]) for w in drin),
+                     "teleporte": sum(1 for w in drin if w["schwere"]["teleport"])})
+    rang.sort(key=lambda r: (r["groesster_sprung_gleichschritte"] is None,
+                             r["groesster_sprung_gleichschritte"] or 0.0))
+    return {
+        "gemeinsam_beurteilt": Quote(len(gemeinsam), len(alle_namen),
+                                     "Fenster, die in allen Laeufen beurteilt wurden").als_dict(),
+        "fenster": gemeinsam,
+        "reihenfolge_glatt_nach_hakelig": rang,
+    }
 
 
 def als_text(bericht: dict) -> str:
@@ -144,11 +280,27 @@ def als_text(bericht: dict) -> str:
                  "gutes Zeugnis, sondern eine Verweigerung.")
         return "\n".join(z)
 
-    messbar = [w for w in bericht["fenster"] if w["urteil"] != "NICHT MESSBAR"]
-    if not messbar:
-        z.append("")
+    zf = bericht["zusammenfassung"]
+    b = zf["beurteilt"]
+    z.append("")
+    z.append(f"ZUSAMMENFASSUNG: beurteilt {b['anzahl']}/{b['von']} {b['nenner_bedeutung']}, "
+             f"zurueckgehalten {zf['zurueckgehalten']}")
+    if b["anzahl"] == 0:
         z.append("!! KEIN Fenster war messbar -- das ist KEIN gutes Zeugnis, "
                  "sondern eine Verweigerung. Gruende siehe unten.")
+    else:
+        z.append(f"   {zf['haker']} {zf['haker_bedeutung']}; "
+                 f"Teleporte: {zf['teleporte'] or 'keine'}")
+        sw = zf["schwerstes_fenster"]
+        z.append(f"   schwerstes Fenster: {sw['fenster']} -- groesster Sprung "
+                 f"{sw['gleichschritte']} Gleichschritte ({sw['anteil_strecke'] * 100:.0f} % "
+                 f"der Strecke)")
+        for r, jr in zf["je_richtung"].items():
+            q = jr["beurteilt"]
+            sw = jr["schwerstes_fenster"]
+            schwer = f", groesster Sprung {sw['gleichschritte']} Gleichschritte" if sw else ""
+            z.append(f"   {r}: beurteilt {q['anzahl']}/{q['von']}, {jr['haker']} Haker, "
+                     f"{jr['teleporte']} Teleporte{schwer}")
 
     for w in bericht["fenster"]:
         z.append("")
@@ -160,13 +312,18 @@ def als_text(bericht: dict) -> str:
                  f"verworfen {w['verworfen']}")
         z.append(f"   60-Hz-Schranke:   {w['schranke_60hz']}")
         z.append(f"   Streckenabgleich: {w['schranke_strecke']}")
-        if w["urteil"] == "NICHT MESSBAR":
-            z.append(f"   URTEIL: NICHT MESSBAR ({w['grund']})")
+        if w["urteil"] == NICHT_MESSBAR:
+            z.append(f"   URTEIL: {NICHT_MESSBAR} ({w['grund']})")
             continue
         sp = w["schritt_px"]
         z.append(f"   Schritt je Bild ({sp['einheit']}): Median {sp['median']}, "
                  f"p10 {sp['p10']}, p90 {sp['p90']}, "
                  f"groesster Einzelsprung {sp['groesster_einzelsprung']}")
+        sv = w["schwere"]
+        z.append(f"   Schwere: Gleichschritt {sv['gleichschritt_px']} px "
+                 f"({sv['gleichschritt_herkunft']}); groesster Sprung "
+                 f"{sv['groesster_sprung_gleichschritte']} Gleichschritte = "
+                 f"{sv['groesster_sprung_anteil_strecke'] * 100:.1f} % der Strecke")
         d = w["wiederholte_bilder"]
         z.append(f"   Wiederholte Bilder: {d['anzahl']}/{d['von']} {d['nenner_bedeutung']} "
                  f"= {(d['quote'] or 0) * 100:.1f} %")
