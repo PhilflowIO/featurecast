@@ -1,6 +1,11 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import {
+  launchChromium,
+  resolveBrowserRequest,
+  writeBrowserProvenance,
+} from './browser.js'
 import { generateMotionPoints, minimumJerk } from './motion.js'
 
 const EVENTS_FILE_NAME = 'events.jsonl'
@@ -530,9 +535,14 @@ export function serializeEvent(event: RecordEvent): string {
 
 const defaultRuntime: RecordRuntime = {
   async run(options, script) {
-    const { chromium, devices } = await import('playwright')
-    const browser = await chromium.launch({ headless: true })
+    const { devices } = await import('playwright')
+    const { browser, provenance } = await launchChromium(
+      { headless: true },
+      resolveBrowserRequest(process.env),
+    )
     try {
+      await mkdir(options.out, { recursive: true })
+      await writeBrowserProvenance(options.out, provenance)
       const descriptor = options.device
         ? resolveDeviceDescriptor(
             options.device,
