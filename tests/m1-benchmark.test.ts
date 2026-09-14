@@ -16,15 +16,23 @@ type RoleCall = { name?: string; role: string }
  * and `users` tables at the real 2560x1600 capture viewport (`users`:
  * 71px; `expenses`: 2px). Pass a larger value to simulate `tasks`
  * (528px) or `invoices` (369px).
+ *
+ * `gridStartY` is the vertical scroll offset the container already holds
+ * when the first pass opens. It defaults to 0 (at the top edge, where
+ * range and travelled distance coincide); a non-zero value reproduces what
+ * the real `invoices` grid does — it sits ~85px away from the edge when a
+ * pass starts, so that pass travels less than the full range (#47).
  */
-function createHarness(options: { gridRange?: number } = {}) {
+function createHarness(
+  options: { gridRange?: number; gridStartY?: number } = {},
+) {
   const gridRange = options.gridRange ?? 20
   const roleCalls: RoleCall[] = []
   const waitForTimeoutCalls: number[] = []
   let currentUrl =
     'https://app.onlydash.io/#/datasources/x/collections/projects'
   let gridCurrentX = 0
-  let gridCurrentY = 0
+  let gridCurrentY = options.gridStartY ?? 0
   let recordsByPath: Record<string, number> = {
     expenses: 13,
     invoices: 17,
@@ -289,6 +297,65 @@ describe('runOnlyDashMotion', () => {
       }
     } finally {
       nowSpy.mockRestore()
+    }
+  })
+
+  it('records the distance a scroll pass travelled, not the container range', async () => {
+    // The container starts 85px below the top edge, so the downward pass
+    // covers 515 of the 600px range. Reporting 600 as its expected path is
+    // exactly the 20% overstatement that made `invoices:scroll-up` fail the
+    // path-length check in tools/smoothness while moving precisely as far
+    // as it was told to (#31).
+    const { demo, page } = createHarness({ gridRange: 600, gridStartY: 85 })
+
+    const windows = await runOnlyDashMotion(page as never, demo)
+
+    const down = windows.find(
+      (window) => window.label === 'tasks:scroll-down:1',
+    )
+    expect(down).toBeDefined()
+    expect(down?.travelPx).toBe(515)
+    expect(down?.scrollStartPx).toBe(85)
+    expect(down?.scrollEndPx).toBe(600)
+    // Reachability: the two numbers really do differ in this scenario —
+    // were they equal, the assertion above could not tell them apart.
+    expect(down?.target).toContain('range 600px')
+    expect(down?.travelPx).not.toBe(600)
+  })
+
+  it('keeps the before/after scroll offsets consistent with the travel it claims', async () => {
+    const { demo, page } = createHarness({ gridRange: 600, gridStartY: 85 })
+
+    const windows = await runOnlyDashMotion(page as never, demo)
+
+    const scrollWindows = windows.filter((window) =>
+      window.label.includes('scroll'),
+    )
+    expect(scrollWindows.length).toBeGreaterThan(0)
+    for (const window of scrollWindows) {
+      expect(typeof window.travelPx).toBe('number')
+      expect(
+        Math.abs(
+          (window.scrollEndPx ?? Number.NaN) -
+            (window.scrollStartPx ?? Number.NaN),
+        ),
+      ).toBe(window.travelPx)
+    }
+  })
+
+  it('leaves non-scroll windows without a travel claim', async () => {
+    // A click or a sort has no scroll path; claiming one would invent a
+    // number the smoothness tool would then check against.
+    const { demo, page } = createHarness({ gridRange: 600 })
+
+    const windows = await runOnlyDashMotion(page as never, demo)
+
+    const others = windows.filter((window) => !window.label.includes('scroll'))
+    expect(others.length).toBeGreaterThan(0)
+    for (const window of others) {
+      expect(window.travelPx).toBeUndefined()
+      expect(window.scrollStartPx).toBeUndefined()
+      expect(window.scrollEndPx).toBeUndefined()
     }
   })
 

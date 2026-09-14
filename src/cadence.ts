@@ -42,17 +42,36 @@ export type SourceCadenceReport = {
 export type MotionWindow = {
   end: number
   label: string
+  /**
+   * For a scroll window: the scroll offset (capture CSS px) measured right
+   * after the window closed. `scrollEndPx - scrollStartPx` is what the
+   * container really moved; it falls short of `travelPx` when the scroll
+   * did not reach the commanded position.
+   */
+  scrollEndPx?: number
+  /** For a scroll window: the scroll offset (capture CSS px) measured just before the window opened. */
+  scrollStartPx?: number
   start: number
   /** For a scroll window: the element that was scrolled, so target choice is auditable across runs. */
   target?: string
+  /**
+   * For a scroll window: the distance the window was commanded to travel,
+   * in capture CSS px. This — not the container's full scroll range — is
+   * the path a path-length check has to compare against, because a pass
+   * that does not start at an edge travels less than the full range.
+   */
+  travelPx?: number
 }
 
 export type MotionWindowCadence = SourceCadenceReport & {
   durationSeconds: number
   end: number
   label: string
+  scrollEndPx?: number
+  scrollStartPx?: number
   start: number
   target?: string
+  travelPx?: number
 }
 
 /** Per-motion-window cadence, so a slow window is attributable to the action that caused it. */
@@ -76,6 +95,13 @@ export function computeMotionWindowCadence(
       label: window.label,
       start: window.start,
       ...(window.target === undefined ? {} : { target: window.target }),
+      ...(window.travelPx === undefined ? {} : { travelPx: window.travelPx }),
+      ...(window.scrollStartPx === undefined
+        ? {}
+        : { scrollStartPx: window.scrollStartPx }),
+      ...(window.scrollEndPx === undefined
+        ? {}
+        : { scrollEndPx: window.scrollEndPx }),
     }
   })
 }

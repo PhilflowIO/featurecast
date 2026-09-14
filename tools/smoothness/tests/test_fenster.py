@@ -10,7 +10,8 @@ es der ausdruecklich gekennzeichnete Rueckfall.
 FIXTURE-HERKUNFT: `motion-windows.json` und `timestamps.json` sind hier von
 Hand gebaut, aber NICHT frei erfunden -- sie haben genau die Form, die
 demo/m1-capture.ts schreibt: `windows[]` aus `computeMotionWindowCadence`
-(src/cadence.ts) mit `label`, `start`, `end`, `durationSeconds`, `target`,
+(src/cadence.ts) mit `label`, `start`, `end`, `durationSeconds`, `target`
+und -- seit #31 -- `travelPx`/`scrollStartPx`/`scrollEndPx`,
 und ein `TimestampManifest` (src/capture.ts) mit `session.startedAt` und
 `frames[].timestamp` in Millisekunden der `Date.now()`-Zeitachse. Ein echter
 Lauf kann diese Fixture ersetzen, sobald der Aufnahmerechner wieder
@@ -177,3 +178,89 @@ def test_ohne_unabhaengige_bildzahl_meldet_die_schranke_tautologisch():
     b = pruefe_60hz(21, Dauer(0.5, "Test"), bilder_extern=None, grenzen_aus_dauer=True)
     assert b["haelt"] is None
     assert "tautologisch" in str(b["hinweis"])
+
+
+# --------------------------------------------------------------------------
+# Gefahrene Strecke gegen volle Scrollweite (#31)
+# --------------------------------------------------------------------------
+
+def _lauf_mit(tmp_path: Path, fenster: list[dict]) -> Path:
+    """Ein Lauf mit frei gewaehlten Fenstern, sonst wie `lauf`.
+
+    FIXTURE-HERKUNFT: dieselbe Form, die demo/m1-capture.ts schreibt --
+    `computeMotionWindowCadence` (src/cadence.ts) reicht `travelPx`,
+    `scrollStartPx` und `scrollEndPx` aus dem Fenster durch, das
+    `scrollContainerToEdge` (src/m1-benchmark.ts) gefuellt hat.
+    """
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    _manifest(tmp_path, bildabstand_ms=1000 / 60, n=200)
+    (tmp_path / "motion-windows.json").write_text(
+        json.dumps({"windows": fenster}), encoding="utf-8")
+    return tmp_path
+
+
+def _invoices_hoch(**extra) -> dict:
+    """Das Fenster aus #31, mit den echten Zahlen des Laufs vom 2026-09-12:
+    volle Scrollweite 342 px, gefahren wurden 275 -- der Behaelter stand
+    beim Oeffnen 67 px unter der Kante (#47, nicht hier zu beheben)."""
+    return {"label": "invoices:scroll-up:1", "start": STARTED_AT + 100,
+            "end": STARTED_AT + 600, "durationSeconds": 0.5,
+            "target": "div.MuiDataGrid-virtualScroller (y range 342px)", **extra}
+
+
+def test_sollstrecke_ist_die_gefahrene_strecke_nicht_die_scrollweite(tmp_path):
+    """Der Kern von #31. Beide Zahlen stehen im selben Fenster und sind
+    verschieden; das Geraet muss die gefahrene nehmen.
+
+    ERREICHBARKEIT: der Test zeigt zuerst, dass die falsche Wahl hier
+    wirklich etwas anderes ergaebe (342 != 275) -- waeren sie gleich,
+    pruefte er nichts.
+    """
+    lauf = _lauf_mit(tmp_path, [_invoices_hoch(travelPx=275, scrollStartPx=342,
+                                               scrollEndPx=67)])
+    (f,) = aus_lauf(lauf, fps=60.0, px_faktor=1.0, anzahl_bildpaare=119)
+    assert f.soll_px == pytest.approx(275.0)
+    assert f.soll_px != pytest.approx(342.0), "Scrollweite und Strecke sind hier gleich"
+    assert "travelPx" in str(f.soll_herkunft)
+    assert "gefahrene Strecke" in str(f.soll_herkunft)
+
+
+def test_der_streckenabgleich_haelt_erst_mit_der_gefahrenen_strecke(tmp_path):
+    """AEUSSERER ANKER: 274,5 px ist der Messwert, den das Geraet an diesem
+    Fenster in allen sechs Laeufen geliefert hat. Gegen die Scrollweite
+    reisst die 10-%-Schranke (20 % Abweichung), gegen die gefahrene Strecke
+    haelt sie mit 0,2 % Rest. Die Toleranz ist in beiden Faellen dieselbe.
+    """
+    from smoothness.bounds import pruefe_strecke
+
+    gemessen = 274.5
+    ohne = aus_lauf(_lauf_mit(tmp_path / "a", [_invoices_hoch()]),
+                    fps=60.0, px_faktor=1.0, anzahl_bildpaare=119)[0]
+    mit = aus_lauf(_lauf_mit(tmp_path / "b", [_invoices_hoch(travelPx=275)]),
+                   fps=60.0, px_faktor=1.0, anzahl_bildpaare=119)[0]
+
+    alt = pruefe_strecke(gemessen, ohne.soll_px, ohne.soll_herkunft)
+    neu = pruefe_strecke(gemessen, mit.soll_px, mit.soll_herkunft)
+    assert alt["haelt"] is False and alt["abweichung"] > 0.1
+    assert neu["haelt"] is True and neu["abweichung"] < 0.01
+    assert alt["toleranz"] == neu["toleranz"] == 0.10, "die Schranke wurde aufgeweicht"
+
+
+def test_lauf_ohne_travelpx_faellt_auf_die_scrollweite_zurueck(tmp_path):
+    """Rueckfallpfad fuer Laeufe von vor #31. Er bleibt erlaubt, gibt sich
+    aber in der Herkunft als Rueckfall zu erkennen."""
+    lauf = _lauf_mit(tmp_path, [_invoices_hoch()])
+    (f,) = aus_lauf(lauf, fps=60.0, px_faktor=1.0, anzahl_bildpaare=119)
+    assert f.soll_px == pytest.approx(342.0)
+    assert "Rueckfall" in str(f.soll_herkunft)
+    assert "travelPx" not in str(f.soll_herkunft).split("Rueckfall")[0]
+
+
+def test_ein_unbrauchbares_travelpx_gilt_nicht_als_sollstrecke(tmp_path):
+    """0 oder ein Nicht-Wert ist keine Strecke. Dann greift der Rueckfall,
+    nicht eine stille Null -- eine Null wuerde den Abgleich abschalten."""
+    for kaputt in (0, None, False, "275"):
+        lauf = _lauf_mit(tmp_path / f"w{kaputt!r}", [_invoices_hoch(travelPx=kaputt)])
+        (f,) = aus_lauf(lauf, fps=60.0, px_faktor=1.0, anzahl_bildpaare=119)
+        assert f.soll_px == pytest.approx(342.0), kaputt
+        assert "Rueckfall" in str(f.soll_herkunft), kaputt

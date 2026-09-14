@@ -89,14 +89,24 @@ def aus_lauf(lauf_verzeichnis: str | Path, fps: float, px_faktor: float,
     Erwartet `motion-windows.json` und `timestamps.json` eines echten Laufs
     im selben Verzeichnis (demo/m1-capture.ts schreibt beide dorthin).
 
-    Die Sollstrecke steht im Feld `target`, z.B.
-    "div.grid (x range 180px)" -- das ist die Scrollweite des Elements in
-    CSS-Pixeln der Aufnahme. ACHTUNG, und deshalb steht es hier: das ist die
-    volle Scrollweite des Behaelters, nicht notwendig die gefahrene Strecke.
-    Sie stimmen ueberein, solange `scrollContainerToEdge` von Kante zu Kante
-    faehrt (src/m1-benchmark.ts) -- laeuft ein Fenster anders, reisst der
-    Streckenabgleich und das Fenster gilt als NICHT MESSBAR. Falsch-negativ
-    ist hier die richtige Richtung.
+    Die Sollstrecke kommt aus zwei Quellen, in dieser Reihenfolge:
+
+    1. `travelPx` -- die Strecke, die das Fenster zu fahren beauftragt war
+       (|delta| in `scrollContainerToEdge`, src/m1-benchmark.ts). Das ist
+       die richtige Zahl, und sie wird bevorzugt.
+    2. `target`, z.B. "div.grid (x range 180px)" -- die volle Scrollweite
+       des Behaelters. Rueckfall fuer Laeufe, die vor #31 aufgenommen
+       wurden und `travelPx` noch nicht schreiben (dazu gehoeren die
+       eingecheckten Browser-Arm-Fixtures).
+
+    Warum die Reihenfolge so ist: beide Zahlen stimmen nur ueberein, solange
+    ein Fenster von Kante zu Kante faehrt. `invoices:scroll-up` tut das
+    nicht -- der Behaelter steht beim Oeffnen des Fensters rund 85
+    Aufnahmepixel unter `range` (#47), und der Streckenabgleich hat deshalb
+    in allen sechs gemessenen Laeufen 274-276 gegen 342 px gemeldet, obwohl
+    das Fenster genau so weit gefahren ist, wie ihm gesagt wurde (#31).
+    Die Toleranz bleibt unveraendert; korrigiert wird die Erwartung, nicht
+    die Schranke.
     """
     d = Path(lauf_verzeichnis)
     fenster_datei = json.loads((d / "motion-windows.json").read_text(encoding="utf-8"))
@@ -117,13 +127,7 @@ def aus_lauf(lauf_verzeichnis: str | Path, fps: float, px_faktor: float,
         bis = min(anzahl_bildpaare, bis)
         if bis < von:
             continue
-        treffer = _RANGE.search(str(w.get("target", "")))
-        soll = None
-        soll_herkunft = None
-        if treffer:
-            soll = float(treffer.group("px")) * px_faktor
-            soll_herkunft = (f"motion-windows.json target "
-                             f"{treffer.group('px')} Aufnahmepixel x {px_faktor:g}")
+        soll, soll_herkunft = _sollstrecke(w, px_faktor)
         richtung = next((v for k, v in _RICHTUNG.items() if k in str(w["label"])), None)
         # Unabhaengige Bildzahl: die Aufnahmebilder, die Chromium in diesem
         # Fenster geliefert hat. Sie stammt aus timestamps.json und damit aus
@@ -146,6 +150,27 @@ def aus_lauf(lauf_verzeichnis: str | Path, fps: float, px_faktor: float,
             grenzen_aus_dauer=True,
         ))
     return aus
+
+
+def _sollstrecke(w: dict, px_faktor: float) -> tuple[float | None, str | None]:
+    """Erwartete Strecke eines Fensters, mit ausgewiesener Herkunft.
+
+    Bevorzugt `travelPx` (die beauftragte Strecke), faellt auf die
+    Scrollweite im Freitext-`target` zurueck. Siehe `aus_lauf` fuer den
+    Grund. Gibt (None, None) zurueck, wenn keine der beiden Angaben da ist
+    -- dann gilt das Fenster als nicht streckengeprueft, nicht als bestanden.
+    """
+    gefahren = w.get("travelPx")
+    if isinstance(gefahren, (int, float)) and not isinstance(gefahren, bool) and gefahren > 0:
+        return (float(gefahren) * px_faktor,
+                f"motion-windows.json travelPx {gefahren:g} Aufnahmepixel "
+                f"x {px_faktor:g} (gefahrene Strecke)")
+    treffer = _RANGE.search(str(w.get("target", "")))
+    if treffer:
+        return (float(treffer.group("px")) * px_faktor,
+                f"motion-windows.json target {treffer.group('px')} Aufnahmepixel "
+                f"x {px_faktor:g} (Rueckfall: volle Scrollweite, Lauf ohne travelPx)")
+    return None, None
 
 
 def _etikett(p: Pair, k: Knobs) -> str:

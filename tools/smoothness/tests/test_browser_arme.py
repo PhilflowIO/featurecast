@@ -137,3 +137,33 @@ def test_sortier_fenster_bekommen_am_echten_material_kein_urteil(berichte):
         verweigert = sum(zf["zurueckgehalten"].values())
         assert zf["beurteilt"]["anzahl"] + verweigert == zf["beurteilt"]["von"]
         assert zf["beurteilt"]["von"] == len(b["fenster"])
+
+
+def test_die_alten_arme_haben_keine_gefahrene_strecke_und_laufen_trotzdem(berichte):
+    """Der Rueckfallpfad aus #31, am echten Altmaterial.
+
+    Diese drei Laeufe sind vom 2026-09-12 und schreiben `travelPx` noch
+    nicht. Sie muessen weiter beurteilt werden -- ueber die volle
+    Scrollweite im Freitext-`target` --, und die Herkunft muss das sagen,
+    damit niemand die schwaechere Zahl fuer die gefahrene Strecke haelt.
+
+    ERREICHBARKEIT: der Test stellt zuerst fest, dass in diesem Material
+    wirklich kein `travelPx` steckt; sonst pruefte er den Rueckfall gar
+    nicht.
+    """
+    for arm in ARME:
+        with gzip.open(HIER / f"{arm}.json.gz", "rt", encoding="utf-8") as fh:
+            fenster = json.load(fh)["motion_windows"]["windows"]
+        assert fenster, arm
+        assert all("travelPx" not in w for w in fenster), arm
+
+    geprueft = 0
+    for arm in ARME:
+        for w in berichte[arm]["fenster"]:
+            s = w["schranke_strecke"]
+            if s.get("soll_px") is None:
+                continue
+            geprueft += 1
+            assert "Rueckfall" in str(s["soll_herkunft"]), (arm, w["fenster"])
+            assert s["toleranz"] == 0.10, (arm, w["fenster"])
+    assert geprueft >= 8, f"zu wenige streckengepruefte Fenster: {geprueft}"
