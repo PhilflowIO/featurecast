@@ -54,3 +54,17 @@ Jeder der 143 Playwright-Namen funktioniert zusätzlich direkt, auch ohne Preset
 ## Engine-Hinweis
 
 Die iPhone- und iPad-Profile laufen laut Registry unter WebKit. Ob die Aufnahme-Schnittstelle dort ebenso funktioniert wie unter Chromium, ist **ungeprüft** — sie ist eine Playwright-Funktion, aber der darunterliegende Mechanismus ist Chromium-nah. Falls WebKit ausfällt, bleibt der Weg, dieselben Geräte-Kennwerte unter Chromium zu fahren: das Layout stimmt dann, die Engine-Eigenheiten von Safari fehlen. Für Marketing-Material ist das vertretbar, für Tests wäre es das nicht. Wird in M3 entschieden.
+
+## Umsetzung (M5)
+
+Der Code steht in [`src/devices.ts`](../src/devices.ts); Einstiegspunkt ist `resolveDevice(spec)`, das aus einem Namen, einem Preset oder einem Preset samt Überschreibungen die vollständige Beschreibung erzeugt. Die Anbindung an `record()` ist noch nicht gezogen — wie sie gedacht ist, steht im Modul-Kopfkommentar.
+
+Vier Punkte, die beim Bauen konkret entschieden werden mussten:
+
+**Die Registry ist größer als hier notiert.** Das ausgecheckte `playwright` 1.63.0 liefert **207** Namen (107 Geräte plus 100 `… landscape`-Varianten), nicht die oben notierten 143. Die elf kuratierten Namen und alle Kennwerte der Tabelle stimmen weiterhin exakt mit der Registry überein — geprüft im Test. Genau diese Abweichung ist der Grund, die Liste zur Laufzeit zu lesen.
+
+**`aspect` ist Eingabe-Abkürzung und abgeleitetes Etikett, kein gespeichertes Feld.** Zwei Presets tragen Ausgabegrößen, die zu keinem der drei Seitenverhältnisse passen: `desktop-wide` mit 1920×1200 (16:10) und `tablet`/`tablet-small` mit 1200×1600 (3:4). Gespeichert wird deshalb nur `output.width`/`height`; `aspect: '9:16'` im Aufruf setzt beide aus einer festen Tabelle (1920×1080 / 1080×1920 / 1080×1080), und `aspectOf()` liefert das Etikett zurück oder `null`. Ein zusätzlich gespeichertes `aspect` würde bei diesen beiden Presets der gespeicherten Pixelgröße widersprechen.
+
+**„Aufnahme: offen (M3)" ist ein eigener Zustand, keine Vorgabe.** Die acht mobilen Presets tragen `capture.status: 'pending'` mit Verweis auf M3. Wer sie benutzt, bekommt über `requireCaptureSettings()` einen Abbruch, der den Meilenstein, den Grund und den Ausweg nennt. Eine Überschreibung schließt den Zustand nur, wenn sie Breite, Höhe **und** Strategie liefert — eine halbe Angabe wäre wieder die Vermutung, die dieser Zustand verhindern soll.
+
+**Zeiger folgt `hasTouch`.** Die Zeiger-Spalte der Tabelle ist genau die Touch-Fähigkeit des Profils (Pfeil auf den drei Desktop-Profilen, Touch auf den acht mobilen), also wird sie abgeleitet statt ein zweites Mal aufgeschrieben. Zeigergröße (24 px) und Ripple-Farbe sind überschreibbare Platzhalter und gehören M4; `crf 23` ist keine neue Wahl, sondern der Vorgabewert von libx264 und damit das, was die bestehende Zusammenbau-Stufe ohnehin schon erzeugt.
