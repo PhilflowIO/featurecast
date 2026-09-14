@@ -266,18 +266,21 @@ export function createRecorder(
           motionSeed,
           EVENT_LOG_FPS,
         )
-        // `tick` is the scheduled 60Hz slot index: every generated sample —
-        // including one that rounds to the same pixel as its predecessor
-        // (the pointer briefly "held") — consumes and logs its own slot, so
-        // tick stays a uniform timebase issue #9 can map onto the capture
-        // clock 1:1.
-        await paceOnTicks(page, points.length, (index) => {
-          const next = points[index] as { x: number; y: number }
+        const start = Date.now()
+        for (const [index, next] of points.entries()) {
+          // Real samples land on absolute deadlines (start + i/fps), not
+          // accumulated sleeps, so pacing error never compounds across a move.
+          // `tick` is the scheduled 60Hz slot index: every generated sample —
+          // including one that rounds to the same pixel as its predecessor
+          // (the pointer briefly "held") — consumes and logs its own slot, so
+          // tick stays a uniform timebase issue #9 can map onto the capture
+          // clock 1:1.
+          await sleepUntil(page, start + ((index + 1) / EVENT_LOG_FPS) * 1000)
+          await page.mouse.move(next.x, next.y, { steps: 1 })
           pointer = next
           events.push({ type: 'pointer', tick, x: next.x, y: next.y })
           tick += 1
-          return page.mouse.move(next.x, next.y, { steps: 1 })
-        })
+        }
       }
 
       // A logical interaction's motion seed(s) are derived deterministically
@@ -792,56 +795,15 @@ async function paceWheel(
   page: RecordPage,
   positions: { x: number; y: number }[],
 ): Promise<void> {
+  const start = Date.now()
   let sentX = 0
   let sentY = 0
-  await paceOnTicks(page, positions.length, (index) => {
-    const target = positions[index] as { x: number; y: number }
-    const delta = { x: target.x - sentX, y: target.y - sentY }
+  for (const [index, target] of positions.entries()) {
+    await sleepUntil(page, start + ((index + 1) / EVENT_LOG_FPS) * 1000)
+    await page.mouse.wheel(target.x - sentX, target.y - sentY)
     sentX = target.x
     sentY = target.y
-    return page.mouse.wheel(delta.x, delta.y)
-  })
-}
-
-/**
- * Dispatches one input event per 60 Hz slot, on absolute deadlines
- * (start + (i+1)/fps), without letting a slot wait for the previous event's
- * acknowledgement.
- *
- * Why not simply `await` each dispatch: Chromium acknowledges an input event
- * only once it has been processed, which is tied to the next frame. Measured
- * on the patched build (#25): 16.5–17.8 ms per wheel step against a 16.67 ms
- * slot. With absolute deadlines a loop that awaits the acknowledgement can
- * never catch up, only fall further behind — input drifts against the frame
- * cadence, and the finished video shows held frames followed by a catch-up
- * step.
- *
- * Order is preserved: every dispatch is issued in slot order on the same CDP
- * session, which delivers messages in order. All acknowledgements are
- * awaited before this returns, so the motion has fully arrived. A failed
- * dispatch stops further dispatches at the next slot and is rethrown; it is
- * caught at once so it can never surface as an unhandled rejection while
- * later slots are still being paced.
- */
-async function paceOnTicks(
-  page: RecordPage,
-  slotCount: number,
-  dispatch: (index: number) => Promise<void>,
-): Promise<void> {
-  const start = Date.now()
-  const acknowledgements: Promise<void>[] = []
-  const state: { failure?: { error: unknown } } = {}
-  for (let index = 0; index < slotCount; index += 1) {
-    await sleepUntil(page, start + ((index + 1) / EVENT_LOG_FPS) * 1000)
-    if (state.failure) break
-    acknowledgements.push(
-      dispatch(index).catch((error: unknown) => {
-        state.failure ??= { error }
-      }),
-    )
   }
-  await Promise.all(acknowledgements)
-  if (state.failure) throw state.failure.error
 }
 
 /** Waits until an absolute deadline instead of sleeping a fixed duration. */
