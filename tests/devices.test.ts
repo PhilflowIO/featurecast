@@ -154,18 +154,25 @@ describe('curated presets', () => {
   )
 
   it('records desktop over-sized and leaves mobile capture open', () => {
-    expect(resolveDevice('desktop').capture).toEqual({
-      fps: 60,
-      height: 1440,
-      quality: 90,
-      status: 'decided',
-      strategy: 'screencast',
-      width: 2560,
-    })
-    expect(resolveDevice('desktop-wide').capture).toMatchObject({
-      height: 1600,
-      width: 2560,
-    })
+    // Every desktop preset records the same over-sized area, and every one of
+    // them records more than it outputs: that margin is what M4 cuts its
+    // second and third format out of, and what the zoom spring pans inside.
+    // A preset whose capture equalled its output would have neither.
+    for (const row of CURATED_TABLE.filter((candidate) => !candidate.touch)) {
+      const resolved = resolveDevice(row.preset)
+      expect(resolved.capture).toEqual({
+        fps: 60,
+        height: 1600,
+        quality: 90,
+        status: 'decided',
+        strategy: 'screencast',
+        width: 2560,
+      })
+      expect(resolved.capture).toMatchObject({ status: 'decided' })
+      if (resolved.capture.status !== 'decided') throw new Error('unreachable')
+      expect(resolved.capture.width).toBeGreaterThan(resolved.output.width)
+      expect(resolved.capture.height).toBeGreaterThan(resolved.output.height)
+    }
     for (const row of CURATED_TABLE.filter((candidate) => candidate.touch)) {
       expect(resolveDevice(row.preset).capture).toMatchObject({
         milestone: 'M3',
