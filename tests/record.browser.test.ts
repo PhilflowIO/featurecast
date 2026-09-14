@@ -293,13 +293,14 @@ describe('record against a real headless Chromium', () => {
         '<!doctype html><html><body style="margin:0;height:3000px">' +
           '<script>window.__scrollSamples=[];' +
           "window.addEventListener('scroll',function(){" +
-          'window.__scrollSamples.push(window.scrollY)},{passive:true});' +
+          'window.__scrollSamples.push(' +
+          '{y:window.scrollY,t:performance.now()})},{passive:true});' +
           '</script>' +
           '</body></html>',
       )
     const SCROLL_DISTANCE_PX = 500
 
-    let samples: number[] = []
+    let samples: { t: number; y: number }[] = []
     let elapsedMs = 0
     await record({ out, seed: 3 }, async (page, demo) => {
       await page.goto(CADENCE_FIXTURE_URL)
@@ -308,13 +309,24 @@ describe('record against a real headless Chromium', () => {
       elapsedMs = Date.now() - before
       samples = await page.evaluate(
         () =>
-          (window as unknown as { __scrollSamples: number[] }).__scrollSamples,
+          (window as unknown as { __scrollSamples: { t: number; y: number }[] })
+            .__scrollSamples,
       )
     })
 
-    const distinctPositions = new Set(samples).size
-    const elapsedSeconds = elapsedMs / 1000
-    const positionsPerSecond = distinctPositions / elapsedSeconds
+    const distinctPositions = new Set(samples.map((sample) => sample.y)).size
+    // The denominator is how long the page was *moving*, read from the
+    // page's own scroll samples — not how long the call took. Since #40 the
+    // call also waits out the scroll's tail, and counting that idle tail as
+    // motion time pushed this ratio into its own threshold: 47.3-50 against
+    // a floor of 50, red on every other run (#38).
+    const first = samples.at(0)
+    const last = samples.at(-1)
+    if (first === undefined || last === undefined) {
+      throw new Error('The page reported no scroll samples at all')
+    }
+    const movingSeconds = (last.t - first.t) / 1000
+    const positionsPerSecond = distinctPositions / movingSeconds
     expect(positionsPerSecond).toBeGreaterThanOrEqual(50)
 
     // Wall time should track the intended default speed
@@ -323,8 +335,82 @@ describe('record against a real headless Chromium', () => {
     // per-step cap's growth loop lengthens the scroll slightly.
     const expectedSeconds =
       SCROLL_DISTANCE_PX / DEFAULT_SCROLL_SPEED_PX_PER_SECOND
-    expect(elapsedSeconds).toBeGreaterThan(expectedSeconds * 0.7)
-    expect(elapsedSeconds).toBeLessThan(expectedSeconds * 1.6)
+    const callSeconds = elapsedMs / 1000
+    expect(callSeconds).toBeGreaterThan(expectedSeconds * 0.7)
+    expect(callSeconds).toBeLessThan(expectedSeconds * 1.6)
+  }, 30_000)
+
+  /**
+   * #40 acceptance in a real browser. Two things have to be true at once,
+   * and the first is what makes the second mean anything:
+   *
+   * 1. The fixture really keeps moving after the last wheel event — it
+   *    carries the input into an rAF-driven glide, the way a page with
+   *    momentum or an animated container does. Without that there is no
+   *    tail to wait out and any assertion below would pass for free.
+   * 2. No scroll happens after `demo.scroll` returns. That is the property
+   *    the motion window depends on: the window closes on return, so a
+   *    scroll arriving later is a scroll the window does not describe.
+   *
+   * Ground truth is the page's own `scroll` and `wheel` timestamps, not
+   * anything the wrapper reports about itself.
+   */
+  it('returns from a scroll only once the page has actually stopped moving', async () => {
+    const out = join(ARTIFACTS_ROOT, 'run-scroll-rest')
+    await rm(out, { force: true, recursive: true })
+
+    const GLIDE_FIXTURE_URL =
+      'data:text/html,' +
+      encodeURIComponent(
+        '<!doctype html><html><body style="margin:0;height:6000px">' +
+          '<script>' +
+          'window.__lastWheel=0;window.__lastScroll=0;window.__velocity=0;' +
+          "window.addEventListener('scroll',function(){" +
+          'window.__lastScroll=performance.now()},{passive:true});' +
+          "window.addEventListener('wheel',function(event){" +
+          'window.__lastWheel=performance.now();' +
+          'window.__velocity+=event.deltaY*0.35;' +
+          'event.preventDefault()},{passive:false});' +
+          'function glide(){' +
+          'if(Math.abs(window.__velocity)>0.5){' +
+          'window.scrollBy(0,window.__velocity);' +
+          'window.__velocity*=0.82}' +
+          'requestAnimationFrame(glide)}' +
+          'requestAnimationFrame(glide);' +
+          '</script></body></html>',
+      )
+
+    let lastWheel = 0
+    let lastScrollAtReturn = 0
+    let lastScrollAfterIdle = 0
+    await record({ out, seed: 3 }, async (page, demo) => {
+      await page.goto(GLIDE_FIXTURE_URL)
+      await demo.scroll(0, 900)
+      const atReturn = await page.evaluate(() => ({
+        lastScroll: (window as unknown as { __lastScroll: number })
+          .__lastScroll,
+        lastWheel: (window as unknown as { __lastWheel: number }).__lastWheel,
+      }))
+      lastWheel = atReturn.lastWheel
+      lastScrollAtReturn = atReturn.lastScroll
+      // Longer than any glide this fixture can produce: the decay reaches
+      // half a pixel per frame within ~30 frames.
+      await page.waitForTimeout(600)
+      lastScrollAfterIdle = await page.evaluate(
+        () => (window as unknown as { __lastScroll: number }).__lastScroll,
+      )
+    })
+
+    // 1. The fixture has a tail at all: scrolling went on well past the
+    //    last wheel event. Read after the idle stretch, so this holds
+    //    whether or not the scroll waited — it says something about the
+    //    fixture, not about the code under test. Without it, assertion 2
+    //    would pass for free on a page that stops the instant input does.
+    expect(lastScrollAfterIdle - lastWheel).toBeGreaterThan(30)
+    // 2. And that tail was already over when the call returned: nothing
+    //    scrolled during the idle stretch. This is the assertion that fails
+    //    when the wait is removed.
+    expect(lastScrollAtReturn).toBe(lastScrollAfterIdle)
   }, 30_000)
 
   it('resolves a fresh bounding box and actually hits the target after a scroll settles', async () => {

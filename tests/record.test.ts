@@ -129,7 +129,9 @@ function fakePage(viewport = { height: 720, width: 1280 }) {
   const locatorValue = hittableLocator(boundingBox)
   const locator = vi.fn().mockReturnValue(locatorValue)
   return {
-    evaluate: vi.fn().mockResolvedValue(undefined),
+    // The only page-level evaluate in src/record.ts is the scroll-rest
+    // wait, which answers with the milliseconds it waited.
+    evaluate: vi.fn().mockResolvedValue(0),
     goto: vi.fn().mockResolvedValue(undefined),
     hasTouch: false,
     keyboard: { type: vi.fn().mockResolvedValue(undefined) },
@@ -1142,6 +1144,46 @@ describe('input pacing on the 60 Hz tick (#25)', () => {
     const longest = moves.reduce((a, b) => (b.length > a.length ? b : a))
     expect(longest.length).toBeGreaterThan(10)
     expectOnSlotGrid(longest)
+  })
+
+  it('returns only once the page has stopped scrolling, and counts that wait on the tick axis', async () => {
+    // #40: the wheel dispatch finishing is not the page having arrived.
+    // Chromium keeps animating the scroll afterwards, and a motion window
+    // that closes on dispatch describes the typing, not the motion.
+    const output = await temporaryDirectory()
+    const page = fakePage()
+    const order: string[] = []
+    page.mouse.wheel = vi.fn(() => {
+      order.push('wheel')
+      return Promise.resolve()
+    })
+    page.evaluate = vi.fn(() => {
+      order.push('rest')
+      return Promise.resolve(100)
+    })
+    let steps = 0
+    await createRecorder(runtimeFor(page))(
+      { out: output },
+      async (_page, demo) => {
+        await demo.scroll(0, 600)
+        steps = page.mouse.wheel.mock.calls.length
+        await demo.hold(0)
+      },
+    )
+
+    // Waited for the page, and waited after the last wheel step, not before.
+    expect(page.evaluate).toHaveBeenCalledOnce()
+    expect(order.at(-1)).toBe('rest')
+    expect(order.filter((entry) => entry === 'wheel')).toHaveLength(steps)
+
+    const events = (await readFile(join(output, 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { tick?: number; type: string })
+    const scroll = events.find((event) => event.type === 'scroll')!
+    const hold = events.find((event) => event.type === 'hold')!
+    // 100ms of waiting is six 60Hz ticks on top of the dispatched steps.
+    expect(hold.tick).toBe((scroll.tick as number) + steps + 6)
   })
 
   it('surfaces a failed dispatch instead of losing it, and stops dispatching', async () => {

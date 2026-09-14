@@ -453,13 +453,21 @@ export function createRecorder(
           )
           events.push({ type: 'scroll', tick, deltaX, deltaY })
           await paceWheel(page, positions)
+          // Dispatching the last wheel event is not the same as the page
+          // having arrived: Chromium animates the scroll and keeps painting
+          // after the input stops. Waiting for that tail here is what makes
+          // the caller's motion window describe the motion instead of the
+          // typing (#40).
+          const restMs = await waitForScrollRest(page)
+          // Same bookkeeping as hold(): the tick axis tracks wall clock, so
+          // waited time has to advance it or every later event drifts.
+          tick += positions.length + Math.ceil((restMs / 1000) * EVENT_LOG_FPS)
           // scroll() itself doesn't know which element will be interacted
           // with next (it takes no target), so it can't settle on the
           // geometry that actually matters. resolveTarget() — called by the
           // next point/click/tap/type — is what waits for stable geometry,
           // covering any scroll mechanism (window, inner container,
           // JS-driven transform), not just this dispatch.
-          tick += positions.length
         },
       }
 
@@ -722,6 +730,53 @@ export function computeScrollPositions(
     )
   }
   return positions
+}
+
+/**
+ * Waits until the page has stopped scrolling, and answers how long that
+ * took in milliseconds.
+ *
+ * Why this exists: a scroll's motion window used to end when the last wheel
+ * event was acknowledged. Since the input holds its 60 Hz tick (#25) the
+ * dispatch finishes before Chromium's scroll animation does, so the window
+ * ended mid-motion — measured on the box, the horizontal scrolls travelled
+ * 131-169 px of 172.5 px inside their own window while the finished video
+ * showed the full 171.8 px just outside it (#40).
+ *
+ * Observed by listening, not by polling: a poll would have to read every
+ * scrollable element's offset on every sample, which is main-thread work
+ * during a capture, and the capture is the thing being measured. `scroll`
+ * events fire per frame while anything on the page scrolls, in the capture
+ * phase for every element, so their absence is the arrival signal.
+ *
+ * Both numbers below are inlined in page context on purpose: `evaluate`
+ * takes no arguments here. 50 ms is three frames at 60 Hz — long enough
+ * that a frame Chromium skipped under load does not read as arrival. The
+ * 1000 ms cap bounds a page that scrolls forever (a marquee, an infinite
+ * loader); reaching it is not an error, it is the point at which waiting
+ * longer stops being about this scroll.
+ */
+async function waitForScrollRest(page: RecordPage): Promise<number> {
+  return page.evaluate<number>(
+    () =>
+      new Promise<number>((resolve) => {
+        const started = performance.now()
+        let quiet: ReturnType<typeof setTimeout>
+        const finish = (): void => {
+          clearTimeout(quiet)
+          clearTimeout(cap)
+          document.removeEventListener('scroll', onScroll, true)
+          resolve(performance.now() - started)
+        }
+        const onScroll = (): void => {
+          clearTimeout(quiet)
+          quiet = setTimeout(finish, 50)
+        }
+        const cap = setTimeout(finish, 1000)
+        quiet = setTimeout(finish, 50)
+        document.addEventListener('scroll', onScroll, true)
+      }),
+  )
 }
 
 /** Splits a scroll into eased 60 Hz increments paced against absolute
