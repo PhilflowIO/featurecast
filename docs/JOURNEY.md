@@ -530,6 +530,51 @@ them.
 
 ---
 
+## 2026-09-14, night — we were not scrolling the container we meant (#47, #31)
+
+`invoices:scroll-up` had been failing its distance bound by ~20 % in
+every measured case. The window now carried the scroll offsets before and
+after, so a fresh run on the box could simply be read: the upward motion
+starts at 454 and stops at **91**, having been told to travel 454. And
+`tasks:scroll-up` stops at 3 instead of 0 — every upward motion falls
+short, `invoices` worst.
+
+Then the question worth asking: where did the missing pixels go? A probe
+dumped **every** scrollable element of the page after each window. After
+`invoices:scroll-up` the outer container sits at 91 and everything else
+— the grid's own virtual scroller, the navigation, the document — sits
+at 0. The pixels are not somewhere else. They never arrived.
+
+What gave it away was that the grid's inner scroller moves from 2 to 0 in
+exactly the affected windows: it takes part in the motion without
+absorbing it. The wheel was being delivered to the **centre** of the
+target's rectangle, and on that view the centre sits over the grid. One
+changed line — wheel 20 px inside the top-left corner instead — and every
+window hits exactly: 456 → 0, 590 → 0, 188 → 0, both repetitions.
+
+Chromium latches a wheel gesture to the element under the cursor. An
+inner scroller with 2 px of room catches the gesture and does not hand
+the remainder on. That is also why only the upward direction suffered:
+going down, the inner scroller is already at its end and passes
+everything through immediately.
+
+The fix is not "20 px from the corner" — that was the probe. Candidate
+wheel points are now spread over the target's **visible** area, hit-tested
+in the browser, and the first one that reaches the target with no other
+scrollable element in between wins. If none is free the run stops; there
+is no fall-back to the centre, because falling back to the broken point
+is the defect itself.
+
+**What this says about #31.** Repairing the reported distance would not
+have been enough. The motion really was short. With the wheel delivered
+correctly, the distance bound holds in every window — `invoices:scroll-up`
+at 0.2 % deviation — and not a single tolerance was touched.
+
+Three days of "the instrument is too strict" were, in the end, the
+instrument being right.
+
+---
+
 ## Where the truth lives
 
 | Question                                                          | Where                                        |
