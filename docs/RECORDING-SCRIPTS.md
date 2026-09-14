@@ -20,12 +20,10 @@ gibt](#was-es-noch-nicht-gibt) — und nicht als Rezept getarnt dazwischen.
 - `browser.json` — welcher Chromium tatsächlich gelaufen ist (Pfad,
   Version, SHA-256 des Binärs).
 
-**Ein Video entsteht dabei nicht.** Die Aufnahme der Einzelbilder
-(`src/capture.ts`) und der Zusammenbau zu 60 Bildern pro Sekunde
-(`src/assemble.ts`) existieren, sind aber bisher nur in
-[`demo/m1-capture.ts`](../demo/m1-capture.ts) von Hand mit dem Wrapper
-verdrahtet. Ein Kommando, das Skript, Gerät, Aufnahme, Render und Upload in
-einem Zug durchläuft, ist M6.
+**Ein Video entsteht dabei nicht.** `record()` selbst schreibt nur das
+Ereignis-Log. Wer ein Video will, ruft nicht `record()` auf, sondern
+`featurecast run` — siehe [Ein Kommando für die ganze
+Kette](#ein-kommando-für-die-ganze-kette) weiter unten.
 
 ## Der Umbau
 
@@ -94,6 +92,63 @@ das Rezept unten.
 Und eine Eigenheit, die schnell beißt: `page.evaluate` nimmt hier eine
 Funktion **ohne Argumente**. Werte aus dem Skript kommen nicht als Parameter
 in die Seite, sie müssen in den Text der Funktion hinein.
+
+## Ein Kommando für die ganze Kette
+
+`featurecast run` nimmt ein Aufnahme-Skript, spielt es einmal pro Gerät ab,
+nimmt dabei die Einzelbilder auf, rendert sie zu MP4 und lädt das Ergebnis
+auf Wunsch hoch.
+
+```sh
+pnpm featurecast run demo/feature-xy.ts --devices desktop-wide --upload
+```
+
+Dafür sieht ein Skript anders aus als oben: es **exportiert den Rumpf der
+Aufnahme, statt `record()` selbst aufzurufen**. Browser, Gerät und die
+Bildaufnahme drumherum gehören dem Kommando; ein Modul, das beim Laden
+`record()` aufruft, würde einen zweiten, nicht aufgenommenen Browser öffnen.
+
+```ts
+import type { Demo, RecordPage } from '../src/record.js'
+
+export default async function featureXy(page: RecordPage, demo: Demo) {
+  await page.goto('https://app.example.com/feature')
+  await demo.click('#nav-settings')
+  await demo.scroll(0, 900)
+}
+```
+
+Ein vollständiges Beispiel liegt in
+[`demo/feature-xy.ts`](../demo/feature-xy.ts). Statt `default` geht auch ein
+Export namens `recording`.
+
+| Schalter    | Bedeutung                                                                  |
+| ----------- | -------------------------------------------------------------------------- |
+| `--devices` | Kommaliste aus Presets und Playwright-Namen. Pflichtangabe.                |
+| `--out`     | Wurzelordner; je Gerät ein Unterordner. Standard `artifacts/<Skriptname>`. |
+| `--upload`  | Lädt jedes fertige Video hoch und gibt die URL aus.                        |
+| `--encoder` | `x264` (Standard), `nvenc-h264`, `nvenc-hevc`.                             |
+| `--seed`    | Startwert für Bewegung und Tippverzögerung. Standard `1`.                  |
+
+Die Zugangsdaten für `--upload` kommen ausschließlich aus der Umgebung
+(`.env.example` nennt die Variablen). Fehlt eine, bricht der Lauf ab, **bevor**
+der erste Browser startet — ein Fehler, der zu Beginn erkennbar ist, soll
+nicht erst nach Aufnahme und Encode auffallen.
+
+**Ein Gerät, das abbricht, stoppt die anderen nicht.** Jeder Fehler wird
+gesammelt und am Ende mit der Stufe genannt, die ihn abgelehnt hat; der
+Rückgabewert des Kommandos ist dann ungleich null. Eine Aufnahme sind
+Minuten Arbeit, und eine fertige wegzuwerfen, um das Problem eines anderen
+Geräts früher zu melden, hilft niemandem.
+
+**Was heute wirklich durchläuft.** Nur `desktop-wide`. Jedes mobile Preset
+bricht mit dem M3-Hinweis ab (die Aufnahmefläche ist dort nicht entschieden),
+und `desktop` wie `safari` verlangen eine Aufnahmefläche von 2560×1440,
+während `src/capture.ts` fest 2560×1600 aufnimmt. Welche der beiden Zahlen
+gilt, ist zwischen [PLAN.md](../PLAN.md) und [DEVICES.md](DEVICES.md) offen
+(siehe [CAPTURE-CADENCE.md](CAPTURE-CADENCE.md)) — das Kommando nennt den
+Konflikt, statt still eine der beiden Zahlen zu wählen. Das M6-Abnahmebeispiel
+`--devices desktop,iphone` ist deshalb heute nicht erfüllbar.
 
 ## Rezept: angemeldet aufnehmen
 
@@ -232,5 +287,7 @@ Damit niemand danach sucht:
 - **Zoom, gerenderter Zeiger, Raffung, Seitenverhältnisse** — die
   Nachbearbeitung aus dem Ereignis-Log ist M4.
 - **Presets und eigene Aufnahme-/Ausgabefelder** — M5.
-- **Upload und ein `featurecast`-Kommando** — M6. Bis dahin wird ein
-  Aufnahme-Skript direkt über `tsx` gestartet.
+- **Mobile über das Kommando** — `featurecast run` gibt es, aber jedes
+  mobile Preset bricht mit dem M3-Hinweis ab, und `desktop`/`safari` mit dem
+  ungeklärten Streit über die Aufnahmefläche. Aufnehmbar ist heute
+  `desktop-wide`.

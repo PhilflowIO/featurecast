@@ -54,6 +54,26 @@ Ein Ziel, dessen Bounding-Box gar keine sichtbare Überschneidung mit dem Viewpo
 
 `device` wird bereits gegen Playwrights Geräteregistrierung aufgelöst, unter anderem für `hasTouch`, damit `tap` in einem echten Touch-Kontext läuft statt abzustürzen. Ein unbekannter Name bricht mit einer Fehlermeldung ab, die ähnliche oder verfügbare Namen nennt. Die kuratierte Voreinstellungs-Ebene darüber (Aufnahme-/Ausgabeformat, Zeiger-Art) folgt in M5.
 
+## Ein Kommando für die ganze Kette
+
+```sh
+pnpm featurecast run demo/feature-xy.ts --devices desktop-wide --upload
+```
+
+`featurecast run` spielt ein Aufnahme-Skript einmal pro Gerät ab, nimmt die
+Einzelbilder auf, rendert sie zu MP4 und lädt sie auf Wunsch in den
+S3-kompatiblen Speicher. Ein Skript exportiert dafür den Rumpf der Aufnahme
+statt `record()` selbst aufzurufen; Aufbau, Schalter und das vollständige
+Beispiel stehen in
+[docs/RECORDING-SCRIPTS.md](docs/RECORDING-SCRIPTS.md#ein-kommando-für-die-ganze-kette).
+
+Welches Gerät aufgenommen wird, entscheidet allein sein Name: das aufgelöste
+Gerät bringt seine Ausgabegröße und seine Encoder-Einstellung mit bis in den
+ffmpeg-Aufruf. Heute läuft davon nur `desktop-wide` durch — mobile Presets
+warten auf die Entscheidung über ihre Aufnahmefläche (M3), und `desktop` wie
+`safari` auf die Klärung, ob überhaupt über-aufgenommen und beschnitten wird.
+Das Kommando nennt beides beim Namen, statt still eine Zahl zu wählen.
+
 ## Entwicklung
 
 ```sh

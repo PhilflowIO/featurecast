@@ -86,3 +86,57 @@ export function resolveEncoder(name: string): Encoder {
     `Unknown encoder "${name}". Available: ${ENCODERS.join(', ')}`,
   )
 }
+
+/**
+ * Encoder plus the quality number that encoder understands.
+ *
+ * `crf` belongs to the CPU path and `cq` to NVENC: different scales with the
+ * same nominal range, which is why they are different fields rather than one
+ * `quality` number. The encoder name is the vocabulary above, so this whole
+ * value can be handed to the assemble stage unchanged — that is the point of
+ * it existing here rather than in the device layer.
+ */
+export type OutputQuality =
+  | { cq: number; encoder: Extract<Encoder, `nvenc-${string}`> }
+  | { crf: number; encoder: Extract<Encoder, 'x264'> }
+
+/**
+ * The quality number both scales default to.
+ *
+ * This is the one number that has to be chosen rather than copied. libx264's
+ * own default is constant quality at CRF 23 with no bitrate ceiling, so 23 on
+ * the CPU path changes nothing about what the encoder has always produced.
+ * NVENC's default is the opposite kind of promise — a bitrate target — and a
+ * screencast of a dense scrolling UI is exactly the material that target
+ * starves, so the GPU path is pinned to constant quality at the same number.
+ *
+ * What is *not* claimed: that CQ 23 and CRF 23 are perceptually equal. The
+ * two scales belong to different encoders and the correspondence is
+ * unmeasured here. That open question is the same reason `DEFAULT_ENCODER`
+ * is still the CPU.
+ */
+export const DEFAULT_CONSTANT_QUALITY = 23
+
+/** The default quality for an encoder, on whichever scale it speaks. */
+export function defaultQualityFor(encoder: Encoder): OutputQuality {
+  return encoder === 'x264'
+    ? { crf: DEFAULT_CONSTANT_QUALITY, encoder }
+    : { cq: DEFAULT_CONSTANT_QUALITY, encoder }
+}
+
+/** Default encoder settings: the CPU path at its own native default. */
+export const DEFAULT_OUTPUT_QUALITY: OutputQuality =
+  defaultQualityFor(DEFAULT_ENCODER)
+
+/** The quality number this value carries, and what that number is called. */
+export function qualityNumber(quality: OutputQuality): {
+  field: 'cq' | 'crf'
+  value: number
+} {
+  // Discriminating on the present field rather than on the encoder name
+  // keeps a fourth encoder from needing an edit here as well as in the
+  // profile table.
+  return 'crf' in quality
+    ? { field: 'crf', value: quality.crf }
+    : { field: 'cq', value: quality.cq }
+}

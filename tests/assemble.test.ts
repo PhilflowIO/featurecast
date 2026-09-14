@@ -8,7 +8,17 @@ import {
   assembleScreencast,
   buildCaptureTimeline,
   buildFfmpegArguments,
+  cropRectangle,
+  type EncodeTarget,
 } from '../src/assemble.js'
+
+/** An encode target that differs from the default only in its encoder. */
+function gpuTarget(encoder: 'nvenc-h264' | 'nvenc-hevc'): EncodeTarget {
+  return {
+    capture: { height: 1600, width: 2560 },
+    output: { height: 1080, quality: { cq: 23, encoder }, width: 1920 },
+  }
+}
 
 const directories: string[] = []
 
@@ -183,6 +193,8 @@ describe('buildFfmpegArguments', () => {
       'crop=2560:1440:0:0,scale=1920:1080:flags=lanczos:in_range=full:out_range=tv,fps=60,format=yuv420p',
       '-c:v',
       'libx264',
+      '-crf',
+      '23',
       '-pix_fmt',
       'yuv420p',
       '-color_range',
@@ -199,8 +211,8 @@ describe('buildFfmpegArguments', () => {
 describe('buildFfmpegArguments with NVENC', () => {
   it('encodes on the GPU without changing anything else about the command', () => {
     // The point of the NVENC path is the encoder, and nothing but the
-    // encoder. Rather than restate the whole command, this strips the
-    // NVENC-only rate-control block and asserts what is left is the CPU
+    // encoder. Rather than restate the whole command, this strips each
+    // path's own rate-control block and asserts what is left is the same
     // command with the codec name swapped — so a future edit that quietly
     // drops `-color_range tv`, the `out_range=tv` remap, `fps=60`, or the
     // `-t` bound on one path but not the other fails here.
@@ -209,34 +221,69 @@ describe('buildFfmpegArguments with NVENC', () => {
       '/tmp/t.ffconcat',
       '/tmp/out.mp4',
       20,
-      'nvenc-h264',
+      gpuTarget('nvenc-h264'),
     )
-    const rateControl = ['-rc', 'vbr', '-cq', '23', '-b:v', '0']
-    const start = gpu.indexOf('-rc')
-    expect(gpu.slice(start, start + rateControl.length)).toEqual(rateControl)
-    const withoutRateControl = [
-      ...gpu.slice(0, start),
-      ...gpu.slice(start + rateControl.length),
-    ]
-    expect(withoutRateControl).toEqual(
-      cpu.map((argument) => (argument === 'libx264' ? 'h264_nvenc' : argument)),
+    const without = (
+      arguments_: string[],
+      block: readonly string[],
+    ): string[] => {
+      const start = arguments_.indexOf(block[0]!)
+      expect(arguments_.slice(start, start + block.length)).toEqual(block)
+      return [
+        ...arguments_.slice(0, start),
+        ...arguments_.slice(start + block.length),
+      ]
+    }
+    expect(without(gpu, ['-rc', 'vbr', '-cq', '23', '-b:v', '0'])).toEqual(
+      without(cpu, ['-crf', '23']).map((argument) =>
+        argument === 'libx264' ? 'h264_nvenc' : argument,
+      ),
     )
   })
 
   it('pins NVENC to constant quality instead of its default bitrate target', () => {
     // NVENC's own default is a bitrate target, which is a different kind of
-    // promise from the CPU path's (libx264's default CRF, no ceiling) and
-    // starves exactly the dense scrolling material this tool records.
-    // `-b:v 0` is load-bearing: a non-zero bitrate overrides `-cq`.
+    // promise from the CPU path's (constant quality, no ceiling) and starves
+    // exactly the dense scrolling material this tool records. `-b:v 0` is
+    // load-bearing: a non-zero bitrate overrides `-cq`.
     const gpu = buildFfmpegArguments(
       '/tmp/t.ffconcat',
       '/tmp/out.mp4',
       20,
-      'nvenc-h264',
+      gpuTarget('nvenc-h264'),
     )
     expect(gpu).toContain('-cq')
     expect(gpu[gpu.indexOf('-cq') + 1]).toBe('23')
     expect(gpu[gpu.indexOf('-b:v') + 1]).toBe('0')
+    expect(gpu).not.toContain('-crf')
+  })
+
+  it('takes the quality number from the resolved output, not from a constant', () => {
+    // The whole point of the device layer reaching this stage: a preset (or
+    // a caller) that asks for a different quality has to change the command.
+    const sharper = buildFfmpegArguments(
+      '/tmp/t.ffconcat',
+      '/tmp/out.mp4',
+      20,
+      {
+        capture: { height: 1600, width: 2560 },
+        output: {
+          height: 1080,
+          quality: { crf: 18, encoder: 'x264' },
+          width: 1920,
+        },
+      },
+    )
+    expect(sharper[sharper.indexOf('-crf') + 1]).toBe('18')
+    const gpu = buildFfmpegArguments('/tmp/t.ffconcat', '/tmp/out.mp4', 20, {
+      capture: { height: 1600, width: 2560 },
+      output: {
+        height: 1080,
+        quality: { cq: 30, encoder: 'nvenc-hevc' },
+        width: 1920,
+      },
+    })
+    expect(gpu[gpu.indexOf('-cq') + 1]).toBe('30')
   })
 
   it('keeps the colour promise on the GPU path', () => {
@@ -247,7 +294,7 @@ describe('buildFfmpegArguments with NVENC', () => {
       '/tmp/t.ffconcat',
       '/tmp/out.mp4',
       20,
-      'nvenc-hevc',
+      gpuTarget('nvenc-hevc'),
     )
     expect(gpu).toContain('hevc_nvenc')
     expect(gpu[gpu.indexOf('-vf') + 1]).toContain('in_range=full:out_range=tv')
@@ -263,6 +310,138 @@ describe('buildFfmpegArguments with NVENC', () => {
     expect(
       buildFfmpegArguments('/tmp/t.ffconcat', '/tmp/out.mp4', 20),
     ).toContain('libx264')
+  })
+})
+
+describe('buildFfmpegArguments scaling', () => {
+  it('scales to the output size the device asked for, not to a constant', () => {
+    // `desktop-wide` renders 1920x1200, not the 1920x1080 this file used to
+    // hard-code. A scale filter that ignores the resolved output is the
+    // exact defect the device layer reaching this stage was meant to end.
+    const wide = buildFfmpegArguments('/tmp/t.ffconcat', '/tmp/out.mp4', 20, {
+      capture: { height: 1600, width: 2560 },
+      output: {
+        height: 1200,
+        quality: { crf: 23, encoder: 'x264' },
+        width: 1920,
+      },
+    })
+    expect(wide[wide.indexOf('-vf') + 1]).toContain('scale=1920:1200')
+    const portrait = buildFfmpegArguments(
+      '/tmp/t.ffconcat',
+      '/tmp/out.mp4',
+      20,
+      {
+        capture: { height: 1600, width: 2560 },
+        output: {
+          height: 1920,
+          quality: { crf: 23, encoder: 'x264' },
+          width: 1080,
+        },
+      },
+    )
+    expect(portrait[portrait.indexOf('-vf') + 1]).toContain('scale=1080:1920')
+    expect(portrait[portrait.indexOf('-vf') + 1]).toContain('crop=900:1600')
+  })
+
+  it('crops from the capture size it is handed, not from a constant', () => {
+    const args = buildFfmpegArguments('/tmp/t.ffconcat', '/tmp/out.mp4', 20, {
+      capture: { height: 1440, width: 2560 },
+      output: {
+        height: 1080,
+        quality: { crf: 23, encoder: 'x264' },
+        width: 1920,
+      },
+    })
+    expect(args[args.indexOf('-vf') + 1]).toContain('crop=2560:1440:0:0')
+  })
+})
+
+describe('cropRectangle', () => {
+  it('reproduces M1 geometry for the capture size the pipeline records', () => {
+    // 2560x1600 down to 16:9 is 2560x1440 with the 160px trimmed off the
+    // bottom only — the exact rectangle the hard-coded filter used to carry.
+    expect(
+      cropRectangle(
+        { height: 1600, width: 2560 },
+        { height: 1080, width: 1920 },
+      ),
+    ).toEqual({
+      height: 1440,
+      width: 2560,
+      x: 0,
+      y: 0,
+    })
+  })
+
+  it('does not crop when the capture already has the output aspect', () => {
+    expect(
+      cropRectangle(
+        { height: 1600, width: 2560 },
+        { height: 1200, width: 1920 },
+      ),
+    ).toEqual({
+      height: 1600,
+      width: 2560,
+      x: 0,
+      y: 0,
+    })
+  })
+
+  it('trims the bottom, never the top, so page chrome survives', () => {
+    // App chrome sits at y=0. A centered crop would slice through it.
+    const crop = cropRectangle(
+      { height: 2000, width: 2560 },
+      { height: 1080, width: 1920 },
+    )
+    expect(crop.y).toBe(0)
+    expect(crop.height).toBeLessThan(2000)
+  })
+
+  it('centres a horizontal crop, because no edge is privileged there', () => {
+    // A 9:16 output from a wide desktop capture: the frame has to lose
+    // width, and cutting only one side would shift the whole picture.
+    const crop = cropRectangle(
+      { height: 1600, width: 2560 },
+      { height: 1920, width: 1080 },
+    )
+    expect(crop).toEqual({ height: 1600, width: 900, x: 830, y: 0 })
+  })
+
+  it('keeps both edges even, because yuv420p subsamples chroma by two', () => {
+    // An odd crop edge makes ffmpeg fail outright on yuv420p output.
+    const crop = cropRectangle(
+      { height: 1001, width: 1333 },
+      { height: 1080, width: 1920 },
+    )
+    expect(crop.width % 2).toBe(0)
+    expect(crop.height % 2).toBe(0)
+    expect(crop.x % 2).toBe(0)
+  })
+
+  it('only ever removes pixels', () => {
+    const capture = { height: 1600, width: 2560 }
+    for (const output of [
+      { height: 1080, width: 1920 },
+      { height: 1920, width: 1080 },
+      { height: 1080, width: 1080 },
+      { height: 1200, width: 1920 },
+    ]) {
+      const crop = cropRectangle(capture, output)
+      expect(crop.width).toBeLessThanOrEqual(capture.width)
+      expect(crop.height).toBeLessThanOrEqual(capture.height)
+      expect(crop.x + crop.width).toBeLessThanOrEqual(capture.width)
+      expect(crop.y + crop.height).toBeLessThanOrEqual(capture.height)
+    }
+  })
+
+  it('lands on the requested aspect within a pixel', () => {
+    // The scale filter that follows would otherwise stretch the picture.
+    const crop = cropRectangle(
+      { height: 1600, width: 2560 },
+      { height: 1920, width: 1080 },
+    )
+    expect(Math.abs(crop.width / crop.height - 1080 / 1920)).toBeLessThan(0.002)
   })
 })
 
@@ -328,7 +507,7 @@ describe('assembleScreencast', () => {
       captureDirectory,
       '/tmp/output.mp4',
       runner,
-      'nvenc-h264',
+      gpuTarget('nvenc-h264'),
     )
 
     expect(runner).toHaveBeenCalledWith(
@@ -337,7 +516,7 @@ describe('assembleScreencast', () => {
         join(captureDirectory, 'timeline.ffconcat'),
         '/tmp/output.mp4',
         2,
-        'nvenc-h264',
+        gpuTarget('nvenc-h264'),
       ),
     )
   })
