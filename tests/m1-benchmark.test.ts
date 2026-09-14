@@ -22,11 +22,26 @@ type RoleCall = { name?: string; role: string }
  * range and travelled distance coincide); a non-zero value reproduces what
  * the real `invoices` grid does — it sits ~85px away from the edge when a
  * pass starts, so that pass travels less than the full range (#47).
+ *
+ * `wheelBlocked` scripts the wheel-point probe: `'none'` clears every
+ * candidate, `'inner'` reproduces what OnlyDash's grid actually does — its
+ * own virtual scroller covers everything but the container's outer 40px, so
+ * only points in that margin reach the container — and `'all'` leaves no
+ * usable point at all. `viewport` shrinks the window around the fixed
+ * 2000x800 container box, which is how a container reaching past the fold
+ * gets reproduced.
  */
 function createHarness(
-  options: { gridRange?: number; gridStartY?: number } = {},
+  options: {
+    gridRange?: number
+    gridStartY?: number
+    viewport?: { height: number; width: number }
+    wheelBlocked?: 'all' | 'inner' | 'none'
+  } = {},
 ) {
   const gridRange = options.gridRange ?? 20
+  const wheelBlocked = options.wheelBlocked ?? 'none'
+  const viewport = options.viewport ?? { height: 1600, width: 2560 }
   const roleCalls: RoleCall[] = []
   const waitForTimeoutCalls: number[] = []
   let currentUrl =
@@ -52,6 +67,10 @@ function createHarness(
     fill: vi.fn().mockResolvedValue(undefined),
   }
   const tableLinkClick = vi.fn()
+  const wheelProbeBatches: {
+    axis: 'x' | 'y'
+    points: { x: number; y: number }[]
+  }[] = []
   let navigatesOnClick = true
   const getByRole = vi
     .fn()
@@ -114,10 +133,34 @@ function createHarness(
       .mockResolvedValue({ height: 800, width: 2000, x: 0, y: 0 }),
     evaluate: vi
       .fn()
-      .mockImplementation(async (_function_: unknown, axis: 'x' | 'y') => {
-        const current = axis === 'x' ? gridCurrentX : gridCurrentY
-        return { current, description: 'main.flex-1', range: gridRange }
-      }),
+      .mockImplementation(
+        async (
+          _function_: unknown,
+          argument:
+            'x' | 'y' | { axis: 'x' | 'y'; points: { x: number; y: number }[] },
+        ) => {
+          // The handle carries two payloads now: `measureScrollable` passes a
+          // bare axis, `probeWheelPoints` passes the candidate batch. The
+          // wheel probe answers as the real DataGrid did in #47 — the grid's
+          // own virtual scroller covers everything but the container's outer
+          // 40px margin, so only points in that margin reach the container.
+          if (typeof argument === 'object') {
+            wheelProbeBatches.push({
+              axis: argument.axis,
+              points: argument.points,
+            })
+            return argument.points.map((point) => {
+              if (wheelBlocked === 'all') return false
+              if (wheelBlocked === 'none') return true
+              return (
+                point.x < 40 || point.x > 1960 || point.y < 40 || point.y > 760
+              )
+            })
+          }
+          const current = argument === 'x' ? gridCurrentX : gridCurrentY
+          return { current, description: 'main.flex-1', range: gridRange }
+        },
+      ),
   }
   const evaluateHandle = vi.fn().mockImplementation(async () => {
     callOrder.push('discover')
@@ -132,6 +175,7 @@ function createHarness(
     goto: vi.fn().mockResolvedValue(undefined),
     locator,
     mouse: { move: vi.fn().mockResolvedValue(undefined) },
+    viewportSize: () => viewport,
     url: () => currentUrl,
     waitForTimeout: vi.fn().mockImplementation(async (ms: number) => {
       waitForTimeoutCalls.push(ms)
@@ -181,6 +225,7 @@ function createHarness(
     },
     tableLinkClick,
     waitForTimeoutCalls,
+    wheelProbeBatches,
   }
 }
 
@@ -218,6 +263,65 @@ describe('runOnlyDashMotion', () => {
     expect(demo.scroll).toHaveBeenCalled()
     expect(demo.type).toHaveBeenCalled()
     expect(page.mouse.move).toHaveBeenCalled()
+  })
+
+  it('delivers the wheel clear of the nested scroller, not at the container center', async () => {
+    const { demo, page, wheelProbeBatches } = createHarness({
+      gridRange: 600,
+      wheelBlocked: 'inner',
+    })
+
+    await runOnlyDashMotion(page as never, demo)
+
+    const moves = page.mouse.move.mock.calls as [number, number][]
+    expect(moves.length).toBeGreaterThan(0)
+    for (const [x, y] of moves) {
+      // The center (1000, 400) sits on the grid's own virtual scroller,
+      // which is where the commanded 454px became 91 (#47).
+      expect([x, y]).not.toEqual([1000, 400])
+      expect(x < 40 || x > 1960 || y < 40 || y > 760).toBe(true)
+    }
+    // Reachability: the center really was among the candidates the probe
+    // was asked about, and really was rejected — so the assertions above
+    // discriminate rather than passing vacuously.
+    expect(wheelProbeBatches[0]?.points).toContainEqual({ x: 1000, y: 400 })
+    expect(wheelProbeBatches[0]?.points.length).toBeGreaterThan(8)
+    // The probe has to ask about the axis being driven: a horizontal pass
+    // must not be cleared by a vertical-only reading of the same DOM.
+    const axes = new Set(wheelProbeBatches.map((batch) => batch.axis))
+    expect([...axes].sort()).toEqual(['x', 'y'])
+  })
+
+  it('keeps every candidate inside the window when the container runs past the fold', async () => {
+    const { demo, page, wheelProbeBatches } = createHarness({
+      gridRange: 600,
+      viewport: { height: 600, width: 2560 },
+    })
+
+    await runOnlyDashMotion(page as never, demo)
+
+    const probed = wheelProbeBatches.flatMap((batch) => batch.points)
+    expect(probed.length).toBeGreaterThan(0)
+    for (const point of probed) {
+      expect(point.y).toBeLessThan(600)
+    }
+    // Reachability: the container is 800px tall, so without clipping the
+    // bottom row of candidates would sit at y = 796 — below the fold,
+    // where a wheel reaches nothing at all.
+    expect(Math.max(...probed.map((point) => point.y))).toBeGreaterThan(500)
+  })
+
+  it('fails the run instead of scrolling from a point a nested scroller owns', async () => {
+    const { demo, page } = createHarness({
+      gridRange: 600,
+      wheelBlocked: 'all',
+    })
+
+    await expect(runOnlyDashMotion(page as never, demo)).rejects.toThrow(
+      /covered by another scrollable element/,
+    )
+    expect(demo.scroll).not.toHaveBeenCalled()
+    expect(page.mouse.move).not.toHaveBeenCalled()
   })
 
   it('skips a scroll pass whose measured range is too small to move meaningfully', async () => {
