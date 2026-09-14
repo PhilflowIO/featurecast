@@ -394,6 +394,142 @@ suspicion above is what is left.
 
 ---
 
+## 2026-09-14, night — the revert, measured (#45, #25)
+
+The owner's verdict was a verdict on a video. Reverting on that alone
+would have left the project with a decision it could not defend six
+months later, so the revert was measured the same way the change had
+been: three interleaved repetitions per arm on the patched build against
+the same live application, alternating so the application's own drift
+hits both arms equally.
+
+| Arm                      | worst jump, median | worst jump, max | hitch events |
+| ------------------------ | ------------------ | --------------- | ------------ |
+| revert (new)             | **3.59**           | **5.94**        | 61           |
+| after #35 (new, control) | 6.61               | 13.80           | 105          |
+| before #35 (2026-09-14)  | 4.54               | 5.66            | 57           |
+| after #35 (2026-09-14)   | 6.58               | 12.08           | 94           |
+
+The revert lands in the band of the old before-#35 arm. What makes the
+two campaigns comparable at all is the **control arm carried along**:
+re-running the after-#35 build today reproduces its own earlier numbers.
+Without it, every difference could equally have been a change in the
+application.
+
+The distributions tell the story better than the medians. The revert arm
+has not one window above 6 even steps; the paced arm has ten of twelve
+there and one at 13.8. That is exactly the shape the eye described:
+"only jerky once at the start, otherwise much better."
+
+**The measurement definition is written down because it had to be
+re-derived.** The numbers here come from
+`schwere.groesster_sprung_gleichschritte` over every window with
+`achse == "x"` and measured translation, median and max over the twelve
+windows of an arm, all four arms through one script on one instrument
+build. That yields 4.54/5.66 and 6.58/12.08 for the older arms where the
+earlier comment reported 4.70/5.70 and 6.60/12.10 — same magnitude, same
+conclusion, slightly different selection or rounding. Four numbers from
+one script are comparable; holding them against the older pair compares
+two definitions.
+
+### What the revert broke, and why that was the interesting part
+
+The first full run on the box was red at exactly one place, and not at
+the reverted code: the **outer anchor** of the scroll-rest test. That
+anchor exists to prove the fixture has a motion tail at all — without it
+the real assertion would pass for free on a page that stops the instant
+input does. It was itself a function of input pacing. The fixture summed
+`deltaY` into its glide velocity, and a minimum-jerk scroll ends in
+sub-pixel steps: without waiting for acknowledgement enough velocity
+survived for a long glide; with waiting, the decay eats the last steps
+and the tail collapses to one frame. Measured: 16.7 ms against a bound
+of 30.
+
+An anchor that only holds under one pacing strategy anchors nothing. The
+fixture now re-arms the same glide at a fixed 25 px per frame on every
+wheel event, whatever its delta, so the tail is ~330 ms however the
+wheels arrived. The protected assertion and its bound are unchanged.
+
+This is the third time in this project that a green suite was hiding
+behind a measurement device that could not move (#38, #42, and now this)
+— and the second time the **full** suite on the box was what caught it.
+
+### The honest gap
+
+A mutation probe shows that **no test in the suite dies** if the
+deadline in the wheel pacing is removed outright. The behaviour restored
+here is not test-covered — it was not covered before #35 either. The
+evidence that it is better comes from the measurement, not from the
+suite.
+
+---
+
+## 2026-09-14, night — a target distance that was never the target (#31, #47)
+
+`invoices:scroll-up` had been failing its distance bound in all six
+measured cases, always by the same ~20 %, while its sibling scroll-down
+held to 1 %. The suspicion was that #40 — the motion window that ended
+with the input rather than with the motion — explained it too.
+
+It does not, and the fixtures were enough to prove that without a
+browser: after the up-window, 0.7 px of motion remain. There is no
+truncated tail for #40's fix to recover; the upward motion really is
+shorter.
+
+The defect was in the expectation, not the measurement. The recording
+script knows the distance it actually asked for, and knows the scroll
+position before and after — and wrote neither. It wrote the container's
+full scroll range, which equals the travel only as long as the motion
+runs edge to edge. Only the upward motion depends on a starting position
+some other step left behind: in `invoices` the container sits ~85 px
+short of its range when the up-window starts, in `tasks` 2 px, which is
+why `tasks` held.
+
+Windows now carry the travelled distance plus the scroll position before
+and after, so a future shortfall is a number in the file instead of a
+feeling. **The 10 % bound was not touched**, and runs without the new
+field — including the checked-in browser-arm fixtures — still fall back
+to the old number and say so in their provenance.
+
+The residual 85 px is a finding of its own (#47): the recording does not
+return to its starting state, so repetition 2 begins somewhere
+repetition 1 did not. For a tool whose core promise is repeatability
+that is a precondition, not a footnote.
+
+---
+
+## 2026-09-14, night — three milestones' worth of surface, and what a reviewer found
+
+M5 (device layer), the first half of M6 (Garage upload, NVENC path) and
+M7 (recipes for turning an existing Playwright script into a recording)
+landed the same night, each built in its own worktree and each reviewed
+by a read-only verifier before merge. Two things are worth keeping.
+
+**A self-signed request needs a foreign witness.** The upload signs
+AWS SigV4 itself rather than taking on a three-digit dependency count
+for one PUT. A test that freezes the implementation's own output proves
+nothing, so the signature is anchored against botocore with a frozen
+clock — and the reviewer did not take that on trust either, but ran
+botocore again independently and got the same signature byte for byte.
+
+**The reviewer's most useful findings were assertions that could not
+fail.** The device layer handed out Playwright's registry object by
+reference — and a test insisted on object identity, so the fix was
+blocked by its own suite until the assertion was turned around. Another
+test checked only the headline of an error message, never that the list
+of suggested names was actually narrowed (78 of 207 in practice);
+replacing the narrowing with the full list left the suite green. Neither
+was a bug a user would have hit tomorrow. Both were places where the
+suite said "yes" without being asked anything.
+
+Everything here is library surface with the acceptance criteria still
+open: no device has driven a real recording, no upload has reached a
+real Garage, no NVENC encode has run. What is proven is the argument
+list and the signature; what is assumed is that the far side accepts
+them.
+
+---
+
 ## Where the truth lives
 
 | Question                                                          | Where                                        |
@@ -404,7 +540,9 @@ suspicion above is what is left.
 | The smoothness instrument                                         | #24, [`SMOOTHNESS.md`](./SMOOTHNESS.md)      |
 | Instrument verdict: unchecked bounds, severity                    | #28, #29                                     |
 | Eye calibration of the hitch threshold                            | #30                                          |
-| Wheel pacing drift, and why it gets reverted                      | #25                                          |
+| Wheel pacing drift, why it was reverted, and the proof            | #25, #45                                     |
+| Motion windows that report travel instead of range                | #31, #47                                     |
+| Device layer, upload, recipes                                     | #6, #7, #8                                   |
 | Motion windows that end with the motion                           | #40                                          |
 | M1 acceptance                                                     | #2, [`M1-VERDICT.md`](./M1-VERDICT.md)       |
 | One clock for capture and event log                               | #9                                           |
