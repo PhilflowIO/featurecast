@@ -369,7 +369,13 @@ describe('record against a real headless Chromium', () => {
           'window.__lastScroll=performance.now()},{passive:true});' +
           "window.addEventListener('wheel',function(event){" +
           'window.__lastWheel=performance.now();' +
-          'window.__velocity+=event.deltaY*0.35;' +
+          // Every wheel event re-arms the same glide, whatever its delta:
+          // the tail has to be a property of the fixture, not of how the
+          // input happened to be paced. Accumulating `deltaY` made it the
+          // latter -- a minimum-jerk scroll ends in sub-pixel steps, so the
+          // tail collapsed to a single frame as soon as input dispatch
+          // waited for Chromium's acknowledgement again (#45).
+          'window.__velocity=event.deltaY>0?25:-25;' +
           'event.preventDefault()},{passive:false});' +
           'function glide(){' +
           'if(Math.abs(window.__velocity)>0.5){' +
@@ -393,8 +399,9 @@ describe('record against a real headless Chromium', () => {
       }))
       lastWheel = atReturn.lastWheel
       lastScrollAtReturn = atReturn.lastScroll
-      // Longer than any glide this fixture can produce: the decay reaches
-      // half a pixel per frame within ~30 frames.
+      // Longer than any glide this fixture can produce: from 25 px per
+      // frame, a decay of 0.82 reaches half a pixel within 20 frames, so
+      // the tail is ~330ms however the wheels arrived.
       await page.waitForTimeout(600)
       lastScrollAfterIdle = await page.evaluate(
         () => (window as unknown as { __lastScroll: number }).__lastScroll,
