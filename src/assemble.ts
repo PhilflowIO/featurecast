@@ -2,63 +2,93 @@ import { spawn } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
-import { validateCaptureManifest, type TimestampManifest } from './capture.js'
+import {
+  CAPTURE_SIZE,
+  validateCaptureManifest,
+  type TimestampManifest,
+} from './capture.js'
+import {
+  DEFAULT_OUTPUT_QUALITY,
+  encoderProfile,
+  qualityNumber,
+  type OutputQuality,
+} from './encoders.js'
 
-const OUTPUT_SIZE = { height: 1080, width: 1920 }
 export const FRAME_RATE = 60
 
-/**
- * The encoders this stage can drive. `libx264` runs on the CPU and stays the
- * default; the two NVENC entries hand the encode to the 3090's dedicated
- * encoder block.
- *
- * NVENC exists here because the measured CPU cost is the problem, not a
- * convenience: PLAN.md records 1 minute 45 for 8 seconds of 1080p60 through
- * the post-processing chain on CPU. It is nonetheless *not* the default, and
- * deliberately so — nobody has yet run M6's acceptance measurement ("die
- * Laufzeit fuer 30 Sekunden 1080p60 wird gemessen und notiert") or looked at
- * an NVENC-encoded result next to a libx264 one. Until that has happened,
- * the path whose output has actually been seen is the one that runs unless a
- * caller explicitly asks for the other.
- */
-export const ENCODERS = ['libx264', 'h264_nvenc', 'hevc_nvenc'] as const
-
-export type Encoder = (typeof ENCODERS)[number]
-
-/** The encoder used unless a caller names another one. */
-export const DEFAULT_ENCODER: Encoder = 'libx264'
+/** A pixel rectangle. Both stages of the render are one of these. */
+export type FrameSize = { height: number; width: number }
 
 /**
- * Constant-quality level handed to NVENC.
+ * What the encode is being asked for: the geometry it starts from, and the
+ * geometry plus quality it must end at.
  *
- * This is the one number that has to be chosen rather than copied. The CPU
- * path passes no rate-control flag at all, so it runs libx264's own default:
- * constant quality at CRF 23 with no bitrate ceiling. NVENC's default is the
- * opposite kind of promise — a bitrate target — and a screencast of a dense
- * scrolling UI is exactly the material that target starves. `-rc vbr -cq 23
- * -b:v 0` restores the shape of the CPU path's promise (constant quality, no
- * ceiling; `-b:v 0` is required, since a non-zero bitrate overrides `-cq`)
- * and 23 mirrors the CRF the CPU path implicitly uses.
- *
- * What is *not* claimed: that CQ 23 and CRF 23 are perceptually equal. The
- * two scales belong to different encoders and the correspondence is
- * unmeasured here. That open question is the same reason `DEFAULT_ENCODER`
- * is still the CPU.
+ * `capture` is the recorded frame size (`ResolvedDevice.capture`) and
+ * `output` is the encoded frame size and quality (`ResolvedDevice.output`),
+ * so a resolved device can be handed here field for field. Before this
+ * existed both were constants in this file and a device's output layer had
+ * nowhere to go.
  */
-const NVENC_CONSTANT_QUALITY = 23
+export type EncodeTarget = {
+  capture: FrameSize
+  output: FrameSize & { quality: OutputQuality }
+}
 
 /**
- * Resolves an encoder name from outside (CLI flag, config file) and refuses
- * anything else by name, the way `resolveDeviceDescriptor` does for device
- * presets: a typo that silently fell back to the CPU path would be found
- * only by noticing the encode took two minutes.
+ * What the pipeline rendered before the device layer could reach this stage:
+ * M1's 2560x1600 capture, cropped to 16:9 and scaled to 1920x1080 on the CPU.
+ * Kept as the default so callers that do not resolve a device — the M1
+ * benchmark, every existing test — produce the identical command.
  */
-export function resolveEncoder(name: string): Encoder {
-  const match = ENCODERS.find((encoder) => encoder === name)
-  if (match !== undefined) return match
-  throw new Error(
-    `Unknown encoder "${name}". Available: ${ENCODERS.join(', ')}`,
-  )
+export const DEFAULT_ENCODE_TARGET: EncodeTarget = {
+  capture: CAPTURE_SIZE,
+  output: { height: 1080, quality: DEFAULT_OUTPUT_QUALITY, width: 1920 },
+}
+
+/**
+ * The crop that turns a captured frame into the output's aspect ratio,
+ * before the scale to the output's pixel size. Never upscales on its own —
+ * it only ever removes pixels — and both edges are rounded down to an even
+ * number because yuv420p subsamples chroma by two.
+ *
+ * The vertical crop is anchored to the top (`y = 0`), not centered: a
+ * centered crop on a 2560x1600 capture removes 80px off both the top and the
+ * bottom, and most web app chrome (nav bars, in-content toolbars) sits right
+ * at the top of the viewport — a centered crop sliced straight through
+ * OnlyDash's grid toolbar row. Trimming only the bottom keeps whatever sits
+ * at y=0 fully intact. This assumes app chrome lives at the top, which holds
+ * for OnlyDash and is a reasonable default for arbitrary target apps, but is
+ * not universal. A horizontal crop is centered instead, because the
+ * left-and-right case has no equivalent "the important thing is at the edge"
+ * argument and cutting one side only would shift the whole frame.
+ */
+export function cropRectangle(
+  capture: FrameSize,
+  output: FrameSize,
+): { height: number; width: number; x: number; y: number } {
+  const evenSize = (value: number): number =>
+    Math.max(2, Math.floor(value / 2) * 2)
+  const evenOffset = (value: number): number =>
+    Math.max(0, Math.floor(value / 2) * 2)
+  // Cross-multiplied rather than divided, so the comparison is exact for the
+  // integer pixel sizes both sides actually are.
+  const captureIsWider =
+    capture.width * output.height > capture.height * output.width
+  // The kept edge is evened first and the derived edge computed from the
+  // evened value, so the aspect the scale filter receives is the aspect of
+  // the rectangle ffmpeg is actually given.
+  const height = captureIsWider
+    ? evenSize(capture.height)
+    : evenSize((evenSize(capture.width) * output.height) / output.width)
+  const width = captureIsWider
+    ? evenSize((height * output.width) / output.height)
+    : evenSize(capture.width)
+  return {
+    height,
+    width,
+    x: evenOffset((capture.width - width) / 2),
+    y: 0,
+  }
 }
 
 export type CommandRunner = (
@@ -171,8 +201,11 @@ export function buildFfmpegArguments(
   timelinePath: string,
   outputPath: string,
   durationSeconds: number,
-  encoder: Encoder = DEFAULT_ENCODER,
+  target: EncodeTarget = DEFAULT_ENCODE_TARGET,
 ): string[] {
+  const { encoder } = target.output.quality
+  const { field, value } = qualityNumber(target.output.quality)
+  const crop = cropRectangle(target.capture, target.output)
   return [
     '-hide_banner',
     '-y',
@@ -190,29 +223,30 @@ export function buildFfmpegArguments(
     // filter does the actual remap; `-color_range tv` below makes the
     // container metadata match what the pixels now are.
     //
-    // The crop is anchored to the top (`0:0`), not centered (`0:80`): a
-    // centered crop on a 2560x1600 capture removes 80px off both the top
-    // and bottom, and most web app chrome (nav bars, in-content toolbars)
-    // sits right at the top of the viewport — a centered crop sliced
-    // straight through OnlyDash's grid toolbar row. Trimming only the
-    // bottom 160px keeps whatever sits at y=0 fully intact. This assumes
-    // app chrome lives at the top, which holds for OnlyDash and is a
-    // reasonable default for arbitrary target apps, but is not universal;
+    // Whether over-capturing and cropping is right at all is still open:
     // PLAN.md's 2560x1600-with-1.33x-zoom-reserve default and
-    // docs/DEVICES.md's already-16:9 2560x1440 desktop preset disagree on
-    // whether to over-capture and crop at all — see docs/CAPTURE-CADENCE.md.
-    `crop=2560:1440:0:0,scale=${OUTPUT_SIZE.width}:${OUTPUT_SIZE.height}:flags=lanczos:in_range=full:out_range=tv,fps=${FRAME_RATE},format=yuv420p`,
+    // docs/DEVICES.md's already-16:9 2560x1440 desktop preset disagree —
+    // see docs/CAPTURE-CADENCE.md. This stage does not settle that; it
+    // renders whatever capture and output geometry it is handed.
+    `crop=${String(crop.width)}:${String(crop.height)}:${String(crop.x)}:${String(crop.y)},` +
+      `scale=${String(target.output.width)}:${String(target.output.height)}` +
+      `:flags=lanczos:in_range=full:out_range=tv,fps=${String(FRAME_RATE)},format=yuv420p`,
     '-c:v',
-    encoder,
-    // Rate control is spelled out only for NVENC, and only because its
-    // default differs in kind from libx264's. Everything below this point —
-    // the pixel format, the range tag, the frame rate, the hard duration
-    // bound — is shared, and the colour handling in the filter chain above
+    encoderProfile(encoder).ffmpegCodec,
+    // Rate control is spelled out on both paths now that the number comes
+    // from the resolved device rather than from a constant here. `-crf 23`
+    // is what libx264 was already doing implicitly, so the CPU output is
+    // unchanged. NVENC needs three flags rather than one because its own
+    // default is a different kind of promise — a bitrate target, which a
+    // dense scrolling screencast starves; `-b:v 0` is load-bearing, since a
+    // non-zero bitrate overrides `-cq`. Everything below this point — the
+    // pixel format, the range tag, the frame rate, the hard duration bound —
+    // is shared, and the colour handling in the filter chain above
     // (`in_range=full:out_range=tv`) runs before the encoder sees a pixel,
     // so both paths carry the identical colour promise.
-    ...(encoder === 'libx264'
-      ? []
-      : ['-rc', 'vbr', '-cq', String(NVENC_CONSTANT_QUALITY), '-b:v', '0']),
+    ...(encoderProfile(encoder).family === 'nvenc'
+      ? ['-rc', 'vbr', `-${field}`, String(value), '-b:v', '0']
+      : [`-${field}`, String(value)]),
     '-pix_fmt',
     'yuv420p',
     '-color_range',
@@ -233,7 +267,7 @@ export async function assembleScreencast(
   captureDirectory: string,
   outputPath: string,
   runner: CommandRunner = runCommand,
-  encoder: Encoder = DEFAULT_ENCODER,
+  target: EncodeTarget = DEFAULT_ENCODE_TARGET,
 ): Promise<AssembleResult> {
   const manifest = JSON.parse(
     await readFile(join(captureDirectory, 'timestamps.json'), 'utf8'),
@@ -248,7 +282,7 @@ export async function assembleScreencast(
   const durationSeconds = manifest.session.duration / 1000
   await runner(
     'ffmpeg',
-    buildFfmpegArguments(timelinePath, outputPath, durationSeconds, encoder),
+    buildFfmpegArguments(timelinePath, outputPath, durationSeconds, target),
   )
   return { durationSeconds }
 }

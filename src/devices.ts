@@ -2,6 +2,11 @@ import { devices as playwrightDevices } from 'playwright'
 
 import { CAPTURE_QUALITY } from './capture.js'
 import { FRAME_RATE } from './assemble.js'
+import {
+  DEFAULT_OUTPUT_QUALITY,
+  qualityNumber,
+  type OutputQuality,
+} from './encoders.js'
 
 /**
  * The device layer described in docs/DEVICES.md: one name in the call,
@@ -107,8 +112,13 @@ export type CapturePlan = CapturePending | CaptureSettings
 /** Requestable output format. `output.width`/`height` stay the stored truth. */
 export type Aspect = '1:1' | '16:9' | '9:16'
 
-export type OutputQuality =
-  { cq: number; encoder: 'nvenc' } | { crf: number; encoder: 'x264' }
+/**
+ * Re-exported so a caller that already imports the device layer does not have
+ * to reach into src/encoders.ts for the type of a field it just read. The
+ * definition lives there because the assemble stage is handed this value and
+ * must not import the device layer to name it.
+ */
+export type { OutputQuality }
 
 export type OutputSettings = {
   height: number
@@ -171,16 +181,10 @@ export const ASPECT_DIMENSIONS: Readonly<
 }
 
 /**
- * Default encoder settings. `crf: 23` is not a new choice — it is libx264's
- * own default, i.e. exactly what the existing assemble step already produces,
- * since `buildFfmpegArguments` passes no `-crf` (src/assemble.ts:117-165).
- * Stating it here makes the device layer describe the pipeline that exists
- * instead of silently changing it. NVENC lands in M6.
+ * Re-exported for the same reason as `OutputQuality`: the default is a
+ * statement about the encoder, not about any device.
  */
-export const DEFAULT_OUTPUT_QUALITY: OutputQuality = {
-  crf: 23,
-  encoder: 'x264',
-}
+export { DEFAULT_OUTPUT_QUALITY }
 
 /**
  * Pointer defaults. Both numbers are placeholders owned by M4 (pointer
@@ -492,8 +496,7 @@ function validateCapture(capture: CaptureSettings): void {
 }
 
 function validateQuality(quality: OutputQuality): void {
-  const value = quality.encoder === 'x264' ? quality.crf : quality.cq
-  const field = quality.encoder === 'x264' ? 'crf' : 'cq'
+  const { field, value } = qualityNumber(quality)
   if (!Number.isInteger(value) || value < 0 || value > 51) {
     throw new Error(
       `output.quality.${field} must be an integer in 0..51, got ${String(value)}`,
