@@ -761,20 +761,27 @@ async function waitForScrollRest(page: RecordPage): Promise<number> {
     () =>
       new Promise<number>((resolve) => {
         const started = performance.now()
-        let quiet: ReturnType<typeof setTimeout>
-        const finish = (): void => {
-          clearTimeout(quiet)
-          clearTimeout(cap)
-          document.removeEventListener('scroll', onScroll, true)
-          resolve(performance.now() - started)
-        }
-        const onScroll = (): void => {
-          clearTimeout(quiet)
-          quiet = setTimeout(finish, 50)
-        }
-        const cap = setTimeout(finish, 1000)
-        quiet = setTimeout(finish, 50)
-        document.addEventListener('scroll', onScroll, true)
+        const stop = new AbortController()
+        let lastScrollAt = performance.now()
+        document.addEventListener(
+          'scroll',
+          // Anonymous on purpose, here and below: `tsx` compiles with
+          // esbuild's `keepNames`, which wraps every *named* function in
+          // this payload in an `__name(...)` call that does not exist in
+          // page context (`tests/tsx-pipeline.test.ts`, #42).
+          function () {
+            lastScrollAt = performance.now()
+          },
+          { capture: true, signal: stop.signal },
+        )
+        const timer = setInterval(function () {
+          const now = performance.now()
+          if (now - lastScrollAt >= 50 || now - started >= 1000) {
+            clearInterval(timer)
+            stop.abort()
+            resolve(now - started)
+          }
+        }, 16)
       }),
   )
 }
