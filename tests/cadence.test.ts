@@ -163,4 +163,30 @@ describe('computeMotionWindowCadence', () => {
     expect(second?.frameCount).toBe(3)
     expect(second?.label).toBe('second')
   })
+
+  it('carries a scroll window travel and its offsets into the report', () => {
+    // These three numbers are the only route from `scrollContainerToEdge`
+    // into `motion-windows.json`, which is what tools/smoothness reads to
+    // know how far a window was supposed to move (#31). Dropping them here
+    // would silently send the smoothness tool back to the container range.
+    const manifest = manifestWithTimestamps([0, 16.667, 33.334])
+
+    const [scrolled, clicked] = computeMotionWindowCadence(manifest, [
+      {
+        end: 40,
+        label: 'invoices:scroll-up:1',
+        scrollEndPx: 67,
+        scrollStartPx: 342,
+        start: 0,
+        target: 'div.grid (y range 342px)',
+        travelPx: 275,
+      },
+      { end: 40, label: 'dark-mode-toggle', start: 0 },
+    ])
+
+    expect(scrolled?.travelPx).toBe(275)
+    expect(scrolled?.scrollStartPx).toBe(342)
+    expect(scrolled?.scrollEndPx).toBe(67)
+    expect(Object.keys(clicked ?? {})).not.toContain('travelPx')
+  })
 })

@@ -70,7 +70,8 @@ def main(lauf: str, arm: str, browser: str) -> None:
         },
         "skalierung": {"faktor": skal.faktor, "herkunft": skal.herkunft},
         "motion_windows": {"windows": [
-            {s: w[s] for s in ("label", "start", "end", "durationSeconds", "target") if s in w}
+            {s: w[s] for s in ("label", "start", "end", "durationSeconds", "target",
+                               "travelPx", "scrollStartPx", "scrollEndPx") if s in w}
             for w in fenster["windows"]]},
         "timestamps": {"session": {"startedAt": manifest["session"]["startedAt"]},
                        "frames": [{"timestamp": f["timestamp"]} for f in manifest["frames"]]},

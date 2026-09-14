@@ -246,6 +246,18 @@ async function measureScrollable(
  * `waitForStableScrollGeometry` first, or the discovered element depends on
  * layout timing.
  *
+ * The window carries the distance this pass was commanded to travel
+ * (`travelPx` = |delta|) plus the scroll offsets before and after it
+ * (`scrollStartPx`/`scrollEndPx`) — not just the element's full scroll
+ * range. A pass only travels the full range when it starts at the opposite
+ * edge, and `invoices:scroll-up` does not: the container sits ~85px below
+ * `range` when that window opens, because the preceding pass left it there
+ * (#47). Reporting `range` as the expected path therefore overstated it by
+ * ~20% and made the path-length check in tools/smoothness fail a window
+ * that had in fact moved exactly as far as it was told to (#31). Keeping
+ * both offsets in the window means a future shortfall between them shows
+ * up as a number instead of as a mystery.
+ *
  * Hovers the target with a single `boundingBox()` read and jump, not
  * `demo.point`'s verified-hit-test-and-settle machinery: `demo.point`'s
  * 80ms-stability window never closed within a 10s `settleTimeoutMs` against
@@ -285,14 +297,20 @@ async function scrollContainerToEdge(
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
   const start = Date.now()
   await demo.scroll(axis === 'x' ? delta : 0, axis === 'y' ? delta : 0)
+  const end = Date.now()
+
+  // Measured after the window closed, so the read costs the window nothing.
+  const after = await measureScrollable(target, axis)
   windows.push({
-    end: Date.now(),
+    end,
     label,
+    scrollEndPx: after.current,
+    scrollStartPx: current,
     start,
     target: `${description} (${axis} range ${String(range)}px)`,
+    travelPx: Math.abs(delta),
   })
 
-  const after = await measureScrollable(target, axis)
   if (after.current === current) {
     throw new Error(
       `scrollContainerToEdge: (${axis}) did not move despite a measured ${String(Math.abs(delta))}px range`,
