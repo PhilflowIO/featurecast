@@ -8,7 +8,11 @@ import {
   resolveBrowserRequest,
   writeBrowserProvenance,
 } from '../src/browser.js'
-import { captureScreencast, type TimestampManifest } from '../src/capture.js'
+import {
+  CAPTURE_SIZE,
+  captureScreencast,
+  type TimestampManifest,
+} from '../src/capture.js'
 import {
   computeMotionWindowCadence,
   validateNoDuplicateAdjacentFrames,
@@ -78,9 +82,7 @@ console.log(
   `browser: ${provenance.executablePath} (${provenance.version}; requested: ${provenance.request.source})`,
 )
 try {
-  const context = await browser.newContext({
-    viewport: { height: 1600, width: 2560 },
-  })
+  const context = await browser.newContext({ viewport: CAPTURE_SIZE })
   const page = await context.newPage()
 
   const rendererInfo = await detectRenderer(page)
@@ -101,21 +103,26 @@ try {
   // recording has finished, so the trace never competes with the screencast
   // on the CDP channel while frames are flowing. See `src/presented.ts`.
   const presentedFrames = await startPresentedFrameTrace(browser, page)
-  const capture = await captureScreencast(page, outputDirectory, async () => {
-    // Started right before the scripted motion begins, on the same
-    // Date.now()-domain clock the motion windows below and the capture
-    // manifest already share — see `src/efficiency.ts` for why this,
-    // rather than the source cadence or repeated-frame share, is the
-    // metric that isolates this pipeline's own loss from the app's own
-    // paint rate.
-    await startPaintRateProbe(page)
-    await runInteractions(
-      { out: outputDirectory, seed: 1, settleTimeoutMs: 10_000 },
-      async (_recordPage, demo) => {
-        motionWindows = await runOnlyDashMotion(page, demo)
-      },
-    )
-  })
+  const capture = await captureScreencast(
+    page,
+    outputDirectory,
+    CAPTURE_SIZE,
+    async () => {
+      // Started right before the scripted motion begins, on the same
+      // Date.now()-domain clock the motion windows below and the capture
+      // manifest already share — see `src/efficiency.ts` for why this,
+      // rather than the source cadence or repeated-frame share, is the
+      // metric that isolates this pipeline's own loss from the app's own
+      // paint rate.
+      await startPaintRateProbe(page)
+      await runInteractions(
+        { out: outputDirectory, seed: 1, settleTimeoutMs: 10_000 },
+        async (_recordPage, demo) => {
+          motionWindows = await runOnlyDashMotion(page, demo)
+        },
+      )
+    },
+  )
   // The capture creates the output directory, so this is the first moment
   // the provenance can be written next to the frames it describes.
   await writeBrowserProvenance(outputDirectory, provenance)

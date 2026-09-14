@@ -7,6 +7,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { captureScreencast, validateCaptureManifest } from '../src/capture.js'
 
+/**
+ * The area these tests order. Nothing about the module under test is tied to
+ * it any more — it is the value the fake page's frames must come back at.
+ */
+const RECORDED_SIZE = { height: 1600, width: 2560 }
+
 const directories: string[] = []
 
 type TestScreencast = {
@@ -71,6 +77,7 @@ describe('captureScreencast', () => {
     const result = await captureScreencast(
       page,
       outputDirectory,
+      RECORDED_SIZE,
       async () => undefined,
       { now: () => 0 },
     )
@@ -137,12 +144,18 @@ describe('captureScreencast', () => {
     })
     const page = testPage({ start, stop })
 
-    await captureScreencast(page, outputDirectory, async () => undefined, {
-      writeFrame: async () =>
-        new Promise((resolve) => {
-          setTimeout(resolve, 30)
-        }),
-    })
+    await captureScreencast(
+      page,
+      outputDirectory,
+      RECORDED_SIZE,
+      async () => undefined,
+      {
+        writeFrame: async () =>
+          new Promise((resolve) => {
+            setTimeout(resolve, 30)
+          }),
+      },
+    )
 
     expect(onFrameReturnValue).toBeUndefined()
   })
@@ -171,10 +184,16 @@ describe('captureScreencast', () => {
     )
 
     await expect(
-      captureScreencast(page, outputDirectory, async () => undefined, {
-        maxQueuedBytes: 15,
-        writeFrame,
-      }),
+      captureScreencast(
+        page,
+        outputDirectory,
+        RECORDED_SIZE,
+        async () => undefined,
+        {
+          maxQueuedBytes: 15,
+          writeFrame,
+        },
+      ),
     ).rejects.toThrow('fell behind')
 
     expect(stop).toHaveBeenCalledOnce()
@@ -202,10 +221,16 @@ describe('captureScreencast', () => {
     )
 
     await expect(
-      captureScreencast(page, outputDirectory, async () => undefined, {
-        writeFrame,
-        writeFrameTimeoutMs: 20,
-      }),
+      captureScreencast(
+        page,
+        outputDirectory,
+        RECORDED_SIZE,
+        async () => undefined,
+        {
+          writeFrame,
+          writeFrameTimeoutMs: 20,
+        },
+      ),
     ).rejects.toThrow('did not finish writing')
 
     expect(stop).toHaveBeenCalledOnce()
@@ -237,7 +262,7 @@ describe('captureScreencast', () => {
     const record = (): Promise<void> => new Promise<void>(() => undefined)
 
     await expect(
-      captureScreencast(page, outputDirectory, record, {
+      captureScreencast(page, outputDirectory, RECORDED_SIZE, record, {
         maxQueuedBytes: 15,
         writeFrame,
       }),
@@ -254,7 +279,7 @@ describe('captureScreencast', () => {
     const page = testPage({ start, stop }, close)
 
     await expect(
-      captureScreencast(page, outputDirectory, async () => {
+      captureScreencast(page, outputDirectory, RECORDED_SIZE, async () => {
         throw new Error('script failed')
       }),
     ).rejects.toThrow('script failed')
@@ -284,7 +309,12 @@ describe('captureScreencast', () => {
     })
     const page = testPage({ start, stop })
 
-    await captureScreencast(page, outputDirectory, async () => undefined)
+    await captureScreencast(
+      page,
+      outputDirectory,
+      RECORDED_SIZE,
+      async () => undefined,
+    )
 
     expect(() =>
       lateOnFrame?.({
@@ -312,6 +342,7 @@ describe('captureScreencast', () => {
     const result = await captureScreencast(
       testPage({ start, stop }),
       outputDirectory,
+      RECORDED_SIZE,
       async () => undefined,
       { now },
     )
@@ -330,7 +361,7 @@ describe('captureScreencast', () => {
     const page = testPage({ start, stop })
 
     await expect(
-      captureScreencast(page, outputDirectory, async () => {
+      captureScreencast(page, outputDirectory, RECORDED_SIZE, async () => {
         throw new Error('script failed')
       }),
     ).rejects.toThrow('script failed')
@@ -370,6 +401,7 @@ describe('captureScreencast', () => {
     const result = await captureScreencast(
       page,
       outputDirectory,
+      RECORDED_SIZE,
       async () => undefined,
     )
 
@@ -410,6 +442,7 @@ describe('captureScreencast', () => {
     const result = await captureScreencast(
       testPage({ start, stop }),
       outputDirectory,
+      RECORDED_SIZE,
       async () => undefined,
     )
 
@@ -444,6 +477,7 @@ describe('captureScreencast', () => {
     const result = await captureScreencast(
       testPage({ start, stop }),
       outputDirectory,
+      RECORDED_SIZE,
       async () => undefined,
     )
 
@@ -485,6 +519,7 @@ describe('captureScreencast', () => {
     const result = await captureScreencast(
       testPage({ start, stop }),
       outputDirectory,
+      RECORDED_SIZE,
       async () => undefined,
     )
 
@@ -522,6 +557,7 @@ describe('captureScreencast', () => {
     const result = await captureScreencast(
       testPage({ start, stop }),
       outputDirectory,
+      RECORDED_SIZE,
       async () => undefined,
     )
 
@@ -529,6 +565,93 @@ describe('captureScreencast', () => {
     const manifest = JSON.parse(await readFile(result.timestampsPath, 'utf8'))
     expect(manifest.frames).toHaveLength(1)
     expect(manifest.frames[0].file).toBe('frame-000001.jpg')
+  })
+
+  it('records the area it was handed rather than one of its own', async () => {
+    // The defect #55 fixes: the screencast used to start at a module
+    // constant, so `desktop` (and every future capture area) could not be
+    // recorded at all. A size other than M1's 2560x1600 proves the value
+    // travels from the caller to `Screencast.start` and into the manifest.
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const ordered = { height: 1440, width: 2560 }
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      onFrame({
+        data: Buffer.from('frame'),
+        timestamp: 1,
+        viewportHeight: ordered.height,
+        viewportWidth: ordered.width,
+      })
+    })
+
+    const result = await captureScreencast(
+      testPage({ start, stop }),
+      outputDirectory,
+      ordered,
+      async () => undefined,
+      { now: () => 0 },
+    )
+
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({ size: ordered }),
+    )
+    const manifest = JSON.parse(
+      await readFile(result.timestampsPath, 'utf8'),
+    ) as { captureSize: { height: number; width: number } }
+    expect(manifest.captureSize).toEqual(ordered)
+  })
+
+  it('fails when the browser delivers a frame at a size nobody ordered', async () => {
+    // The teeth the geometry check must keep: the ordered rectangle is ours,
+    // the per-frame viewport is Chromium's, and a disagreement between them
+    // has to end the capture instead of producing a video at a size nothing
+    // downstream is prepared to crop.
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      onFrame({
+        data: Buffer.from('frame'),
+        timestamp: 1,
+        viewportHeight: 1600,
+        viewportWidth: 2560,
+      })
+    })
+
+    await expect(
+      captureScreencast(
+        testPage({ start, stop }),
+        outputDirectory,
+        { height: 1440, width: 2560 },
+        async () => undefined,
+        { now: () => 0 },
+      ),
+    ).rejects.toThrow(/frame viewport must match the recorded 2560x1440/)
+    await expect(access(outputDirectory)).rejects.toThrow()
+  })
+
+  it('fails on a width disagreement too, not only a height one', async () => {
+    // Both edges, separately: a check that only compares one of them passes
+    // a frame that is the wrong shape entirely.
+    const outputDirectory = join(await temporaryDirectory(), 'capture')
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockImplementation(async ({ onFrame }) => {
+      onFrame({
+        data: Buffer.from('frame'),
+        timestamp: 1,
+        viewportHeight: 1600,
+        viewportWidth: 1920,
+      })
+    })
+
+    await expect(
+      captureScreencast(
+        testPage({ start, stop }),
+        outputDirectory,
+        RECORDED_SIZE,
+        async () => undefined,
+        { now: () => 0 },
+      ),
+    ).rejects.toThrow(/frame viewport must match the recorded 2560x1600/)
   })
 
   it('rejects an existing output directory before starting capture', async () => {
@@ -540,6 +663,7 @@ describe('captureScreencast', () => {
       captureScreencast(
         testPage({ start, stop }),
         outputDirectory,
+        RECORDED_SIZE,
         async () => undefined,
       ),
     ).rejects.toThrow(
@@ -567,6 +691,7 @@ describe('captureScreencast', () => {
       captureScreencast(
         testPage({ start, stop }),
         outputDirectory,
+        RECORDED_SIZE,
         async () => undefined,
         { writeFrame: async () => Promise.reject(writeError) },
       ),
@@ -586,6 +711,7 @@ describe('captureScreencast', () => {
       captureScreencast(
         testPage({ start, stop }),
         outputDirectory,
+        RECORDED_SIZE,
         async () => {
           throw originalError
         },
@@ -613,6 +739,55 @@ describe('validateCaptureManifest', () => {
         version: 1,
       }),
     ).not.toThrow()
+  })
+
+  it.each([
+    ['narrower', { height: 1600, width: 1920 }],
+    ['shorter', { height: 1080, width: 2560 }],
+  ])(
+    'rejects a recording made %s than the area the caller asked for',
+    (_description, ordered) => {
+      // Both edges again, this time between the caller and the recording:
+      // `assembleScreencast` crops with numbers derived from `ordered`, so a
+      // manifest that disagrees on either edge must not be rendered.
+      expect(() =>
+        validateCaptureManifest(
+          {
+            captureSize: { height: 1600, width: 2560 },
+            frames: [
+              {
+                file: 'frame-000000.jpg',
+                timestamp: 1,
+                viewport: { height: 1600, width: 2560 },
+              },
+            ],
+            session: { duration: 1, endedAt: 1, startedAt: 0 },
+            version: 1,
+          },
+          ordered,
+        ),
+      ).toThrow(/records 2560x1600, but/)
+    },
+  )
+
+  it('rejects a manifest written by a schema it does not know', () => {
+    // The version is the promise that every other field below means what
+    // this function assumes; without checking it, a future manifest gets
+    // read with today's rules.
+    expect(() =>
+      validateCaptureManifest({
+        captureSize: { height: 1600, width: 2560 },
+        frames: [
+          {
+            file: 'frame-000000.jpg',
+            timestamp: 1,
+            viewport: { height: 1600, width: 2560 },
+          },
+        ],
+        session: { duration: 1, endedAt: 1, startedAt: 0 },
+        version: 2 as unknown as 1,
+      }),
+    ).toThrow(/must be version 1/)
   })
 
   it('rejects two frames sharing a capture timestamp', () => {
@@ -653,6 +828,16 @@ describe('validateCaptureManifest', () => {
           file: 'frame-000000.jpg',
           timestamp: 1,
           viewport: { height: 1080, width: 1920 },
+        },
+      ],
+    ],
+    [
+      'has a frame narrower than the recorded area',
+      [
+        {
+          file: 'frame-000000.jpg',
+          timestamp: 1,
+          viewport: { height: 1600, width: 1920 },
         },
       ],
     ],

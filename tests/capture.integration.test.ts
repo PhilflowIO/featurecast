@@ -88,6 +88,7 @@ describe('captureScreencast against real Chromium', () => {
       const capture = await captureScreencast(
         page,
         outputDirectory,
+        CAPTURE_SIZE,
         async () => {
           await page.waitForTimeout(8_000)
         },
@@ -169,6 +170,7 @@ describe('captureScreencast against real Chromium', () => {
         captureScreencast(
           page,
           outputDirectory,
+          CAPTURE_SIZE,
           async () => {
             await page.waitForTimeout(1_000)
           },

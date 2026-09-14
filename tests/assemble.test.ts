@@ -483,6 +483,35 @@ describe('assembleScreencast', () => {
     expect(result).toEqual({ durationSeconds: 2 })
   })
 
+  it('refuses a recording made at a geometry the encode target does not assume', async () => {
+    // Every crop and scale argument is computed from `target.capture`. A
+    // manifest recorded at something else would be cropped as if it were this
+    // geometry — silently mis-framed video rather than a failed render.
+    const runner = vi.fn().mockResolvedValue(undefined)
+    const captureDirectory = join(await temporaryDirectory(), 'capture')
+    await mkdir(join(captureDirectory, 'frames'), { recursive: true })
+    await writeFile(
+      join(captureDirectory, 'timestamps.json'),
+      JSON.stringify({
+        captureSize: { height: 1440, width: 2560 },
+        frames: [
+          {
+            file: 'frame-000000.jpg',
+            timestamp: 1,
+            viewport: { height: 1440, width: 2560 },
+          },
+        ],
+        session: { duration: 2_000, endedAt: 2_001, startedAt: 1 },
+        version: 1,
+      }),
+    )
+
+    await expect(
+      assembleScreencast(captureDirectory, '/tmp/output.mp4', runner),
+    ).rejects.toThrow(/records 2560x1440, but 2560x1600 was asked for/)
+    expect(runner).not.toHaveBeenCalled()
+  })
+
   it('passes a requested encoder through to the ffmpeg invocation', async () => {
     const runner = vi.fn().mockResolvedValue(undefined)
     const captureDirectory = join(await temporaryDirectory(), 'capture')
