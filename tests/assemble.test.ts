@@ -8,6 +8,7 @@ import {
   assembleScreencast,
   buildCaptureTimeline,
   buildFfmpegArguments,
+  resolveEncoder,
 } from '../src/assemble.js'
 
 const directories: string[] = []
@@ -196,6 +197,95 @@ describe('buildFfmpegArguments', () => {
   })
 })
 
+describe('buildFfmpegArguments with NVENC', () => {
+  it('encodes on the GPU without changing anything else about the command', () => {
+    // The point of the NVENC path is the encoder, and nothing but the
+    // encoder. Rather than restate the whole command, this strips the
+    // NVENC-only rate-control block and asserts what is left is the CPU
+    // command with the codec name swapped — so a future edit that quietly
+    // drops `-color_range tv`, the `out_range=tv` remap, `fps=60`, or the
+    // `-t` bound on one path but not the other fails here.
+    const cpu = buildFfmpegArguments('/tmp/t.ffconcat', '/tmp/out.mp4', 20)
+    const gpu = buildFfmpegArguments(
+      '/tmp/t.ffconcat',
+      '/tmp/out.mp4',
+      20,
+      'h264_nvenc',
+    )
+    const rateControl = ['-rc', 'vbr', '-cq', '23', '-b:v', '0']
+    const start = gpu.indexOf('-rc')
+    expect(gpu.slice(start, start + rateControl.length)).toEqual(rateControl)
+    const withoutRateControl = [
+      ...gpu.slice(0, start),
+      ...gpu.slice(start + rateControl.length),
+    ]
+    expect(withoutRateControl).toEqual(
+      cpu.map((argument) => (argument === 'libx264' ? 'h264_nvenc' : argument)),
+    )
+  })
+
+  it('pins NVENC to constant quality instead of its default bitrate target', () => {
+    // NVENC's own default is a bitrate target, which is a different kind of
+    // promise from the CPU path's (libx264's default CRF, no ceiling) and
+    // starves exactly the dense scrolling material this tool records.
+    // `-b:v 0` is load-bearing: a non-zero bitrate overrides `-cq`.
+    const gpu = buildFfmpegArguments(
+      '/tmp/t.ffconcat',
+      '/tmp/out.mp4',
+      20,
+      'h264_nvenc',
+    )
+    expect(gpu).toContain('-cq')
+    expect(gpu[gpu.indexOf('-cq') + 1]).toBe('23')
+    expect(gpu[gpu.indexOf('-b:v') + 1]).toBe('0')
+  })
+
+  it('keeps the colour promise on the GPU path', () => {
+    // mjpeg decodes full-range; the scale filter does the actual remap and
+    // `-color_range tv` makes the container metadata agree. Neither is
+    // encoder-specific and neither may be lost when the encode moves.
+    const gpu = buildFfmpegArguments(
+      '/tmp/t.ffconcat',
+      '/tmp/out.mp4',
+      20,
+      'hevc_nvenc',
+    )
+    expect(gpu).toContain('hevc_nvenc')
+    expect(gpu[gpu.indexOf('-vf') + 1]).toContain('in_range=full:out_range=tv')
+    expect(gpu[gpu.indexOf('-color_range') + 1]).toBe('tv')
+    expect(gpu[gpu.indexOf('-pix_fmt') + 1]).toBe('yuv420p')
+    expect(gpu[gpu.indexOf('-r') + 1]).toBe('60')
+    expect(gpu[gpu.indexOf('-t') + 1]).toBe('20')
+  })
+
+  it('stays on the CPU unless a caller asks for the GPU', () => {
+    // Nobody has measured or looked at an NVENC result yet, so the path
+    // whose output has been seen is the one that runs by default.
+    expect(
+      buildFfmpegArguments('/tmp/t.ffconcat', '/tmp/out.mp4', 20),
+    ).toContain('libx264')
+  })
+})
+
+describe('resolveEncoder', () => {
+  it('accepts every encoder this stage can drive', () => {
+    // Named literally rather than looped over `ENCODERS`: a test that reads
+    // its expectations out of the same constant it is checking cannot fail
+    // when that constant loses an entry.
+    expect(resolveEncoder('libx264')).toBe('libx264')
+    expect(resolveEncoder('h264_nvenc')).toBe('h264_nvenc')
+    expect(resolveEncoder('hevc_nvenc')).toBe('hevc_nvenc')
+  })
+
+  it('names the available encoders when given an unknown one', () => {
+    // A typo that silently fell back to the CPU would only be noticed by
+    // the encode taking two minutes.
+    expect(() => resolveEncoder('h264_nvidia')).toThrow(
+      /Unknown encoder "h264_nvidia"\. Available: libx264, h264_nvenc, hevc_nvenc/,
+    )
+  })
+})
+
 describe('assembleScreencast', () => {
   it('runs ffmpeg through an injected runner and reports the manifest duration', async () => {
     const runner = vi.fn().mockResolvedValue(undefined)
@@ -232,5 +322,43 @@ describe('assembleScreencast', () => {
       ),
     )
     expect(result).toEqual({ durationSeconds: 2 })
+  })
+
+  it('passes a requested encoder through to the ffmpeg invocation', async () => {
+    const runner = vi.fn().mockResolvedValue(undefined)
+    const captureDirectory = join(await temporaryDirectory(), 'capture')
+    await mkdir(join(captureDirectory, 'frames'), { recursive: true })
+    await writeFile(
+      join(captureDirectory, 'timestamps.json'),
+      JSON.stringify({
+        captureSize: { height: 1600, width: 2560 },
+        frames: [
+          {
+            file: 'frame-000000.jpg',
+            timestamp: 1,
+            viewport: { height: 1600, width: 2560 },
+          },
+        ],
+        session: { duration: 2_000, endedAt: 2_001, startedAt: 1 },
+        version: 1,
+      }),
+    )
+
+    await assembleScreencast(
+      captureDirectory,
+      '/tmp/output.mp4',
+      runner,
+      'h264_nvenc',
+    )
+
+    expect(runner).toHaveBeenCalledWith(
+      'ffmpeg',
+      buildFfmpegArguments(
+        join(captureDirectory, 'timeline.ffconcat'),
+        '/tmp/output.mp4',
+        2,
+        'h264_nvenc',
+      ),
+    )
   })
 })

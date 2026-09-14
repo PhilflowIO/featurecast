@@ -7,6 +7,60 @@ import { validateCaptureManifest, type TimestampManifest } from './capture.js'
 const OUTPUT_SIZE = { height: 1080, width: 1920 }
 export const FRAME_RATE = 60
 
+/**
+ * The encoders this stage can drive. `libx264` runs on the CPU and stays the
+ * default; the two NVENC entries hand the encode to the 3090's dedicated
+ * encoder block.
+ *
+ * NVENC exists here because the measured CPU cost is the problem, not a
+ * convenience: PLAN.md records 1 minute 45 for 8 seconds of 1080p60 through
+ * the post-processing chain on CPU. It is nonetheless *not* the default, and
+ * deliberately so — nobody has yet run M6's acceptance measurement ("die
+ * Laufzeit fuer 30 Sekunden 1080p60 wird gemessen und notiert") or looked at
+ * an NVENC-encoded result next to a libx264 one. Until that has happened,
+ * the path whose output has actually been seen is the one that runs unless a
+ * caller explicitly asks for the other.
+ */
+export const ENCODERS = ['libx264', 'h264_nvenc', 'hevc_nvenc'] as const
+
+export type Encoder = (typeof ENCODERS)[number]
+
+/** The encoder used unless a caller names another one. */
+export const DEFAULT_ENCODER: Encoder = 'libx264'
+
+/**
+ * Constant-quality level handed to NVENC.
+ *
+ * This is the one number that has to be chosen rather than copied. The CPU
+ * path passes no rate-control flag at all, so it runs libx264's own default:
+ * constant quality at CRF 23 with no bitrate ceiling. NVENC's default is the
+ * opposite kind of promise — a bitrate target — and a screencast of a dense
+ * scrolling UI is exactly the material that target starves. `-rc vbr -cq 23
+ * -b:v 0` restores the shape of the CPU path's promise (constant quality, no
+ * ceiling; `-b:v 0` is required, since a non-zero bitrate overrides `-cq`)
+ * and 23 mirrors the CRF the CPU path implicitly uses.
+ *
+ * What is *not* claimed: that CQ 23 and CRF 23 are perceptually equal. The
+ * two scales belong to different encoders and the correspondence is
+ * unmeasured here. That open question is the same reason `DEFAULT_ENCODER`
+ * is still the CPU.
+ */
+const NVENC_CONSTANT_QUALITY = 23
+
+/**
+ * Resolves an encoder name from outside (CLI flag, config file) and refuses
+ * anything else by name, the way `resolveDeviceDescriptor` does for device
+ * presets: a typo that silently fell back to the CPU path would be found
+ * only by noticing the encode took two minutes.
+ */
+export function resolveEncoder(name: string): Encoder {
+  const match = ENCODERS.find((encoder) => encoder === name)
+  if (match !== undefined) return match
+  throw new Error(
+    `Unknown encoder "${name}". Available: ${ENCODERS.join(', ')}`,
+  )
+}
+
 export type CommandRunner = (
   command: string,
   arguments_: readonly string[],
@@ -117,6 +171,7 @@ export function buildFfmpegArguments(
   timelinePath: string,
   outputPath: string,
   durationSeconds: number,
+  encoder: Encoder = DEFAULT_ENCODER,
 ): string[] {
   return [
     '-hide_banner',
@@ -148,7 +203,16 @@ export function buildFfmpegArguments(
     // whether to over-capture and crop at all — see docs/CAPTURE-CADENCE.md.
     `crop=2560:1440:0:0,scale=${OUTPUT_SIZE.width}:${OUTPUT_SIZE.height}:flags=lanczos:in_range=full:out_range=tv,fps=${FRAME_RATE},format=yuv420p`,
     '-c:v',
-    'libx264',
+    encoder,
+    // Rate control is spelled out only for NVENC, and only because its
+    // default differs in kind from libx264's. Everything below this point —
+    // the pixel format, the range tag, the frame rate, the hard duration
+    // bound — is shared, and the colour handling in the filter chain above
+    // (`in_range=full:out_range=tv`) runs before the encoder sees a pixel,
+    // so both paths carry the identical colour promise.
+    ...(encoder === 'libx264'
+      ? []
+      : ['-rc', 'vbr', '-cq', String(NVENC_CONSTANT_QUALITY), '-b:v', '0']),
     '-pix_fmt',
     'yuv420p',
     '-color_range',
@@ -169,6 +233,7 @@ export async function assembleScreencast(
   captureDirectory: string,
   outputPath: string,
   runner: CommandRunner = runCommand,
+  encoder: Encoder = DEFAULT_ENCODER,
 ): Promise<AssembleResult> {
   const manifest = JSON.parse(
     await readFile(join(captureDirectory, 'timestamps.json'), 'utf8'),
@@ -183,7 +248,7 @@ export async function assembleScreencast(
   const durationSeconds = manifest.session.duration / 1000
   await runner(
     'ffmpeg',
-    buildFfmpegArguments(timelinePath, outputPath, durationSeconds),
+    buildFfmpegArguments(timelinePath, outputPath, durationSeconds, encoder),
   )
   return { durationSeconds }
 }
