@@ -2,6 +2,9 @@ import type { ElementHandle, Page } from 'playwright'
 
 import type { MotionWindow } from './cadence.js'
 import type { Demo } from './record.js'
+import type { WheelPoint } from './wheel-target.js'
+
+import { chooseWheelPoint } from './wheel-target.js'
 
 export const ONLYDASH_GUEST_BENCHMARK_URL = 'https://app.onlydash.io/'
 const DEFAULT_OUTPUT_DIRECTORY = 'artifacts/m1-capture'
@@ -227,6 +230,56 @@ async function measureScrollable(
 }
 
 /**
+ * Hit-tests every candidate wheel point against the live DOM in a single round
+ * trip and reports, per point, whether a wheel delivered there would reach
+ * `target`: the element painting at that point must be `target` or one of its
+ * descendants, and no element between the two may itself be scrollable on
+ * `axis`. "Scrollable" is decided exactly as `findLargestScrollElement` decides
+ * it above — `overflow` on `auto`/`scroll` *and* a non-zero own range on that
+ * axis — so a point is only rejected for an element that could really swallow
+ * the gesture, not for every `overflow: auto` wrapper.
+ *
+ * A closure, not a raw source string, and with no named function anywhere
+ * inside it: `tsx`/esbuild wraps *named* functions in an injected `__name(...)`
+ * call that does not exist in the browser realm the payload's source text is
+ * run in (see the doc comment on `findLargestScrollElement`, the same pattern
+ * in `src/record.ts`'s `hitTestPoints`, and `tests/tsx-pipeline.test.ts`, which
+ * is the guard against it). Inline arrow callbacks are anonymous and survive,
+ * and the closure form is what threads `arg` through.
+ */
+async function probeWheelPoints(
+  target: ElementHandle<Element>,
+  axis: 'x' | 'y',
+  points: readonly WheelPoint[],
+): Promise<boolean[]> {
+  const clear = await target.evaluate(
+    (node, argument) =>
+      argument.points.map((point) => {
+        const hit = document.elementFromPoint(point.x, point.y)
+        if (hit === null) return false
+        if (hit !== node && !node.contains(hit)) return false
+        let current: Element | null = hit
+        while (current !== null && current !== node) {
+          const style = getComputedStyle(current)
+          const overflow =
+            argument.axis === 'y' ? style.overflowY : style.overflowX
+          const range =
+            argument.axis === 'y'
+              ? current.scrollHeight - current.clientHeight
+              : current.scrollWidth - current.clientWidth
+          if ((overflow === 'auto' || overflow === 'scroll') && range > 0) {
+            return false
+          }
+          current = current.parentElement
+        }
+        return true
+      }),
+    { axis, points: points.map((point) => ({ x: point.x, y: point.y })) },
+  )
+  return clear as boolean[]
+}
+
+/**
  * Scrolls the element with the largest live scroll range on `axis` toward
  * one edge, through the merged `demo.scroll` wrapper (60Hz-paced,
  * `src/record.ts`) instead of a hand-rolled wheel loop: a hand-rolled
@@ -257,6 +310,15 @@ async function measureScrollable(
  * that had in fact moved exactly as far as it was told to (#31). Keeping
  * both offsets in the window means a future shortfall between them shows
  * up as a number instead of as a mystery.
+ *
+ * Where the pointer goes before the wheel starts is not cosmetic: Chromium
+ * binds a wheel gesture to the element under the pointer, so the center of the
+ * container — where OnlyDash's grid keeps its own 2px-range virtual scroller —
+ * swallowed most of the commanded distance (#47, numbers in
+ * `chooseWheelPoint`). The point is chosen by hit-testing candidates across the
+ * target's visible area and taking the first that reaches the target with no
+ * other scrollable element in between; if none does, this throws instead of
+ * scrolling from a point that cannot work.
  *
  * Hovers the target with a single `boundingBox()` read and jump, not
  * `demo.point`'s verified-hit-test-and-settle machinery: `demo.point`'s
@@ -294,7 +356,13 @@ async function scrollContainerToEdge(
   if (box === null) {
     throw new Error('scrollContainerToEdge: scroll target has no bounding box')
   }
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  const point = await chooseWheelPoint(
+    box,
+    page.viewportSize(),
+    (candidates) => probeWheelPoints(target, axis, candidates),
+    { axis, description },
+  )
+  await page.mouse.move(point.x, point.y)
   const start = Date.now()
   await demo.scroll(axis === 'x' ? delta : 0, axis === 'y' ? delta : 0)
   const end = Date.now()
