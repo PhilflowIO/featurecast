@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import {
   CAPTURE_SIZE,
   validateCaptureManifest,
+  type CaptureSize,
   type TimestampManifest,
 } from './capture.js'
 import {
@@ -16,8 +17,11 @@ import {
 
 export const FRAME_RATE = 60
 
-/** A pixel rectangle. Both stages of the render are one of these. */
-export type FrameSize = { height: number; width: number }
+/**
+ * A pixel rectangle. Both stages of the render are one of these, and it is
+ * the same shape the capture stage records at — one definition, two names.
+ */
+export type FrameSize = CaptureSize
 
 /**
  * What the encode is being asked for: the geometry it starts from, and the
@@ -223,10 +227,9 @@ export function buildFfmpegArguments(
     // filter does the actual remap; `-color_range tv` below makes the
     // container metadata match what the pixels now are.
     //
-    // Whether over-capturing and cropping is right at all is still open:
-    // PLAN.md's 2560x1600-with-1.33x-zoom-reserve default and
-    // docs/DEVICES.md's already-16:9 2560x1440 desktop preset disagree —
-    // see docs/CAPTURE-CADENCE.md. This stage does not settle that; it
+    // Over-capturing and cropping is settled: every desktop preset records
+    // 2560x1600 and each output format is cut out of it (PLAN.md,
+    // docs/DEVICES.md). This stage still settles nothing on its own — it
     // renders whatever capture and output geometry it is handed.
     `crop=${String(crop.width)}:${String(crop.height)}:${String(crop.x)}:${String(crop.y)},` +
       `scale=${String(target.output.width)}:${String(target.output.height)}` +
@@ -272,7 +275,10 @@ export async function assembleScreencast(
   const manifest = JSON.parse(
     await readFile(join(captureDirectory, 'timestamps.json'), 'utf8'),
   ) as TimestampManifest
-  validateCaptureManifest(manifest)
+  // The encode target carries the geometry every filter argument below is
+  // computed from, so a recording made at a different one must not be
+  // silently cropped and scaled as if it were this one.
+  validateCaptureManifest(manifest, target.capture)
   const timelinePath = join(captureDirectory, 'timeline.ffconcat')
   await writeFile(
     timelinePath,

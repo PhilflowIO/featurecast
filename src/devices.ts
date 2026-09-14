@@ -205,14 +205,46 @@ type Preset = {
   playwrightName: string
 }
 
-function desktopCapture(width: number, height: number): CaptureSettings {
+/**
+ * The one area every desktop preset records, and the margin it buys.
+ *
+ * Over-capturing is the decision (PLAN.md, docs/DEVICES.md): M4 cuts three
+ * output formats out of a single recording without a second browser run, and
+ * the zoom spring frames the element each click hit — both need pixels
+ * outside the finished frame, and 1920x1080 has none to give.
+ *
+ * 2560x1600 rather than a larger number, for three reasons. It is the only
+ * desktop geometry with measurements behind it (docs/M1-VERDICT.md). It is
+ * exactly the 1.33x linear reserve PLAN.md names, over the widest output any
+ * desktop preset carries (1920x1200). And it is a viewport a real web app
+ * still lays out sensibly; height is what a taller capture would have to buy,
+ * and a page rendered 2560 CSS pixels tall stops resembling what a viewer
+ * would see.
+ *
+ * What that buys, per output format, at full sharpness and no upscaling:
+ *
+ * - 16:10 1920x1200 — 1.33x reserve on both axes.
+ * - 16:9 1920x1080 — 1.33x across, 1.48x down; the 160px the 16:9 crop drops
+ *   are framing room for the zoom, not waste.
+ * - 1:1 1080x1080 — a 1600x1600 square fits, so 1.48x reserve.
+ *
+ * And what it does **not** buy, said plainly: **9:16 1080x1920 does not fall
+ * out of a desktop capture.** The tallest 9:16 crop from a 1600px-high frame
+ * is 900x1600, which would have to be scaled up by 1.2x to reach 1080x1920 —
+ * an upscale the render stage refuses to pretend is sharpness. Portrait
+ * output is the mobile presets' job, and their capture area is M3's open
+ * question, not something answered here.
+ */
+const DESKTOP_CAPTURE_SIZE = { height: 1600, width: 2560 }
+
+function desktopCapture(): CaptureSettings {
   return {
     fps: FRAME_RATE,
-    height,
+    height: DESKTOP_CAPTURE_SIZE.height,
     quality: CAPTURE_QUALITY,
     status: 'decided',
     strategy: 'screencast',
-    width,
+    width: DESKTOP_CAPTURE_SIZE.width,
   }
 }
 
@@ -244,12 +276,12 @@ const PRESETS: Readonly<Record<string, Preset>> = {
     playwrightName: 'Galaxy S24',
   },
   desktop: {
-    capture: desktopCapture(2560, 1440),
+    capture: desktopCapture(),
     output: { height: 1080, width: 1920 },
     playwrightName: 'Desktop Chrome HiDPI',
   },
   'desktop-wide': {
-    capture: desktopCapture(2560, 1600),
+    capture: desktopCapture(),
     output: { height: 1200, width: 1920 },
     playwrightName: 'Desktop Chrome',
   },
@@ -274,7 +306,7 @@ const PRESETS: Readonly<Record<string, Preset>> = {
     playwrightName: 'iPhone SE',
   },
   safari: {
-    capture: desktopCapture(2560, 1440),
+    capture: desktopCapture(),
     output: { height: 1080, width: 1920 },
     playwrightName: 'Desktop Safari',
   },
@@ -346,9 +378,7 @@ export function resolveDevice(
   }
 
   const base: Preset = preset ?? {
-    capture: descriptor.hasTouch
-      ? MOBILE_CAPTURE_PENDING
-      : desktopCapture(2560, 1440),
+    capture: descriptor.hasTouch ? MOBILE_CAPTURE_PENDING : desktopCapture(),
     // A bare Playwright name has no curated output size. 16:9 for a pointer
     // device, 9:16 for a touch device mirrors what every curated preset does.
     output: descriptor.hasTouch

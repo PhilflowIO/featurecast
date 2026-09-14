@@ -6,7 +6,7 @@ import {
   resolveBrowserRequest,
   writeBrowserProvenance,
 } from './browser.js'
-import { CAPTURE_QUALITY, CAPTURE_SIZE, captureScreencast } from './capture.js'
+import { CAPTURE_QUALITY, captureScreencast } from './capture.js'
 import type { CaptureSettings, ResolvedDevice } from './devices.js'
 import {
   createRecorder,
@@ -51,35 +51,20 @@ export type SessionResult = {
 }
 
 /**
- * The capture geometry `src/capture.ts` is able to record, as opposed to the
- * geometry a device may ask for.
+ * The capture settings `src/capture.ts` is able to honour, as opposed to the
+ * settings a device may ask for.
  *
- * `captureScreencast` starts the screencast at `CAPTURE_SIZE` and
- * `CAPTURE_QUALITY`, and `validateCaptureManifest` rejects any manifest whose
- * frames are a different size — M1's acceptance evidence is tied to that one
- * geometry. So a preset whose capture area differs cannot be recorded today,
- * and this says so by name rather than recording 2560x1600 under a preset
- * that asked for something else.
- *
- * The disagreement is real and documented: PLAN.md wants to over-capture at
- * 2560x1600 and keep 1.33x zoom reserve, while `docs/DEVICES.md`'s `desktop`
- * preset asks for an already-16:9 2560x1440 with no reserve. Making the
- * capture area a parameter means settling that first (docs/CAPTURE-CADENCE.md)
- * and re-earning M1's numbers at the new size; it is not a line of plumbing.
+ * The capture *area* is no longer on this list: `captureScreencast` records
+ * whatever rectangle it is handed, and `validateCaptureManifest` checks the
+ * delivered frames against that same rectangle. What remains fixed is
+ * everything the capture stage still owns outright — the JPEG quality, the
+ * frame rate shared with the render stage, and the one implemented strategy.
  */
 export function assertCaptureSupported(
   capture: CaptureSettings,
   label: string,
 ): void {
   const mismatches: string[] = []
-  if (
-    capture.width !== CAPTURE_SIZE.width ||
-    capture.height !== CAPTURE_SIZE.height
-  ) {
-    mismatches.push(
-      `it asks to record ${String(capture.width)}x${String(capture.height)}, and src/capture.ts records a fixed ${String(CAPTURE_SIZE.width)}x${String(CAPTURE_SIZE.height)}`,
-    )
-  }
   if (capture.quality !== CAPTURE_QUALITY) {
     mismatches.push(
       `it asks for JPEG quality ${String(capture.quality)}, and src/capture.ts encodes every frame at ${String(CAPTURE_QUALITY)}`,
@@ -96,11 +81,7 @@ export function assertCaptureSupported(
     )
   }
   if (mismatches.length === 0) return
-  throw new Error(
-    `${label} cannot be recorded yet: ${mismatches.join('; ')}. ` +
-      'Whether to over-capture and crop at all is still open between PLAN.md and docs/DEVICES.md — see docs/CAPTURE-CADENCE.md. ' +
-      'Until that is settled, use a device whose capture area is the recorded one, e.g. "desktop-wide".',
-  )
+  throw new Error(`${label} cannot be recorded yet: ${mismatches.join('; ')}.`)
 }
 
 /**
@@ -127,18 +108,20 @@ export async function recordSession(
     { headless: true },
     resolveBrowserRequest(process.env),
   )
+  // The screencast delivers CSS pixels and ignores `deviceScaleFactor`
+  // (PLAN.md, "Der ungelöste Teil"), so the viewport — not the device
+  // profile's own — is what decides the recorded resolution. Everything else
+  // about the device (touch, user agent, engine hint) comes from the resolved
+  // descriptor unchanged. One rectangle, read once: the context lays the page
+  // out at it and the screencast records at it, so the two cannot drift.
+  const captureArea = {
+    height: request.capture.height,
+    width: request.capture.width,
+  }
   try {
-    // The screencast delivers CSS pixels and ignores `deviceScaleFactor`
-    // (PLAN.md, "Der ungelöste Teil"), so the viewport — not the device
-    // profile's own — is what decides the recorded resolution. Everything
-    // else about the device (touch, user agent, engine hint) comes from the
-    // resolved descriptor unchanged.
     const context = await browser.newContext({
       ...request.device.device,
-      viewport: {
-        height: request.capture.height,
-        width: request.capture.width,
-      },
+      viewport: captureArea,
     })
     try {
       const page = await context.newPage()
@@ -148,6 +131,7 @@ export async function recordSession(
       const capture = await captureScreencast(
         page,
         request.outputDirectory,
+        captureArea,
         async () => {
           await runInteractions(
             {

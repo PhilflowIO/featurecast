@@ -303,23 +303,62 @@ describe('runPipeline', () => {
 })
 
 describe('prepareCapture', () => {
-  it('accepts a preset whose capture area is the one src/capture.ts records', () => {
-    expect(prepareCapture(resolveDevice('desktop-wide'))).toMatchObject({
-      height: 1600,
-      status: 'decided',
-      strategy: 'screencast',
-      width: 2560,
-    })
+  it('lets every desktop preset through, not just the one M1 measured', () => {
+    // The whole point of #55: the capture area is the device's answer, so a
+    // preset is no longer gated on matching one constant in src/capture.ts.
+    for (const preset of ['desktop', 'desktop-wide', 'safari']) {
+      expect(prepareCapture(resolveDevice(preset))).toMatchObject({
+        height: 1600,
+        status: 'decided',
+        strategy: 'screencast',
+        width: 2560,
+      })
+    }
   })
 
-  it('refuses a capture area the capture stage cannot produce, by name', () => {
-    // `desktop` asks for an already-16:9 2560x1440; src/capture.ts starts the
-    // screencast at a fixed 2560x1600 and validateCaptureManifest rejects
-    // anything else. Recording 2560x1600 under a preset that asked for
-    // something else would be the silent guess this refusal exists to stop.
-    expect(() => prepareCapture(resolveDevice('desktop'))).toThrow(
-      /2560x1440.*fixed 2560x1600/s,
-    )
+  it('hands on an unusual capture area instead of substituting its own', () => {
+    // An override is the caller saying "record this rectangle". Nothing in
+    // the gate may quietly replace it with the geometry M1 happened to use.
+    expect(
+      prepareCapture(
+        resolveDevice({
+          capture: { height: 2000, strategy: 'screencast', width: 3200 },
+          extends: 'desktop',
+        }),
+      ),
+    ).toMatchObject({ height: 2000, width: 3200 })
+  })
+
+  it('still refuses the capture settings the capture stage does own', () => {
+    // Dropping the area from this gate must not hollow the rest of it out:
+    // JPEG quality and frame rate are still the capture stage's own, and a
+    // device asking for different ones has to be told, not humoured.
+    expect(() =>
+      prepareCapture(
+        resolveDevice({
+          capture: {
+            height: 1600,
+            quality: 70,
+            strategy: 'screencast',
+            width: 2560,
+          },
+          extends: 'desktop',
+        }),
+      ),
+    ).toThrow(/JPEG quality 70/)
+    expect(() =>
+      prepareCapture(
+        resolveDevice({
+          capture: {
+            fps: 30,
+            height: 1600,
+            strategy: 'screencast',
+            width: 2560,
+          },
+          extends: 'desktop',
+        }),
+      ),
+    ).toThrow(/30 fps/)
   })
 
   it('refuses an unimplemented capture strategy by naming it', () => {

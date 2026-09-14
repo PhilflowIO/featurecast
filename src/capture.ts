@@ -2,7 +2,20 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Page, Screencast } from 'playwright'
 
-export const CAPTURE_SIZE = { height: 1600, width: 2560 } as const
+/** A pixel rectangle: the area a capture is asked to record. */
+export type CaptureSize = { height: number; width: number }
+
+/**
+ * The capture area M1 measured, and the one `desktop-wide` asks for.
+ *
+ * It is a reference value, not a setting this module reads. The recorded area
+ * arrives as an argument (`captureScreencast`'s `size`), sourced from the
+ * resolved device's capture layer, so a preset asking for a different area
+ * gets that area recorded instead of this one silently substituted. It stays
+ * here because M1's acceptance evidence, `demo/m1-capture.ts` and
+ * `DEFAULT_ENCODE_TARGET` are all tied to this exact geometry.
+ */
+export const CAPTURE_SIZE: CaptureSize = { height: 1600, width: 2560 }
 
 /**
  * JPEG quality Chromium encodes every screencast frame at. Chromium drops,
@@ -49,7 +62,7 @@ export type CaptureDependencies = {
 }
 
 export type TimestampManifest = {
-  captureSize: typeof CAPTURE_SIZE
+  captureSize: CaptureSize
   frames: Array<{
     file: string
     timestamp: number
@@ -197,9 +210,20 @@ function createFrameQueue(maxBytes: number): FrameQueue {
   return { close, drain, fail, onFailure, push }
 }
 
+/**
+ * Records `page` while `record()` drives it.
+ *
+ * `size` is the area to record, and it is a parameter rather than a constant
+ * because the device layer already answers that question
+ * (`ResolvedDevice.capture`). It is also the value every frame is validated
+ * against: what Chromium reports per frame has to be what was ordered, or the
+ * capture fails instead of quietly producing a video at a size nothing
+ * downstream expects.
+ */
 export async function captureScreencast(
   page: Page,
   outputDirectory: string,
+  size: CaptureSize,
   record: () => Promise<void>,
   dependencies: CaptureDependencies = {},
 ): Promise<ScreencastCapture> {
@@ -212,7 +236,7 @@ export async function captureScreencast(
   const writeFrameTimeoutMs =
     dependencies.writeFrameTimeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS
   const manifest: TimestampManifest = {
-    captureSize: CAPTURE_SIZE,
+    captureSize: { height: size.height, width: size.width },
     frames: [],
     session: { duration: 0, endedAt: 0, startedAt: 0 },
     version: 1,
@@ -364,7 +388,7 @@ export async function captureScreencast(
         })
       },
       quality: CAPTURE_QUALITY,
-      size: CAPTURE_SIZE,
+      size,
     })
     manifest.session.startedAt = now()
 
@@ -398,7 +422,7 @@ export async function captureScreencast(
     const writerResult = await writer
     const ordered = orderFramesByCaptureTime(manifest.frames)
     manifest.frames = ordered.frames
-    validateCaptureManifest(manifest)
+    validateCaptureManifest(manifest, size)
 
     await writeFile(timestampsPath, `${JSON.stringify(manifest, null, 2)}\n`, {
       flag: 'wx',
@@ -488,14 +512,46 @@ export function orderFramesByCaptureTime(
   return { coincidentTimestampCount, frames: result }
 }
 
-/** Ensures capture metadata is sufficient for reproducible M1 acceptance. */
-export function validateCaptureManifest(manifest: TimestampManifest): void {
+/** `2560x1600`, for error messages. */
+function describeSize(size: CaptureSize): string {
+  return `${String(size.width)}x${String(size.height)}`
+}
+
+/**
+ * Ensures capture metadata is sufficient for reproducible acceptance.
+ *
+ * The geometry check has two halves, and only together do they have teeth:
+ *
+ * - Every frame's viewport must equal `manifest.captureSize`. That is the
+ *   half that catches the browser: `captureSize` is the area that was
+ *   ordered, while each frame's viewport is what Chromium reported for the
+ *   frame it actually delivered. A capture that silently resized mid-session,
+ *   or that started at a size other than the requested one, dies here.
+ * - `ordered`, when a caller has one, must equal `manifest.captureSize`. That
+ *   is the half that catches *us*: `assembleScreencast` knows the geometry
+ *   its encode target assumes and can refuse a manifest recorded at a
+ *   different one. `buildCaptureTimeline` has no such expectation of its own
+ *   and passes nothing, so it gets the first half only.
+ *
+ * What used to stand here was a comparison against `CAPTURE_SIZE`, which
+ * meant only one capture area on earth could ever validate — the reason
+ * `desktop` and `safari` could not be recorded at all.
+ */
+export function validateCaptureManifest(
+  manifest: TimestampManifest,
+  ordered?: CaptureSize,
+): void {
+  if (manifest.version !== 1) {
+    throw new Error('Capture manifest must be version 1')
+  }
   if (
-    manifest.version !== 1 ||
-    manifest.captureSize.width !== CAPTURE_SIZE.width ||
-    manifest.captureSize.height !== CAPTURE_SIZE.height
+    ordered !== undefined &&
+    (manifest.captureSize.width !== ordered.width ||
+      manifest.captureSize.height !== ordered.height)
   ) {
-    throw new Error('Capture manifest must use the expected 2560x1600 viewport')
+    throw new Error(
+      `Capture manifest records ${describeSize(manifest.captureSize)}, but ${describeSize(ordered)} was asked for`,
+    )
   }
   if (manifest.frames.length === 0) {
     throw new Error('Capture manifest must contain a positive frame count')
@@ -514,11 +570,11 @@ export function validateCaptureManifest(manifest: TimestampManifest): void {
   let previousTimestamp: number | undefined
   for (const frame of manifest.frames) {
     if (
-      frame.viewport.width !== CAPTURE_SIZE.width ||
-      frame.viewport.height !== CAPTURE_SIZE.height
+      frame.viewport.width !== manifest.captureSize.width ||
+      frame.viewport.height !== manifest.captureSize.height
     ) {
       throw new Error(
-        'Capture frame viewport must match the expected 2560x1600 viewport',
+        `Capture frame viewport must match the recorded ${describeSize(manifest.captureSize)} viewport`,
       )
     }
     if (

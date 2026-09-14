@@ -68,11 +68,11 @@ Beispiel stehen in
 [docs/RECORDING-SCRIPTS.md](docs/RECORDING-SCRIPTS.md#ein-kommando-für-die-ganze-kette).
 
 Welches Gerät aufgenommen wird, entscheidet allein sein Name: das aufgelöste
-Gerät bringt seine Ausgabegröße und seine Encoder-Einstellung mit bis in den
-ffmpeg-Aufruf. Heute läuft davon nur `desktop-wide` durch — mobile Presets
-warten auf die Entscheidung über ihre Aufnahmefläche (M3), und `desktop` wie
-`safari` auf die Klärung, ob überhaupt über-aufgenommen und beschnitten wird.
-Das Kommando nennt beides beim Namen, statt still eine Zahl zu wählen.
+Gerät bringt seine Aufnahmefläche, seine Ausgabegröße und seine
+Encoder-Einstellung mit bis in den ffmpeg-Aufruf. Alle drei Desktop-Presets
+laufen durch; die mobilen warten weiter auf die Entscheidung über ihre
+Aufnahmefläche (M3) und sagen das beim Namen, statt still eine Zahl zu
+wählen.
 
 ## Entwicklung
 
@@ -88,8 +88,9 @@ Der folgende manuelle Befehl zeichnet eine öffentliche, dichte Testoberfläche
 gut 20 Sekunden lang im festgelegten 2560×1600-Capture-Viewport auf. Er
 speichert JPEG-Frames, `timestamps.json`, `capture-stats.json` und `browser.json` unter dem
 angegebenen Artefaktordner und rendert daraus `output.mp4`. Der Render
-schneidet dabei mittig auf 16:9 (`2560×1440`, 80 Pixel oben und unten) und
-verkleinert anschließend auf 1920×1080; es wird nie hochskaliert.
+schneidet dabei auf 16:9 (`2560×1440`, 160 Pixel unten — oben wird nichts
+weggenommen, dort sitzt die Kopfleiste der App) und verkleinert anschließend
+auf 1920×1080; es wird nie hochskaliert.
 
 ```sh
 pnpm demo:m1-capture
