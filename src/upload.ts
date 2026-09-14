@@ -391,6 +391,71 @@ export function contentTypeForFile(path: string): string {
   )
 }
 
+/**
+ * What a failed connection attempt actually was, in the caller's terms.
+ *
+ * undici reports every one of these as the same `TypeError: fetch failed` and
+ * hides the real cause one level down. That string tells a reader nothing:
+ * a typo in the host name, a closed port, a proxy's expired certificate and
+ * an unplugged cable are four different faults with four different fixes, and
+ * the code that distinguishes them is already in the `cause`.
+ */
+function describeNetworkFailure(error: unknown): {
+  hint: string
+  what: string
+} {
+  const cause: unknown = error instanceof Error ? error.cause : undefined
+  const code =
+    typeof cause === 'object' && cause !== null && 'code' in cause
+      ? String((cause as { code: unknown }).code)
+      : ''
+  switch (code) {
+    case 'EAI_AGAIN':
+    case 'ENOTFOUND':
+      return {
+        hint: 'check the host name in FEATURECAST_S3_ENDPOINT and this machine\u2019s DNS',
+        what: 'the host name did not resolve',
+      }
+    case 'ECONNREFUSED':
+      return {
+        hint: 'check that the store is running and that the port in FEATURECAST_S3_ENDPOINT is the S3 API port, not the web UI',
+        what: 'the connection was refused',
+      }
+    case 'ECONNRESET':
+    case 'EPIPE':
+      return {
+        hint: 'the store or something between it and here dropped the upload mid-flight; retry, and check the store\u2019s own limits and logs',
+        what: 'the connection was closed while the request was in flight',
+      }
+    case 'ETIMEDOUT':
+    case 'EHOSTUNREACH':
+    case 'ENETUNREACH':
+      return {
+        hint: 'check routing and any firewall between this machine and the store',
+        what: 'the host could not be reached',
+      }
+    default:
+      if (
+        code.startsWith('ERR_TLS') ||
+        code.startsWith('CERT_') ||
+        code.startsWith('UNABLE_TO_') ||
+        code === 'DEPTH_ZERO_SELF_SIGNED_CERT'
+      ) {
+        return {
+          hint: 'check the certificate the endpoint presents, or address the store over http if it terminates TLS elsewhere',
+          what: 'the TLS handshake failed',
+        }
+      }
+      return {
+        hint: 'check that FEATURECAST_S3_ENDPOINT points at the store\u2019s S3 API and is reachable from this machine',
+        what:
+          code === ''
+            ? 'the connection failed'
+            : `the connection failed (${code})`,
+      }
+  }
+}
+
 /** `600000` reads as `10min`, `20` as `20ms`; both appear in timeout messages. */
 function formatDuration(milliseconds: number): string {
   if (milliseconds < 1000) return `${String(milliseconds)}ms`
@@ -412,6 +477,9 @@ function formatDuration(milliseconds: number): string {
  * A timeout produces a different message than a store that answered: "no
  * answer in time" and "answered with 403" are different faults with different
  * fixes, and a caller reading the log must not have to guess which happened.
+ * For the same reason a connection that never came up is translated rather
+ * than rethrown: `uploadFile` already spells out what an HTTP status means,
+ * and a DNS failure deserves no less care than a 403.
  */
 export const fetchTransport: UploadTransport = async (request) => {
   const controller = new AbortController()
@@ -442,7 +510,11 @@ export const fetchTransport: UploadTransport = async (request) => {
         { cause: error },
       )
     }
-    throw error
+    const { hint, what } = describeNetworkFailure(error)
+    throw new Error(
+      `Upload to ${request.url} never reached the store: ${what}. Please ${hint}.`,
+      { cause: error },
+    )
   } finally {
     clearTimeout(deadline)
   }

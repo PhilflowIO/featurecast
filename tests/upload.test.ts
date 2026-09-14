@@ -424,6 +424,57 @@ describe('fetchTransport', () => {
     )
   })
 
+  /** undici's shape: a flat `TypeError` with the real cause one level down. */
+  function stubFailingFetch(code: string, message: string): void {
+    vi.stubGlobal('fetch', () =>
+      Promise.reject(
+        Object.assign(new TypeError('fetch failed'), {
+          cause: Object.assign(new Error(message), { code }),
+        }),
+      ),
+    )
+  }
+
+  it('translates a name that does not resolve into a fault and a fix', async () => {
+    stubFailingFetch(
+      'ENOTFOUND',
+      'getaddrinfo ENOTFOUND garage.example.invalid',
+    )
+
+    await expect(fetchTransport(transportRequest())).rejects.toThrow(
+      /never reached the store: the host name did not resolve[\s\S]*FEATURECAST_S3_ENDPOINT/,
+    )
+  })
+
+  it('tells a refused connection apart from an unresolvable one', async () => {
+    stubFailingFetch('ECONNREFUSED', 'connect ECONNREFUSED 127.0.0.1:3900')
+
+    await expect(fetchTransport(transportRequest())).rejects.toThrow(
+      /the connection was refused/,
+    )
+  })
+
+  it('keeps the raw cause attached under the readable message', async () => {
+    stubFailingFetch('ECONNRESET', 'read ECONNRESET')
+
+    const error: unknown = await fetchTransport(transportRequest()).catch(
+      (reason: unknown) => reason,
+    )
+
+    expect(error).toBeInstanceOf(Error)
+    const thrown = error as Error
+    expect(thrown.message).toMatch(/closed while the request was in flight/)
+    expect((thrown.cause as Error | undefined)?.message).toBe('fetch failed')
+  })
+
+  it('still names the endpoint when the failure carries no code', async () => {
+    vi.stubGlobal('fetch', () => Promise.reject(new TypeError('fetch failed')))
+
+    await expect(fetchTransport(transportRequest())).rejects.toThrow(
+      /Upload to https:\/\/garage\.example\.invalid\/featurecast-demo\/clip\.mp4 never reached the store/,
+    )
+  })
+
   it('stops the clock once the store answers, so a slow read survives', async () => {
     // The deadline is sized for pushing hundreds of megabytes up the wire.
     // Leaving it armed over the response body would put that same axe over a
