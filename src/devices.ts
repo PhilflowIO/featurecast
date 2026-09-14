@@ -1,0 +1,538 @@
+import { devices as playwrightDevices } from 'playwright'
+
+import { CAPTURE_QUALITY } from './capture.js'
+import { FRAME_RATE } from './assemble.js'
+
+/**
+ * The device layer described in docs/DEVICES.md: one name in the call,
+ * everything else derived from it.
+ *
+ * Three layers, stacked, and the boundary between them is the point of this
+ * module:
+ *
+ * 1. Playwright's registry — viewport, deviceScaleFactor, isMobile, hasTouch,
+ *    userAgent, defaultBrowserType. Read from the installed `playwright` at
+ *    runtime, never transcribed. docs/DEVICES.md counted 143 profiles; the
+ *    playwright 1.63.0 in this worktree exposes 207 (107 base + 100
+ *    `… landscape` variants), which is exactly why the list is read and not
+ *    copied.
+ * 2. Capture — the area actually recorded, plus fps, JPEG quality and the
+ *    capture strategy. Separate from the device because the screencast
+ *    delivers CSS pixels and ignores the pixel density (PLAN.md, "Der
+ *    ungelöste Teil"), so the device profile alone does not determine the
+ *    recorded resolution.
+ * 3. Output and pointer — encoded pixel size plus encoder quality, and how
+ *    the pointer is drawn.
+ *
+ * ## How `record()` is meant to attach to this (not wired up here)
+ *
+ * `RecordOptions` currently carries `device?: string` and resolves it inline
+ * via a private `resolveDeviceDescriptor` (src/record.ts:577-596), which
+ * handles layer 1 only. The intended wiring, once record.ts is free:
+ *
+ * ```ts
+ * const resolved = resolveDevice(
+ *   options.aspect === undefined
+ *     ? options.device
+ *     : { extends: deviceName(options.device), aspect: options.aspect },
+ * )
+ * const context = await browser.newContext(resolved.device)
+ * recordPage.hasTouch = resolved.device.hasTouch
+ * const capture = requireCaptureSettings(resolved) // throws for M3-pending devices
+ * ```
+ *
+ * `resolved.device` is deliberately shaped as a Playwright context option
+ * bag, so it can be handed to `browser.newContext` unchanged. It is a private
+ * copy of the registry entry, so editing it before that call cannot reach
+ * Playwright's process-wide `devices` object; `resolved.
+ * capture` feeds src/capture.ts, `resolved.output` feeds src/assemble.ts's
+ * scale/encode arguments, `resolved.pointer` feeds the M4 pointer renderer.
+ *
+ * Nothing in this module launches, imports or needs a browser: `playwright`'s
+ * `devices` export is a plain object.
+ */
+
+/** A device descriptor as Playwright's registry provides it, verbatim. */
+export type DeviceDescriptor = {
+  defaultBrowserType: 'chromium' | 'firefox' | 'webkit'
+  deviceScaleFactor: number
+  hasTouch: boolean
+  isMobile: boolean
+  userAgent: string
+  viewport: { height: number; width: number }
+}
+
+export type DeviceRegistry = Readonly<Record<string, DeviceDescriptor>>
+
+/**
+ * Which mechanism produces frames.
+ *
+ * `screencast` is the only proven one (M1, src/capture.ts). The other three
+ * are M3's candidates for making mobile sharp (PLAN.md, "Mobile scharf
+ * bekommen"): render the app in a CSS-scaled frame, capture single
+ * density-aware screenshots, or upscale during render. They are named here so
+ * an explicit capture override can express one, not because any is decided.
+ */
+export type CaptureStrategy =
+  'framed-scale' | 'render-upscale' | 'screencast' | 'screenshot'
+
+export type CaptureSettings = {
+  /** Frames per second the capture aims for. */
+  fps: number
+  height: number
+  /** JPEG quality Chromium encodes each screencast frame at, 1-100. */
+  quality: number
+  status: 'decided'
+  strategy: CaptureStrategy
+  width: number
+}
+
+/**
+ * "Not decided yet" as a value. docs/DEVICES.md leaves the capture area of
+ * every mobile preset open ("offen (M3)"), and a silent default there would
+ * be a guess dressed up as a setting — a 393px-wide recording that looks like
+ * a decision. Using such a device fails loudly instead; see
+ * `requireCaptureSettings`.
+ */
+export type CapturePending = {
+  /** The milestone that owns the open question. */
+  milestone: 'M3'
+  /** Why it is open, in one sentence, for the error message. */
+  reason: string
+  status: 'pending'
+}
+
+export type CapturePlan = CapturePending | CaptureSettings
+
+/** Requestable output format. `output.width`/`height` stay the stored truth. */
+export type Aspect = '1:1' | '16:9' | '9:16'
+
+export type OutputQuality =
+  { cq: number; encoder: 'nvenc' } | { crf: number; encoder: 'x264' }
+
+export type OutputSettings = {
+  height: number
+  quality: OutputQuality
+  width: number
+}
+
+export type PointerStyle = 'arrow' | 'none' | 'touch'
+
+export type PointerSettings = {
+  /** CSS color the touch ripple blooms in. */
+  rippleColor: string
+  /** Rendered pointer size in output pixels. */
+  sizePx: number
+  style: PointerStyle
+}
+
+export type ResolvedDevice = {
+  capture: CapturePlan
+  /** Playwright's descriptor, unchanged, ready for `browser.newContext`. */
+  device: DeviceDescriptor
+  output: OutputSettings
+  /** The Playwright registry name this resolved to. */
+  playwrightName: string
+  pointer: PointerSettings
+  /** The curated preset used, or `null` for a bare Playwright name. */
+  preset: string | null
+}
+
+/** Field-wise overrides on top of a preset or a Playwright device name. */
+export type DeviceOverrides = {
+  /**
+   * Shorthand for `output.width`/`height`: sets both from
+   * `ASPECT_DIMENSIONS`. Ignored when `output.width` and `output.height` are
+   * given explicitly.
+   */
+  aspect?: Aspect
+  capture?: Partial<Omit<CaptureSettings, 'status'>>
+  /** A curated preset name or any name from Playwright's registry. */
+  extends: string
+  output?: Partial<OutputSettings>
+  pointer?: Partial<PointerSettings>
+}
+
+export type DeviceSpec = DeviceOverrides | string
+
+/**
+ * Canonical pixel sizes per aspect. Presets may carry output sizes outside
+ * this table on purpose — `desktop-wide` is 1920x1200 (16:10) and `tablet` is
+ * 1200x1600 (3:4) per docs/DEVICES.md — which is why `aspect` is an input
+ * shorthand and a derived label (`aspectOf`) rather than a stored field: a
+ * stored aspect would contradict the stored pixel size for those two.
+ */
+export const ASPECT_DIMENSIONS: Readonly<
+  Record<Aspect, { height: number; width: number }>
+> = {
+  '1:1': { height: 1080, width: 1080 },
+  '16:9': { height: 1080, width: 1920 },
+  '9:16': { height: 1920, width: 1080 },
+}
+
+/**
+ * Default encoder settings. `crf: 23` is not a new choice — it is libx264's
+ * own default, i.e. exactly what the existing assemble step already produces,
+ * since `buildFfmpegArguments` passes no `-crf` (src/assemble.ts:117-165).
+ * Stating it here makes the device layer describe the pipeline that exists
+ * instead of silently changing it. NVENC lands in M6.
+ */
+export const DEFAULT_OUTPUT_QUALITY: OutputQuality = {
+  crf: 23,
+  encoder: 'x264',
+}
+
+/**
+ * Pointer defaults. Both numbers are placeholders owned by M4 (pointer
+ * rendering from the event log) and are overridable per device; they are not
+ * measured. 24px is the nominal size of a desktop system cursor; the ripple
+ * colour is a neutral translucent white that reads on light and dark UI.
+ */
+export const DEFAULT_POINTER_SIZE_PX = 24
+export const DEFAULT_RIPPLE_COLOR = 'rgba(255, 255, 255, 0.72)'
+
+/** Why every mobile preset's capture area is open. One sentence, reused. */
+const MOBILE_CAPTURE_PENDING_REASON =
+  'the screencast delivers CSS pixels and ignores deviceScaleFactor, so a mobile viewport would record at its CSS width (393px for an iPhone 15 Pro) — M3 decides between framed-scale, screenshot and render-upscale'
+
+type Preset = {
+  capture: CapturePlan
+  output: { height: number; width: number }
+  playwrightName: string
+}
+
+function desktopCapture(width: number, height: number): CaptureSettings {
+  return {
+    fps: FRAME_RATE,
+    height,
+    quality: CAPTURE_QUALITY,
+    status: 'decided',
+    strategy: 'screencast',
+    width,
+  }
+}
+
+const MOBILE_CAPTURE_PENDING: CapturePending = {
+  milestone: 'M3',
+  reason: MOBILE_CAPTURE_PENDING_REASON,
+  status: 'pending',
+}
+
+/**
+ * The eleven curated presets from docs/DEVICES.md. They exist so a later
+ * dropdown has eleven sensible entries instead of 207; every Playwright name
+ * resolves too, without a preset.
+ *
+ * `safari` records under WebKit, where the screencast interface is untested
+ * (docs/DEVICES.md, "Engine-Hinweis"). Its capture is still marked decided
+ * because docs/DEVICES.md decides its size; whether WebKit can deliver it is
+ * an M3 question about the engine, not about the numbers.
+ */
+const PRESETS: Readonly<Record<string, Preset>> = {
+  android: {
+    capture: MOBILE_CAPTURE_PENDING,
+    output: { height: 1920, width: 1080 },
+    playwrightName: 'Pixel 7',
+  },
+  'android-small': {
+    capture: MOBILE_CAPTURE_PENDING,
+    output: { height: 1920, width: 1080 },
+    playwrightName: 'Galaxy S24',
+  },
+  desktop: {
+    capture: desktopCapture(2560, 1440),
+    output: { height: 1080, width: 1920 },
+    playwrightName: 'Desktop Chrome HiDPI',
+  },
+  'desktop-wide': {
+    capture: desktopCapture(2560, 1600),
+    output: { height: 1200, width: 1920 },
+    playwrightName: 'Desktop Chrome',
+  },
+  iphone: {
+    capture: MOBILE_CAPTURE_PENDING,
+    output: { height: 1920, width: 1080 },
+    playwrightName: 'iPhone 15 Pro',
+  },
+  'iphone-max': {
+    capture: MOBILE_CAPTURE_PENDING,
+    output: { height: 1920, width: 1080 },
+    playwrightName: 'iPhone 15 Pro Max',
+  },
+  'iphone-quer': {
+    capture: MOBILE_CAPTURE_PENDING,
+    output: { height: 1080, width: 1920 },
+    playwrightName: 'iPhone 15 Pro landscape',
+  },
+  'iphone-small': {
+    capture: MOBILE_CAPTURE_PENDING,
+    output: { height: 1920, width: 1080 },
+    playwrightName: 'iPhone SE',
+  },
+  safari: {
+    capture: desktopCapture(2560, 1440),
+    output: { height: 1080, width: 1920 },
+    playwrightName: 'Desktop Safari',
+  },
+  tablet: {
+    capture: MOBILE_CAPTURE_PENDING,
+    output: { height: 1600, width: 1200 },
+    playwrightName: 'iPad Pro 11',
+  },
+  'tablet-small': {
+    capture: MOBILE_CAPTURE_PENDING,
+    output: { height: 1600, width: 1200 },
+    playwrightName: 'iPad Mini',
+  },
+}
+
+/** The eleven curated preset names, sorted. */
+export function listPresetNames(): string[] {
+  return Object.keys(PRESETS).sort()
+}
+
+/** Every name the installed Playwright offers, sorted. */
+export function listDeviceNames(
+  registry: DeviceRegistry = playwrightDevices as DeviceRegistry,
+): string[] {
+  return Object.keys(registry).sort()
+}
+
+/** `'16:9'`, `'9:16'`, `'1:1'` — or `null` for a size outside the three. */
+export function aspectOf(size: {
+  height: number
+  width: number
+}): Aspect | null {
+  for (const [aspect, dimensions] of Object.entries(ASPECT_DIMENSIONS)) {
+    if (size.width * dimensions.height === size.height * dimensions.width) {
+      return aspect as Aspect
+    }
+  }
+  return null
+}
+
+/**
+ * Resolves a device name, a preset name, or a preset plus field overrides
+ * into the full three-layer description.
+ *
+ * ```ts
+ * resolveDevice('iphone')
+ * resolveDevice('Pixel 7')
+ * resolveDevice({ extends: 'Desktop Chrome HiDPI',
+ *                 capture: { width: 3200, height: 2000 } })
+ * ```
+ *
+ * Throws on an unknown name, listing the names that exist, and on an override
+ * that cannot produce a usable value.
+ */
+export function resolveDevice(
+  spec: DeviceSpec,
+  registry: DeviceRegistry = playwrightDevices as DeviceRegistry,
+): ResolvedDevice {
+  const overrides: DeviceOverrides =
+    typeof spec === 'string' ? { extends: spec } : spec
+  const name = overrides.extends
+  const preset = Object.hasOwn(PRESETS, name) ? PRESETS[name] : undefined
+  const playwrightName = preset ? preset.playwrightName : name
+  const descriptor = Object.hasOwn(registry, playwrightName)
+    ? registry[playwrightName]
+    : undefined
+  if (descriptor === undefined) {
+    throw new Error(unknownDeviceMessage(name, registry))
+  }
+
+  const base: Preset = preset ?? {
+    capture: descriptor.hasTouch
+      ? MOBILE_CAPTURE_PENDING
+      : desktopCapture(2560, 1440),
+    // A bare Playwright name has no curated output size. 16:9 for a pointer
+    // device, 9:16 for a touch device mirrors what every curated preset does.
+    output: descriptor.hasTouch
+      ? ASPECT_DIMENSIONS['9:16']
+      : ASPECT_DIMENSIONS['16:9'],
+    playwrightName,
+  }
+
+  return {
+    capture: applyCaptureOverrides(base.capture, overrides.capture, name),
+    device: copyDescriptor(descriptor),
+    output: applyOutputOverrides(base.output, overrides),
+    playwrightName,
+    pointer: applyPointerOverrides(descriptor, overrides.pointer),
+    preset: preset ? name : null,
+  }
+}
+
+/**
+ * The capture settings, or a hard failure naming the milestone that owes the
+ * decision. This is the gate that keeps "open" from silently becoming a
+ * 393px-wide video: call it at the point where a recording is about to start.
+ */
+export function requireCaptureSettings(
+  resolved: ResolvedDevice,
+): CaptureSettings {
+  if (resolved.capture.status === 'decided') return resolved.capture
+  const label =
+    resolved.preset === null
+      ? `"${resolved.playwrightName}"`
+      : `"${resolved.preset}" (${resolved.playwrightName})`
+  throw new Error(
+    `Capture settings for ${label} are not decided yet (${resolved.capture.milestone}): ` +
+      `${resolved.capture.reason}. See MILESTONES.md ${resolved.capture.milestone} and PLAN.md. ` +
+      'Until it is decided, pass an explicit capture override, e.g. ' +
+      `{ extends: "${resolved.preset ?? resolved.playwrightName}", capture: { width: 1080, height: 1920, strategy: "framed-scale" } }.`,
+  )
+}
+
+/**
+ * A private copy of a registry descriptor.
+ *
+ * The resolved device is meant to be handed straight to `browser.newContext`,
+ * which invites a caller to tweak a field first. Handing out Playwright's own
+ * object would make that tweak reach into the process-wide `devices` registry
+ * and change every later resolution in the same process. `viewport` is copied
+ * too: a shallow copy would leave exactly that hole one level down.
+ */
+function copyDescriptor(descriptor: DeviceDescriptor): DeviceDescriptor {
+  return { ...descriptor, viewport: { ...descriptor.viewport } }
+}
+
+function applyCaptureOverrides(
+  base: CapturePlan,
+  override: DeviceOverrides['capture'],
+  requestedName: string,
+): CapturePlan {
+  if (override === undefined) return base
+
+  if (base.status === 'decided') {
+    const merged: CaptureSettings = {
+      fps: override.fps ?? base.fps,
+      height: override.height ?? base.height,
+      quality: override.quality ?? base.quality,
+      status: 'decided',
+      strategy: override.strategy ?? base.strategy,
+      width: override.width ?? base.width,
+    }
+    validateCapture(merged)
+    return merged
+  }
+
+  // Completing an open capture needs the parts nobody has decided: the
+  // recorded area and how it is produced. fps and quality have project-wide
+  // answers and may be left out. A partial completion would re-introduce the
+  // guess this state exists to prevent.
+  const { height, strategy, width } = override
+  const missing = (['width', 'height', 'strategy'] as const).filter(
+    (field) => override[field] === undefined,
+  )
+  if (width === undefined || height === undefined || strategy === undefined) {
+    throw new Error(
+      `Capture for "${requestedName}" is still open (${base.milestone}); an override must supply ${missing.join(', ')} ` +
+        `— ${base.reason}.`,
+    )
+  }
+  const completed: CaptureSettings = {
+    fps: override.fps ?? FRAME_RATE,
+    height,
+    quality: override.quality ?? CAPTURE_QUALITY,
+    status: 'decided',
+    strategy,
+    width,
+  }
+  validateCapture(completed)
+  return completed
+}
+
+function applyOutputOverrides(
+  base: { height: number; width: number },
+  overrides: DeviceOverrides,
+): OutputSettings {
+  const fromAspect =
+    overrides.aspect === undefined ? base : ASPECT_DIMENSIONS[overrides.aspect]
+  const output: OutputSettings = {
+    height: overrides.output?.height ?? fromAspect.height,
+    quality: overrides.output?.quality ?? DEFAULT_OUTPUT_QUALITY,
+    width: overrides.output?.width ?? fromAspect.width,
+  }
+  requirePositiveInteger(output.width, 'output.width')
+  requirePositiveInteger(output.height, 'output.height')
+  validateQuality(output.quality)
+  return output
+}
+
+function applyPointerOverrides(
+  descriptor: DeviceDescriptor,
+  override: DeviceOverrides['pointer'],
+): PointerSettings {
+  // Every curated preset's pointer column follows the device's touch
+  // capability — arrow on the three desktop profiles, touch on the eight
+  // mobile ones — so it is derived, not tabulated a second time.
+  const pointer: PointerSettings = {
+    rippleColor: override?.rippleColor ?? DEFAULT_RIPPLE_COLOR,
+    sizePx: override?.sizePx ?? DEFAULT_POINTER_SIZE_PX,
+    style: override?.style ?? (descriptor.hasTouch ? 'touch' : 'arrow'),
+  }
+  requirePositiveInteger(pointer.sizePx, 'pointer.sizePx')
+  return pointer
+}
+
+function validateCapture(capture: CaptureSettings): void {
+  requirePositiveInteger(capture.width, 'capture.width')
+  requirePositiveInteger(capture.height, 'capture.height')
+  requirePositiveInteger(capture.fps, 'capture.fps')
+  if (
+    !Number.isInteger(capture.quality) ||
+    capture.quality < 1 ||
+    capture.quality > 100
+  ) {
+    throw new Error(
+      `capture.quality must be an integer in 1..100, got ${String(capture.quality)}`,
+    )
+  }
+}
+
+function validateQuality(quality: OutputQuality): void {
+  const value = quality.encoder === 'x264' ? quality.crf : quality.cq
+  const field = quality.encoder === 'x264' ? 'crf' : 'cq'
+  if (!Number.isInteger(value) || value < 0 || value > 51) {
+    throw new Error(
+      `output.quality.${field} must be an integer in 0..51, got ${String(value)}`,
+    )
+  }
+}
+
+function requirePositiveInteger(value: number, field: string): void {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${field} must be a positive integer, got ${String(value)}`)
+  }
+}
+
+/**
+ * The unknown-name failure required by MILESTONES.md M5. It always names the
+ * eleven presets in full, and either the registry names that look like what
+ * was asked for or — when nothing looks close — every registry name, so the
+ * message never says "unknown" without saying what is known.
+ */
+function unknownDeviceMessage(name: string, registry: DeviceRegistry): string {
+  const registryNames = listDeviceNames(registry)
+  // Matching on words, not on the whole string: "iPhone 99" shares no
+  // substring with any registry entry, yet the useful answer is every iPhone.
+  const words = name
+    .toLowerCase()
+    .split(/[^a-z0-9+]+/)
+    .filter((word) => word.length >= 3)
+  const close = registryNames.filter((candidate) => {
+    const lowerCandidate = candidate.toLowerCase()
+    return words.some((word) => lowerCandidate.includes(word))
+  })
+  const offered = close.length > 0 ? close : registryNames
+  const heading =
+    close.length > 0
+      ? `Close Playwright device names (${String(close.length)} of ${String(registryNames.length)})`
+      : `Playwright device names (${String(registryNames.length)})`
+  return (
+    `Unknown device "${name}". ` +
+    `Presets (${String(listPresetNames().length)}): ${listPresetNames().join(', ')}. ` +
+    `${heading}: ${offered.join(', ')}.`
+  )
+}
