@@ -286,13 +286,66 @@ instances — systematic, unexplained (#31).
 
 ---
 
+## 2026-09-14 — the provenance record that recorded nothing (#23, #36)
+
+#23's fix was merged two days ago and had never launched a browser: the box
+was unreachable and the CI runner takes no jobs. Run on the box, the
+mechanism holds. Playwright's Chromium is a **direct child** of the node
+process in the measurement container, so `/proc/<pid>/exe` identifies it and
+`listChildExecutables` needs no widening — the descendants (zygote, GPU,
+renderers) share the parent's binary and collapse into the same single entry.
+Both `--version` lines are usable: `Google Chrome for Testing 153.0.8010.12`
+for the bundle, `Chromium 153.0.8010.12` for a self-built tree.
+
+Three refusals, each with its own message, all reproduced in the container:
+`CHROME_BIN=/does/not/exist` stops before launch; an empty `CHROME_BIN` stops
+with the "set but empty" message rather than falling back; and a wrapper
+script that execs a different binary is caught after launch — `Requested
+browser /fake-chrome (CHROME_BIN) but the running browser is
+/ms-playwright/.../chrome-headless-shell`. That last one is the #23 incident
+itself, provoked on purpose.
+
+Nine runs through the product entry point, three arms interleaved per
+repetition against the live app:
+
+| Arm                      | capture efficiency (3 runs) |
+| ------------------------ | --------------------------- |
+| self-built, both patches | 97.2 / 97.6 / 97.8 %        |
+| Playwright bundle        | 83.5 / 84.6 / 83.0 %        |
+| self-built, unpatched    | 81.3 / 81.4 / 81.2 %        |
+
+The ordering matches the 2026-09-12 table; the spread narrowed (the earlier
+98.2 / 84.4 / 79.1 came from single runs).
+
+**And the acceptance found what the fix still missed.** Both self-built arms
+mount their build at `/crbuild/chrome` and both report `Chromium
+153.0.8010.12`, so path plus version — everything #23 asked for — named the
+patched and the unpatched browser identically, while their capture efficiency
+differed by 16 points. A provenance record that cannot separate the two arms
+of the experiment it exists for is not a record. `browser.json` now carries a
+SHA-256 over the running binary's bytes (#36); the two arms come out as
+`ed29ff73…` and `fdb37b22…`, matching the host's own `sha256sum`.
+
+Also standing: `demo/m1-capture.ts` ends in a hard error on the bundle and on
+the unpatched build, because capture efficiency below 95 % is a failure by
+design. That is the floor doing its job, not a broken run.
+
+The full Vitest suite ran on the box for the first time since #34/#35: 23
+files, 205 tests, green — including the five browser-driving suites. A second
+run of the same suite was red in exactly one case, and re-running that file
+alternates pass and fail: the scroll-rate floor of 50 distinct positions per
+second sits inside the measurement's own spread (47.3-50+), so it says nothing
+either way (#38).
+
+---
+
 ## Where the truth lives
 
 | Question                                                          | Where                                        |
 | ----------------------------------------------------------------- | -------------------------------------------- |
 | Frame supply, the two Chromium patches, the owner's video verdict | #17                                          |
 | Capture clock and the honest denominator                          | #21 (merged as #22)                          |
-| Browser provenance, the `CHROME_BIN` trap                         | #23                                          |
+| Browser provenance, the `CHROME_BIN` trap                         | #23, #36                                     |
 | The smoothness instrument                                         | #24, [`SMOOTHNESS.md`](./SMOOTHNESS.md)      |
 | Instrument verdict: unchecked bounds, severity                    | #28, #29                                     |
 | Eye calibration of the hitch threshold                            | #30                                          |
