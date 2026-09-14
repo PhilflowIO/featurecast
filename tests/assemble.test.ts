@@ -8,7 +8,6 @@ import {
   assembleScreencast,
   buildCaptureTimeline,
   buildFfmpegArguments,
-  resolveEncoder,
 } from '../src/assemble.js'
 
 const directories: string[] = []
@@ -210,7 +209,7 @@ describe('buildFfmpegArguments with NVENC', () => {
       '/tmp/t.ffconcat',
       '/tmp/out.mp4',
       20,
-      'h264_nvenc',
+      'nvenc-h264',
     )
     const rateControl = ['-rc', 'vbr', '-cq', '23', '-b:v', '0']
     const start = gpu.indexOf('-rc')
@@ -233,7 +232,7 @@ describe('buildFfmpegArguments with NVENC', () => {
       '/tmp/t.ffconcat',
       '/tmp/out.mp4',
       20,
-      'h264_nvenc',
+      'nvenc-h264',
     )
     expect(gpu).toContain('-cq')
     expect(gpu[gpu.indexOf('-cq') + 1]).toBe('23')
@@ -248,7 +247,7 @@ describe('buildFfmpegArguments with NVENC', () => {
       '/tmp/t.ffconcat',
       '/tmp/out.mp4',
       20,
-      'hevc_nvenc',
+      'nvenc-hevc',
     )
     expect(gpu).toContain('hevc_nvenc')
     expect(gpu[gpu.indexOf('-vf') + 1]).toContain('in_range=full:out_range=tv')
@@ -264,25 +263,6 @@ describe('buildFfmpegArguments with NVENC', () => {
     expect(
       buildFfmpegArguments('/tmp/t.ffconcat', '/tmp/out.mp4', 20),
     ).toContain('libx264')
-  })
-})
-
-describe('resolveEncoder', () => {
-  it('accepts every encoder this stage can drive', () => {
-    // Named literally rather than looped over `ENCODERS`: a test that reads
-    // its expectations out of the same constant it is checking cannot fail
-    // when that constant loses an entry.
-    expect(resolveEncoder('libx264')).toBe('libx264')
-    expect(resolveEncoder('h264_nvenc')).toBe('h264_nvenc')
-    expect(resolveEncoder('hevc_nvenc')).toBe('hevc_nvenc')
-  })
-
-  it('names the available encoders when given an unknown one', () => {
-    // A typo that silently fell back to the CPU would only be noticed by
-    // the encode taking two minutes.
-    expect(() => resolveEncoder('h264_nvidia')).toThrow(
-      /Unknown encoder "h264_nvidia"\. Available: libx264, h264_nvenc, hevc_nvenc/,
-    )
   })
 })
 
@@ -348,7 +328,7 @@ describe('assembleScreencast', () => {
       captureDirectory,
       '/tmp/output.mp4',
       runner,
-      'h264_nvenc',
+      'nvenc-h264',
     )
 
     expect(runner).toHaveBeenCalledWith(
@@ -357,7 +337,7 @@ describe('assembleScreencast', () => {
         join(captureDirectory, 'timeline.ffconcat'),
         '/tmp/output.mp4',
         2,
-        'h264_nvenc',
+        'nvenc-h264',
       ),
     )
   })

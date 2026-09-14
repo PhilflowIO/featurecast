@@ -3,30 +3,10 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 import { validateCaptureManifest, type TimestampManifest } from './capture.js'
+import { DEFAULT_ENCODER, encoderProfile, type Encoder } from './encoders.js'
 
 const OUTPUT_SIZE = { height: 1080, width: 1920 }
 export const FRAME_RATE = 60
-
-/**
- * The encoders this stage can drive. `libx264` runs on the CPU and stays the
- * default; the two NVENC entries hand the encode to the 3090's dedicated
- * encoder block.
- *
- * NVENC exists here because the measured CPU cost is the problem, not a
- * convenience: PLAN.md records 1 minute 45 for 8 seconds of 1080p60 through
- * the post-processing chain on CPU. It is nonetheless *not* the default, and
- * deliberately so — nobody has yet run M6's acceptance measurement ("die
- * Laufzeit fuer 30 Sekunden 1080p60 wird gemessen und notiert") or looked at
- * an NVENC-encoded result next to a libx264 one. Until that has happened,
- * the path whose output has actually been seen is the one that runs unless a
- * caller explicitly asks for the other.
- */
-export const ENCODERS = ['libx264', 'h264_nvenc', 'hevc_nvenc'] as const
-
-export type Encoder = (typeof ENCODERS)[number]
-
-/** The encoder used unless a caller names another one. */
-export const DEFAULT_ENCODER: Encoder = 'libx264'
 
 /**
  * Constant-quality level handed to NVENC.
@@ -46,20 +26,6 @@ export const DEFAULT_ENCODER: Encoder = 'libx264'
  * is still the CPU.
  */
 const NVENC_CONSTANT_QUALITY = 23
-
-/**
- * Resolves an encoder name from outside (CLI flag, config file) and refuses
- * anything else by name, the way `resolveDeviceDescriptor` does for device
- * presets: a typo that silently fell back to the CPU path would be found
- * only by noticing the encode took two minutes.
- */
-export function resolveEncoder(name: string): Encoder {
-  const match = ENCODERS.find((encoder) => encoder === name)
-  if (match !== undefined) return match
-  throw new Error(
-    `Unknown encoder "${name}". Available: ${ENCODERS.join(', ')}`,
-  )
-}
 
 export type CommandRunner = (
   command: string,
@@ -203,16 +169,16 @@ export function buildFfmpegArguments(
     // whether to over-capture and crop at all — see docs/CAPTURE-CADENCE.md.
     `crop=2560:1440:0:0,scale=${OUTPUT_SIZE.width}:${OUTPUT_SIZE.height}:flags=lanczos:in_range=full:out_range=tv,fps=${FRAME_RATE},format=yuv420p`,
     '-c:v',
-    encoder,
+    encoderProfile(encoder).ffmpegCodec,
     // Rate control is spelled out only for NVENC, and only because its
     // default differs in kind from libx264's. Everything below this point —
     // the pixel format, the range tag, the frame rate, the hard duration
     // bound — is shared, and the colour handling in the filter chain above
     // (`in_range=full:out_range=tv`) runs before the encoder sees a pixel,
     // so both paths carry the identical colour promise.
-    ...(encoder === 'libx264'
-      ? []
-      : ['-rc', 'vbr', '-cq', String(NVENC_CONSTANT_QUALITY), '-b:v', '0']),
+    ...(encoderProfile(encoder).family === 'nvenc'
+      ? ['-rc', 'vbr', '-cq', String(NVENC_CONSTANT_QUALITY), '-b:v', '0']
+      : []),
     '-pix_fmt',
     'yuv420p',
     '-color_range',

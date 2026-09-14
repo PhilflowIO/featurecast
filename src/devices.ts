@@ -2,6 +2,7 @@ import { devices as playwrightDevices } from 'playwright'
 
 import { CAPTURE_QUALITY } from './capture.js'
 import { FRAME_RATE } from './assemble.js'
+import type { Encoder } from './encoders.js'
 
 /**
  * The device layer described in docs/DEVICES.md: one name in the call,
@@ -107,8 +108,18 @@ export type CapturePlan = CapturePending | CaptureSettings
 /** Requestable output format. `output.width`/`height` stay the stored truth. */
 export type Aspect = '1:1' | '16:9' | '9:16'
 
+/**
+ * Encoder plus the quality number that encoder understands. The encoder
+ * names are the shared vocabulary from src/encoders.ts, not a second set:
+ * this field is what `buildFfmpegArguments` is handed, so a name here that
+ * the assemble stage does not know would be a mismatch discoverable only at
+ * encode time. `crf` belongs to the CPU path, `cq` to NVENC — different
+ * scales with the same nominal range, which is why they are different
+ * fields rather than one `quality` number.
+ */
 export type OutputQuality =
-  { cq: number; encoder: 'nvenc' } | { crf: number; encoder: 'x264' }
+  | { cq: number; encoder: Extract<Encoder, `nvenc-${string}`> }
+  | { crf: number; encoder: Extract<Encoder, 'x264'> }
 
 export type OutputSettings = {
   height: number
@@ -172,10 +183,9 @@ export const ASPECT_DIMENSIONS: Readonly<
 
 /**
  * Default encoder settings. `crf: 23` is not a new choice — it is libx264's
- * own default, i.e. exactly what the existing assemble step already produces,
- * since `buildFfmpegArguments` passes no `-crf` (src/assemble.ts:117-165).
+ * own default, i.e. exactly what the assemble step has always produced.
  * Stating it here makes the device layer describe the pipeline that exists
- * instead of silently changing it. NVENC lands in M6.
+ * instead of silently changing it.
  */
 export const DEFAULT_OUTPUT_QUALITY: OutputQuality = {
   crf: 23,
@@ -492,8 +502,14 @@ function validateCapture(capture: CaptureSettings): void {
 }
 
 function validateQuality(quality: OutputQuality): void {
-  const value = quality.encoder === 'x264' ? quality.crf : quality.cq
-  const field = quality.encoder === 'x264' ? 'crf' : 'cq'
+  // Discriminating on the present field rather than on the encoder name:
+  // the set of NVENC names is src/encoders.ts's business, and asking "which
+  // number did this quality bring" here keeps a third encoder from needing
+  // an edit in two files.
+  const [field, value] =
+    'crf' in quality
+      ? (['crf', quality.crf] as const)
+      : (['cq', quality.cq] as const)
   if (!Number.isInteger(value) || value < 0 || value > 51) {
     throw new Error(
       `output.quality.${field} must be an integer in 0..51, got ${String(value)}`,
