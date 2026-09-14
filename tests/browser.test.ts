@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   chmod,
   mkdtemp,
   readFile,
   realpath,
   rm,
+  stat,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -17,6 +19,7 @@ import {
   BROWSER_PROVENANCE_FILE_NAME,
   launchChromium,
   listChildExecutables,
+  readExecutableFingerprint,
   readExecutableVersion,
   resolveBrowserRequest,
   resolveExecutableFile,
@@ -31,6 +34,7 @@ import {
 // posing as Chromium), so they are proven to work, not assumed.
 
 const PATCHED = '/opt/chromium-patched/chrome'
+const FINGERPRINT = { sha256: 'a'.repeat(64), sizeBytes: 516_058_688 }
 const BUNDLE =
   '/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell'
 
@@ -60,6 +64,7 @@ function dependencies(
           ])
         : new Map([[100, '/usr/bin/unrelated-earlier-child']]),
     ),
+    readFingerprint: vi.fn(async () => FINGERPRINT),
     readVersion: vi.fn(async () => 'Chromium 153.0.8010.12'),
     resolveExecutable: vi.fn(async (path: string) => path),
     ...overrides,
@@ -99,11 +104,13 @@ describe('launchChromium', () => {
     })
     expect(provenance).toEqual({
       executablePath: PATCHED,
+      fingerprint: FINGERPRINT,
       reportedVersion: '153.0.8010.12',
       request: { path: PATCHED, source: 'CHROME_BIN' },
       version: 'Chromium 153.0.8010.12',
     })
     expect(deps.readVersion).toHaveBeenCalledWith(PATCHED)
+    expect(deps.readFingerprint).toHaveBeenCalledWith(PATCHED)
   })
 
   it('is a hard error when the running browser is not the requested one', async () => {
@@ -150,6 +157,24 @@ describe('launchChromium', () => {
     expect(deps.launch).toHaveBeenCalledWith({ headless: true })
     expect(provenance.executablePath).toBe(BUNDLE)
     expect(provenance.request).toEqual({ source: 'playwright-bundle' })
+    // Nothing was requested, so the fingerprint can only come from the
+    // running process -- the case that catches a fingerprint read off the
+    // requested path instead.
+    expect(deps.readFingerprint).toHaveBeenCalledWith(BUNDLE)
+    expect(provenance.fingerprint).toEqual(FINGERPRINT)
+  })
+
+  it('closes the browser when the binary cannot be fingerprinted', async () => {
+    const deps = dependencies({
+      readFingerprint: vi.fn(async () => {
+        throw new Error('EACCES')
+      }),
+      runningExecutable: PATCHED,
+    })
+    await expect(
+      launchChromium({}, { path: PATCHED, source: 'option' }, deps),
+    ).rejects.toThrow('EACCES')
+    expect(deps.browser.close).toHaveBeenCalledOnce()
   })
 
   it('refuses to guess when the launched browser cannot be identified', async () => {
@@ -167,6 +192,7 @@ describe('launchChromium', () => {
               [2, '/usr/bin/ffmpeg'],
             ]),
       ),
+      readFingerprint: vi.fn(async () => FINGERPRINT),
       readVersion: vi.fn(async () => 'x'),
       resolveExecutable: vi.fn(async (path: string) => path),
     }
@@ -234,6 +260,26 @@ describe('operating-system mechanisms (real processes, no browser)', () => {
       resolveExecutableFile(join(directory, 'missing')),
     ).rejects.toThrow()
 
+    // Two binaries that differ only in their bytes -- the #36 case, where
+    // both builds are mounted at the same container path and report the
+    // same version.
+    const twin = join(directory, 'twin')
+    await writeFile(twin, '#!/bin/sh\necho "Chromium 153.0.8010.12 "\n# twin\n')
+    await chmod(twin, 0o755)
+    const fakePrint = await readExecutableFingerprint(fake)
+    const twinPrint = await readExecutableFingerprint(twin)
+    expect(fakePrint.sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(fakePrint.sha256).toBe(
+      createHash('sha256')
+        .update(await readFile(fake))
+        .digest('hex'),
+    )
+    expect(fakePrint.sizeBytes).toBe((await stat(fake)).size)
+    expect(twinPrint.sha256).not.toBe(fakePrint.sha256)
+    await expect(
+      readExecutableFingerprint(join(directory, 'missing')),
+    ).rejects.toThrow()
+
     const silent = join(directory, 'silent')
     await writeFile(silent, '#!/bin/sh\n')
     await chmod(silent, 0o755)
@@ -246,6 +292,7 @@ describe('operating-system mechanisms (real processes, no browser)', () => {
     directory = await mkdtemp(join(tmpdir(), 'featurecast-browser-'))
     const provenance = {
       executablePath: PATCHED,
+      fingerprint: FINGERPRINT,
       reportedVersion: '153.0.8010.12',
       request: { path: PATCHED, source: 'CHROME_BIN' as const },
       version: 'Chromium 153.0.8010.12',

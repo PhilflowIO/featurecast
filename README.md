@@ -98,8 +98,11 @@ Ein `CHROME_BIN`, das leer ist oder kein ausführbares Binär benennt, bricht
 vor dem Start ab. Nach dem Start wird das tatsächlich laufende Binär beim
 Betriebssystem nachgefragt (`/proc`, deshalb nur unter Linux); weicht es vom
 angeforderten ab, bricht der Lauf ab. Jeder Lauf schreibt `browser.json` mit
-absolutem Pfad und `--version` des laufenden Binärs in den Artefaktordner,
-ebenso `record()` in seinen `out`-Ordner. Hintergrund: drei Tage Messungen
+absolutem Pfad, `--version` und SHA-256 des laufenden Binärs in den
+Artefaktordner, ebenso `record()` in seinen `out`-Ordner. Der Hash ist das
+einzige Feld, das zwei Builds auseinanderhält, die an derselben Stelle
+eingehängt sind und dieselbe Versionszeile melden — genau der Fall im
+Messplatz, wo jeder Arm seinen Build nach `/crbuild` mountet (#36). Hintergrund: drei Tage Messungen
 wurden dem falschen Browser zugeschrieben, weil ein gesetztes `CHROME_BIN`
 still ignoriert wurde (#23, [docs/JOURNEY.md](docs/JOURNEY.md)).
 

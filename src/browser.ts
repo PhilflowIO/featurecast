@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
-import { constants } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { constants, createReadStream } from 'node:fs'
 import {
   access,
   readdir,
@@ -32,8 +33,12 @@ import type { Browser, LaunchOptions } from 'playwright'
  *    (`/proc/<pid>/exe` of the child process Playwright started), not from
  *    what was passed in. An explicit request that does not match the running
  *    binary is a hard error.
- * 3. Every run records absolute path plus `--version` of that running
- *    binary in `browser.json`.
+ * 3. Every run records absolute path, `--version` and a content hash of
+ *    that running binary in `browser.json`. The hash is what survives a
+ *    bench that mounts every candidate build at the same container path:
+ *    the patched and the unpatched Chromium are both `/crbuild/chrome` and
+ *    both report `Chromium 153.0.8010.12`, so path and version alone name
+ *    an identity that is none (#36).
  */
 
 export const BROWSER_ENV_VARIABLE = 'CHROME_BIN'
@@ -42,6 +47,13 @@ export const BROWSER_PROVENANCE_FILE_NAME = 'browser.json'
 export type BrowserRequest =
   | { source: 'option' | typeof BROWSER_ENV_VARIABLE; path: string }
   | { source: 'playwright-bundle' }
+
+/** What the running binary is, independent of where it is mounted. */
+export type BrowserFingerprint = {
+  /** SHA-256 over the contents of the running binary. */
+  sha256: string
+  sizeBytes: number
+}
 
 export type BrowserProvenance = {
   /** What was asked for, before anything launched. */
@@ -52,6 +64,8 @@ export type BrowserProvenance = {
   version: string
   /** What the browser reports about itself over CDP (`browser.version()`). */
   reportedVersion: string
+  /** Identity of the running binary's bytes, not of its path. */
+  fingerprint: BrowserFingerprint
 }
 
 export type BrowserLaunchDependencies = {
@@ -62,6 +76,8 @@ export type BrowserLaunchDependencies = {
   readVersion: (executablePath: string) => Promise<string>
   /** Direct child processes of this process: pid -> resolved executable. */
   listChildExecutables: () => Promise<Map<number, string>>
+  /** Content hash and size of an executable; throws if unreadable. */
+  readFingerprint: (executablePath: string) => Promise<BrowserFingerprint>
 }
 
 /**
@@ -147,6 +163,10 @@ export async function launchChromium(
       browser,
       provenance: {
         executablePath,
+        // Read from the binary that runs, never from the one that was
+        // requested: the two differ in exactly the cases this module exists
+        // to catch.
+        fingerprint: await dependencies.readFingerprint(executablePath),
         reportedVersion: browser.version(),
         request,
         version: await dependencies.readVersion(executablePath),
@@ -188,6 +208,22 @@ export async function readExecutableVersion(
     throw new Error(`${executablePath} --version printed nothing`)
   }
   return version
+}
+
+/**
+ * Hashes the binary itself. Two builds from the same pinned source tree
+ * differ in their bytes long before they differ in their version string, and
+ * a bench that mounts each candidate at the same path has no other way to
+ * tell its arms apart (#36).
+ */
+export async function readExecutableFingerprint(
+  executablePath: string,
+): Promise<BrowserFingerprint> {
+  const sizeBytes = (await stat(executablePath)).size
+  const hash = createHash('sha256')
+  const stream = createReadStream(executablePath)
+  for await (const chunk of stream) hash.update(chunk as Buffer)
+  return { sha256: hash.digest('hex'), sizeBytes }
 }
 
 /**
@@ -233,6 +269,7 @@ export const defaultBrowserLaunchDependencies: BrowserLaunchDependencies = {
     return chromium.launch(options)
   },
   listChildExecutables: () => listChildExecutables(),
+  readFingerprint: readExecutableFingerprint,
   readVersion: readExecutableVersion,
   resolveExecutable: resolveExecutableFile,
 }
