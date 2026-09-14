@@ -128,6 +128,57 @@ describe('resolveUploadConfig', () => {
     expect(message).not.toContain(testConfig.accessKeyId)
   })
 
+  it('rejects an endpoint without a scheme instead of failing later in new URL', () => {
+    // The shape everyone types first. It used to pass the presence check and
+    // detonate deep inside signPutObject as a bare `TypeError: Invalid URL`,
+    // naming neither the variable nor the value.
+    expect(() =>
+      resolveUploadConfig({
+        ...fullEnvironment,
+        [UPLOAD_ENV_VARIABLES.endpoint]: 'garage.example.invalid:3900',
+      }),
+    ).toThrow(
+      /FEATURECAST_S3_ENDPOINT="garage.example.invalid:3900"[\s\S]*https:\/\//,
+    )
+  })
+
+  it('rejects a scheme that cannot be signed or fetched', () => {
+    expect(() =>
+      resolveUploadConfig({
+        ...fullEnvironment,
+        [UPLOAD_ENV_VARIABLES.endpoint]: 'ftp://garage.example.invalid',
+      }),
+    ).toThrow(/Only http and https/)
+  })
+
+  it('checks the optional public base URL too, when one is set', () => {
+    expect(() =>
+      resolveUploadConfig({
+        ...fullEnvironment,
+        [UPLOAD_ENV_VARIABLES.publicBaseUrl]: 'cdn.example.invalid/v',
+      }),
+    ).toThrow(/FEATURECAST_S3_PUBLIC_BASE_URL="cdn.example.invalid\/v"/)
+  })
+
+  it('names a missing variable and a malformed URL in one message', () => {
+    // The whole point of this function is that a fresh machine is configured
+    // in one pass. Reporting the shape fault only after the missing one is
+    // fixed would cost a second failed run.
+    let message = ''
+    try {
+      resolveUploadConfig({
+        ...fullEnvironment,
+        [UPLOAD_ENV_VARIABLES.bucket]: '',
+        [UPLOAD_ENV_VARIABLES.endpoint]: 'garage.example.invalid',
+      })
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    expect(message).toMatch(/FEATURECAST_S3_BUCKET is missing or empty/)
+    expect(message).toMatch(/FEATURECAST_S3_ENDPOINT="garage.example.invalid"/)
+    expect(message).not.toContain(testConfig.secretAccessKey)
+  })
+
   it('reads a complete environment and leaves the optional base URL unset', () => {
     expect(resolveUploadConfig(fullEnvironment)).toEqual(testConfig)
   })

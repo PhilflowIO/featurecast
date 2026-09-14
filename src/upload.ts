@@ -136,6 +136,41 @@ export type UploadOptions = {
 export const DEFAULT_UPLOAD_TIMEOUT_MS = 600_000
 
 /**
+ * The two variables that are URLs, and must therefore be checked for shape
+ * and not merely for presence. Neither holds a credential, so their values
+ * may be quoted back in an error message; nothing else in this file's output
+ * ever is.
+ */
+const URL_ENV_VARIABLES = [
+  UPLOAD_ENV_VARIABLES.endpoint,
+  UPLOAD_ENV_VARIABLES.publicBaseUrl,
+] as const
+
+/**
+ * Describes what is wrong with a URL-shaped variable, or `undefined` if it is
+ * fine. The message has to be actionable without the source at hand, so it
+ * names the variable, quotes what was found, and shows the shape expected.
+ */
+function describeUrlProblem(name: string, value: string): string | undefined {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return `${name}="${value}" is not a URL: it needs a scheme and a host, as in "https://garage.example.com:3900"`
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    // `garage.example.com:3900` parses: everything before the colon is a
+    // legal scheme. Saying so is what turns a baffling rejection into an
+    // obvious one, because the fix is a missing prefix, not a wrong host.
+    return `${name}="${value}" is not an http(s) URL: "${url.protocol.replace(':', '')}" was read as its scheme. Only http and https can be signed and fetched, as in "https://garage.example.com:3900"`
+  }
+  if (url.host === '') {
+    return `${name}="${value}" has no host: expected something like "https://garage.example.com:3900"`
+  }
+  return undefined
+}
+
+/**
  * Reads the upload configuration out of an environment map.
  *
  * A variable that is set but blank counts as missing: an empty
@@ -143,24 +178,39 @@ export const DEFAULT_UPLOAD_TIMEOUT_MS = 600_000
  * well-formed-but-wrong signature and a remote 403 that says nothing about
  * where the fault is. The thrown message names every missing variable at
  * once rather than the first one, so a fresh machine is configured in one
- * pass instead of five failed runs. It never echoes a value.
+ * pass instead of five failed runs. It never echoes a credential value.
+ *
+ * Presence alone is not enough for the two variables that are URLs. An
+ * endpoint without a scheme — `garage.example.com:3900`, the shape everyone
+ * types first — passes a presence check and then detonates far downstream in
+ * `signPutObject`'s `new URL` as a bare `TypeError: Invalid URL`, which names
+ * neither the variable nor the value. Checking the shape here keeps the
+ * promise this function makes: one pass, every fault named at once.
  */
 export function resolveUploadConfig(
   environment: Readonly<Record<string, string | undefined>>,
 ): UploadConfig {
-  const missing = REQUIRED_ENV_VARIABLES.filter(
-    (name) => (environment[name] ?? '').trim() === '',
-  )
+  const read = (name: string): string => (environment[name] ?? '').trim()
+  const problems: string[] = []
+  const missing = REQUIRED_ENV_VARIABLES.filter((name) => read(name) === '')
   if (missing.length > 0) {
+    problems.push(
+      `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing or empty`,
+    )
+  }
+  for (const name of URL_ENV_VARIABLES) {
+    const value = read(name)
+    if (value === '') continue
+    const problem = describeUrlProblem(name, value)
+    if (problem !== undefined) problems.push(problem)
+  }
+  if (problems.length > 0) {
     throw new Error(
-      `Upload is not configured: ${missing.join(', ')} ${
-        missing.length === 1 ? 'is' : 'are'
-      } missing or empty. Set ${
-        missing.length === 1 ? 'it' : 'them'
+      `Upload is not configured: ${problems.join('; ')}. Fix ${
+        problems.length === 1 ? 'it' : 'them'
       } in the environment; featurecast never reads credentials from the repository.`,
     )
   }
-  const read = (name: string): string => (environment[name] ?? '').trim()
   const publicBaseUrl = read(UPLOAD_ENV_VARIABLES.publicBaseUrl)
   return {
     accessKeyId: read(UPLOAD_ENV_VARIABLES.accessKeyId),
