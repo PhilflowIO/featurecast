@@ -85,7 +85,7 @@ Aus `45ck/demo-machine` übernehmen wir nur das Muster der sauberen Trennung von
 
 **Aufnahme über `page.screencast`**, nicht über `recordVideo`. Gemessen: 60,0 Bilder pro Sekunde bei frei wählbarer Qualität, gegenüber `recordVideo` mit 25 Bildern, von denen nur 121 von 173 überhaupt unterschiedlich waren.
 
-**Desktop wird übergroß aufgenommen** (2560×1600 CSS-Pixel) und im Render auf 1920 verkleinert. Das ist der einzige Weg zu scharfem Text, weil die Aufnahme die Pixeldichte ignoriert, und schenkt nebenbei 1,33-fache Zoom-Reserve bei voller Schärfe.
+**Desktop wird übergroß aufgenommen** (2560×1600 CSS-Pixel) und im Render auf 1920 verkleinert — alle drei Desktop-Presets, ohne Ausnahme ([docs/DEVICES.md](docs/DEVICES.md)). Das ist der einzige Weg zu scharfem Text, weil die Aufnahme die Pixeldichte ignoriert. Der Rand darüber hinaus ist kein Nebeneffekt, sondern die Voraussetzung für M4: mehrere Ausgabeformate aus **demselben** Rohmaterial ohne zweiten Browser-Lauf, und eine Zoomfeder, die in der Aufnahme umherfährt statt hochzuskalieren. Aus 2560×1600 fallen 16:10, 16:9 und 1:1 scharf heraus; **9:16 nicht** — das gehört den mobilen Presets (M3).
 
 **Zoom ist ein Ausschnitt aus dem Original, nie eine Vergrößerung.** Jedes geprüfte Werkzeug macht hier denselben Fehler und skaliert hoch.
 

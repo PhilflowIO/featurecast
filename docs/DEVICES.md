@@ -29,6 +29,10 @@ Was Playwright nicht weiß, weil es ums Testen geht und nicht ums Filmen, legen 
 | Ausgabe     | `aspect` (16:9 / 9:16 / 1:1), `output.width/height`, `crf` bzw. NVENC-Stufe                | eigene Ebene            |
 | Darstellung | `pointer` (`arrow` \| `touch` \| `none`), Zeigergröße, Ripple-Farbe                        | eigene Ebene            |
 
+**Desktop wird absichtlich größer aufgenommen als ausgegeben.** Alle drei Desktop-Presets nehmen 2560×1600 auf — mehr, als jedes ihrer Ausgabeformate braucht. Der Rand ist kein Puffer, sondern die Voraussetzung für zwei Dinge, die ohne ihn nicht existieren können: M4 schneidet mehrere Formate aus **demselben** Rohmaterial, ohne den Browser ein zweites Mal laufen zu lassen, und die Zoomfeder rahmt bei jedem Klick das getroffene Element — sie fährt in der Aufnahme umher, statt hochzuskalieren. Aus einer Aufnahme, die schon die Ausgabegröße hat, lässt sich beides nicht holen. Dieselbe Entscheidung steht in [PLAN.md](../PLAN.md).
+
+Was aus 2560×1600 ohne Hochskalieren herausfällt: 16:10 (1920×1200) mit 1,33-facher Reserve, 16:9 (1920×1080) mit 1,33-fach in der Breite und 1,48-fach in der Höhe, 1:1 (1080×1080) mit 1,48-fach. Was **nicht** herausfällt: **9:16 (1080×1920).** Der höchste 9:16-Ausschnitt aus einem 1600 Pixel hohen Bild ist 900×1600 und müsste um das 1,2-fache vergrößert werden — genau das, was diese Kette nirgends tut. Hochkant-Ausgabe ist Sache der mobilen Presets, deren Aufnahmefläche unter M3 offen bleibt.
+
 Der Grund für die getrennte Aufnahme-Ebene ist der zentrale Befund der Recherche: **die Aufnahme liefert CSS-Pixel und ignoriert die Pixeldichte.** Ein Geräteprofil allein bestimmt also nicht die Videoauflösung — bei einem iPhone-Profil wären es 393 Pixel Breite. Die Aufnahme-Ebene ist die Stelle, an der das korrigiert wird.
 
 ## Kuratierte Vorauswahl
@@ -37,9 +41,9 @@ Werte direkt aus Playwrights Registry gezogen. `Aufnahme` und `Ausgabe` sind uns
 
 | Preset                                  | Viewport (CSS) | Dichte | Touch | Engine   | Aufnahme   | Ausgabe   | Zeiger |
 | --------------------------------------- | -------------- | ------ | ----- | -------- | ---------- | --------- | ------ |
-| `desktop` → Desktop Chrome HiDPI        | 1280×720       | 2      | –     | chromium | 2560×1440  | 1920×1080 | Pfeil  |
+| `desktop` → Desktop Chrome HiDPI        | 1280×720       | 2      | –     | chromium | 2560×1600  | 1920×1080 | Pfeil  |
 | `desktop-wide` → Desktop Chrome         | 1280×720       | 1      | –     | chromium | 2560×1600  | 1920×1200 | Pfeil  |
-| `safari` → Desktop Safari               | 1280×720       | 2      | –     | webkit   | 2560×1440  | 1920×1080 | Pfeil  |
+| `safari` → Desktop Safari               | 1280×720       | 2      | –     | webkit   | 2560×1600  | 1920×1080 | Pfeil  |
 | `iphone` → iPhone 15 Pro                | 393×659        | 3      | ja    | webkit   | offen (M3) | 1080×1920 | Touch  |
 | `iphone-max` → iPhone 15 Pro Max        | 430×739        | 3      | ja    | webkit   | offen (M3) | 1080×1920 | Touch  |
 | `iphone-small` → iPhone SE              | 320×568        | 2      | ja    | webkit   | offen (M3) | 1080×1920 | Touch  |

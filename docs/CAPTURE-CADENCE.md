@@ -500,18 +500,21 @@ re-measurements above are single runs per variant, so run-to-run spread is
 unknown; the completeness of the caller search rests on GitHub's code-search
 index over the Chromium mirror.
 
-## PLAN.md / docs/DEVICES.md divergence (unresolved, flagged for the owner)
+## PLAN.md / docs/DEVICES.md divergence (resolved 2026-09-14, #55)
 
 Fixing the crop-shears-the-toolbar defect (see the main report, item 5)
-surfaced an existing disagreement between the two docs that this task did
-not resolve: PLAN.md specifies capturing 2560×1600 (16:10) and cropping to
-16:9 for a deliberate 1.33× zoom reserve; `docs/DEVICES.md` already lists
-2560×1440 (16:9 natively, no crop) as the desktop preset. `src/assemble.ts`
-currently follows PLAN.md (capture 1600, crop to 1440) with the crop now
-anchored top instead of centered. Whether the zoom reserve is worth the
-extra capture height (more pixels to rasterize, though no longer the
-bottleneck per this document) versus DEVICES.md's simpler native-16:9
-capture is an open product decision, not something this fix decided.
+surfaced a disagreement between the two docs that this task did not resolve:
+PLAN.md specified capturing 2560×1600 (16:10) and cropping to 16:9 for a
+deliberate 1.33× zoom reserve, while `docs/DEVICES.md` listed 2560×1440
+(16:9 natively, no crop) as the `desktop` preset.
+
+Over-capturing won, and `docs/DEVICES.md` was the entry that changed: all
+three desktop presets now record 2560×1600. The reason is not the zoom
+reserve alone but M4 — several output formats cut from one recording without
+a second browser run, plus a zoom that frames the element each click hit.
+Both spend pixels outside the finished frame, and a natively-16:9 capture has
+none. The honest limit of that margin is written down in `docs/DEVICES.md`:
+16:9, 16:10 and 1:1 fall out of it sharp, 9:16 does not.
 
 ## The capture clock and the efficiency denominator (added 2026-09-12, #21)
 
