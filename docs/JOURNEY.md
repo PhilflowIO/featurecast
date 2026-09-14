@@ -339,6 +339,61 @@ either way (#38).
 
 ---
 
+## 2026-09-14 — the pacing fix held its tick and made the hitch worse (#25, #40, #42)
+
+The input pacing from #35 does what it claims: the same scroll travel now
+takes 20 frame pairs instead of 23. What it does not do is remove the
+hitch.
+
+Getting to that answer took two corrections first. The motion window ended
+when the last wheel event was acknowledged, which was fine while the input
+throttled itself against Chromium's acknowledgements and wrong the moment
+it stopped: the window closed mid-motion, the horizontal scrolls measured
+131-169 px of 172.5 px inside their own window, and the instrument
+withheld its verdict on exactly the windows the question was about. The
+travel was never lost — the same runs show the full 171.8 px when the
+instrument decomposes the motion itself. A scroll now returns when the page
+has stopped moving, observed by listening for `scroll` events rather than
+polling offsets, because polling is main-thread work during the capture
+being measured (#40).
+
+The second correction is a lesson about this suite. That fix shipped with
+two test files run, not the suite; `tests/tsx-pipeline.test.ts` exists
+precisely because Vitest transforms without `keepNames` while `tsx` does
+not, and a named function inside a `page.evaluate` payload therefore dies
+in production and nowhere else. Every real run crashed on
+`ReferenceError: __name is not defined` while the browser suites stayed
+green (#42). **For `src/record.ts`, the whole suite on the box is the gate,
+not a selection.**
+
+With both arms carrying the window fix, three interleaved repetitions each:
+
+| Arm        | hitches per window | worst jump, median | worst jump, max |
+| ---------- | ------------------ | ------------------ | --------------- |
+| before #35 | mostly 2           | 4.70 even steps    | 5.70            |
+| after #35  | mostly 1           | **6.60**           | **12.10**       |
+
+Fewer disturbances, much heavier ones. Measured independently of the
+instrument (phase correlation straight off the video), the after-arm puts
+46 px in a single frame pair against neighbours of 12-16 px, in both
+directions; the before-arm's worst is 31 px and only at the start. The
+owner watched both recordings at normal speed and ruled: "A ist nur am
+Anfang ruckelig einmal, sonst ist A aber viel besser. B ruckelt zurück ja
+auch komplett." So #35's pacing gets reverted and the window fix stays.
+
+Two things worth keeping from this. The hitch **count** favoured the arm
+the eye rejected; only severity got it right, which is the #28/#29
+decision confirmed on real material. And "ruckelt zurück" is not backwards
+motion — there is no step against the direction of travel in either arm.
+It is one jump big enough to read as a teleport, which is the first
+calibration bracket the eye has ever given this project (#30): ~5 even
+steps is tolerated, ~12 is unusable.
+
+The cause of the hitch is therefore still open, and the compositor
+suspicion above is what is left.
+
+---
+
 ## Where the truth lives
 
 | Question                                                          | Where                                        |
@@ -349,7 +404,8 @@ either way (#38).
 | The smoothness instrument                                         | #24, [`SMOOTHNESS.md`](./SMOOTHNESS.md)      |
 | Instrument verdict: unchecked bounds, severity                    | #28, #29                                     |
 | Eye calibration of the hitch threshold                            | #30                                          |
-| Wheel pacing drift                                                | #25                                          |
+| Wheel pacing drift, and why it gets reverted                      | #25                                          |
+| Motion windows that end with the motion                           | #40                                          |
 | M1 acceptance                                                     | #2, [`M1-VERDICT.md`](./M1-VERDICT.md)       |
 | One clock for capture and event log                               | #9                                           |
 | Mechanisms, in detail and dated                                   | [`CAPTURE-CADENCE.md`](./CAPTURE-CADENCE.md) |
