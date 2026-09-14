@@ -42,7 +42,9 @@ import { FRAME_RATE } from './assemble.js'
  * ```
  *
  * `resolved.device` is deliberately shaped as a Playwright context option
- * bag, so it can be handed to `browser.newContext` unchanged; `resolved.
+ * bag, so it can be handed to `browser.newContext` unchanged. It is a private
+ * copy of the registry entry, so editing it before that call cannot reach
+ * Playwright's process-wide `devices` object; `resolved.
  * capture` feeds src/capture.ts, `resolved.output` feeds src/assemble.ts's
  * scale/encode arguments, `resolved.pointer` feeds the M4 pointer renderer.
  *
@@ -353,7 +355,7 @@ export function resolveDevice(
 
   return {
     capture: applyCaptureOverrides(base.capture, overrides.capture, name),
-    device: descriptor,
+    device: copyDescriptor(descriptor),
     output: applyOutputOverrides(base.output, overrides),
     playwrightName,
     pointer: applyPointerOverrides(descriptor, overrides.pointer),
@@ -380,6 +382,19 @@ export function requireCaptureSettings(
       'Until it is decided, pass an explicit capture override, e.g. ' +
       `{ extends: "${resolved.preset ?? resolved.playwrightName}", capture: { width: 1080, height: 1920, strategy: "framed-scale" } }.`,
   )
+}
+
+/**
+ * A private copy of a registry descriptor.
+ *
+ * The resolved device is meant to be handed straight to `browser.newContext`,
+ * which invites a caller to tweak a field first. Handing out Playwright's own
+ * object would make that tweak reach into the process-wide `devices` registry
+ * and change every later resolution in the same process. `viewport` is copied
+ * too: a shallow copy would leave exactly that hole one level down.
+ */
+function copyDescriptor(descriptor: DeviceDescriptor): DeviceDescriptor {
+  return { ...descriptor, viewport: { ...descriptor.viewport } }
 }
 
 function applyCaptureOverrides(
