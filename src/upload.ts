@@ -81,6 +81,13 @@ export type UploadHttpRequest = {
   body: Uint8Array
   headers: Readonly<Record<string, string>>
   method: 'PUT'
+  /**
+   * How long the transport waits for the store's *answer* before it gives up,
+   * in milliseconds. Measured from the start of the request to the moment the
+   * response head arrives, which for a single `PUT` means it also covers
+   * pushing the body up the wire — see `DEFAULT_UPLOAD_TIMEOUT_MS`.
+   */
+  timeoutMs: number
   url: string
 }
 
@@ -106,8 +113,27 @@ export type UploadOptions = {
   key?: string
   /** Signing time. Injectable so a signature can be pinned in a test. */
   now?: Date
+  /** Deadline for the store's answer. Defaults to `DEFAULT_UPLOAD_TIMEOUT_MS`. */
+  timeoutMs?: number
   transport?: UploadTransport
 }
+
+/**
+ * Ten minutes.
+ *
+ * The number has to straddle two failure modes. A Garage node that has
+ * stopped answering must not hold the process open forever — and it would,
+ * because `fetch` has no timeout of its own — and this stage runs *after* the
+ * encode, so an unbounded wait here wastes the most expensive work in the
+ * pipeline. But a large upload is legitimately slow: an S3 `PUT` is answered
+ * only once the whole body has arrived, so the deadline unavoidably spans the
+ * transfer. Ten minutes carries a 400 MB file at roughly 5 Mbit/s, well below
+ * the uplink of any machine that just rendered it, while still turning a dead
+ * endpoint into an error the same afternoon rather than never.
+ *
+ * A caller who knows its own line sets `timeoutMs` and overrides this.
+ */
+export const DEFAULT_UPLOAD_TIMEOUT_MS = 600_000
 
 /**
  * Reads the upload configuration out of an environment map.
@@ -315,18 +341,61 @@ export function contentTypeForFile(path: string): string {
   )
 }
 
-/** The production transport. The only place in this module that opens a socket. */
+/** `600000` reads as `10min`, `20` as `20ms`; both appear in timeout messages. */
+function formatDuration(milliseconds: number): string {
+  if (milliseconds < 1000) return `${String(milliseconds)}ms`
+  const seconds = milliseconds / 1000
+  if (seconds < 120) return `${String(Number(seconds.toFixed(1)))}s`
+  return `${String(Number((seconds / 60).toFixed(1)))}min`
+}
+
+/**
+ * The production transport. The only place in this module that opens a socket.
+ *
+ * The deadline covers the request up to the arrival of the response head and
+ * is then cleared, so reading the (small) response body cannot be cut off by
+ * a timer that was sized for a multi-hundred-megabyte upload. A deadline over
+ * the whole exchange was the alternative; it would put the same axe over two
+ * phases with wildly different durations and make the number impossible to
+ * choose well for either.
+ *
+ * A timeout produces a different message than a store that answered: "no
+ * answer in time" and "answered with 403" are different faults with different
+ * fixes, and a caller reading the log must not have to guess which happened.
+ */
 export const fetchTransport: UploadTransport = async (request) => {
-  const response = await fetch(request.url, {
-    // `BodyInit` in @types/node only admits `Uint8Array<ArrayBuffer>`, while
-    // `readFile` hands back `Buffer<ArrayBufferLike>`. undici accepts any
-    // ArrayBufferView at runtime; copying a whole video into a fresh
-    // ArrayBuffer only to satisfy the narrower type would double peak memory
-    // for no behavioral gain.
-    body: request.body as Uint8Array<ArrayBuffer>,
-    headers: { ...request.headers },
-    method: request.method,
-  })
+  const controller = new AbortController()
+  let timedOut = false
+  const deadline = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, request.timeoutMs)
+  let response: Response
+  try {
+    response = await fetch(request.url, {
+      // `BodyInit` in @types/node only admits `Uint8Array<ArrayBuffer>`, while
+      // `readFile` hands back `Buffer<ArrayBufferLike>`. undici accepts any
+      // ArrayBufferView at runtime; copying a whole video into a fresh
+      // ArrayBuffer only to satisfy the narrower type would double peak memory
+      // for no behavioral gain.
+      body: request.body as Uint8Array<ArrayBuffer>,
+      headers: { ...request.headers },
+      method: request.method,
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (timedOut) {
+      throw new Error(
+        `Upload to ${request.url} timed out: the store did not answer within ${formatDuration(request.timeoutMs)}. ` +
+          `The request was never rejected — it was never answered. Check that the endpoint is up and reachable, ` +
+          `and raise the timeout if this file is large or the connection slow.`,
+        { cause: error },
+      )
+    }
+    throw error
+  } finally {
+    clearTimeout(deadline)
+  }
   return { body: await response.text(), status: response.status }
 }
 
@@ -361,6 +430,7 @@ export async function uploadFile(
     body,
     headers: request.headers,
     method: 'PUT',
+    timeoutMs: options.timeoutMs ?? DEFAULT_UPLOAD_TIMEOUT_MS,
     url: request.url,
   })
   if (response.status < 200 || response.status >= 300) {

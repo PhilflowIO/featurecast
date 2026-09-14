@@ -2,12 +2,14 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   buildObjectUrl,
   contentTypeForFile,
+  DEFAULT_UPLOAD_TIMEOUT_MS,
   encodePathSegment,
+  fetchTransport,
   resolveUploadConfig,
   signPutObject,
   uploadFile,
@@ -26,12 +28,31 @@ async function temporaryDirectory(): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.unstubAllGlobals()
   await Promise.all(
     directories
       .splice(0)
       .map((directory) => rm(directory, { force: true, recursive: true })),
   )
 })
+
+/**
+ * A request as the transport receives one. No test in this file opens a
+ * socket: the host is RFC 2606 `.invalid` and `fetch` itself is stubbed
+ * wherever the production transport is exercised.
+ */
+function transportRequest(
+  overrides: Partial<UploadHttpRequest> = {},
+): UploadHttpRequest {
+  return {
+    body: new TextEncoder().encode('video-bytes'),
+    headers: { 'content-type': 'video/mp4' },
+    method: 'PUT',
+    timeoutMs: 20,
+    url: 'https://garage.example.invalid/featurecast-demo/clip.mp4',
+    ...overrides,
+  }
+}
 
 /**
  * Credentials for a store that does not exist. `example.invalid` is reserved
@@ -275,6 +296,27 @@ describe('uploadFile', () => {
     )
   })
 
+  it('hands the transport a default deadline the caller can override', async () => {
+    const directory = await temporaryDirectory()
+    const file = join(directory, 'clip.mp4')
+    await writeFile(file, 'video-bytes')
+    const standard = recordingTransport()
+    const impatient = recordingTransport()
+
+    await uploadFile(file, {
+      config: testConfig,
+      transport: standard.transport,
+    })
+    await uploadFile(file, {
+      config: testConfig,
+      timeoutMs: 5_000,
+      transport: impatient.transport,
+    })
+
+    expect(standard.requests[0]?.timeoutMs).toBe(DEFAULT_UPLOAD_TIMEOUT_MS)
+    expect(impatient.requests[0]?.timeoutMs).toBe(5_000)
+  })
+
   it('reports the store status instead of returning an unreachable URL', async () => {
     const directory = await temporaryDirectory()
     const file = join(directory, 'clip.mp4')
@@ -290,5 +332,69 @@ describe('uploadFile', () => {
           }),
       }),
     ).rejects.toThrow(/failed with HTTP 403.*AccessDenied/s)
+  })
+})
+
+describe('fetchTransport', () => {
+  it('gives up on a store that never answers, and says so', async () => {
+    // A hung Garage node used to hold the process open forever: `fetch` has
+    // no deadline of its own, and this stage runs after the encode, so the
+    // wait wastes the most expensive work in the pipeline.
+    vi.stubGlobal(
+      'fetch',
+      (_url: string, init: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            reject(new Error('This operation was aborted'))
+          })
+        }),
+    )
+
+    await expect(
+      fetchTransport(transportRequest({ timeoutMs: 20 })),
+    ).rejects.toThrow(
+      /timed out: the store did not answer within 20ms[\s\S]*never rejected/,
+    )
+  })
+
+  it('names the endpoint it waited for', async () => {
+    vi.stubGlobal(
+      'fetch',
+      (_url: string, init: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            reject(new Error('This operation was aborted'))
+          })
+        }),
+    )
+
+    await expect(fetchTransport(transportRequest())).rejects.toThrow(
+      'https://garage.example.invalid/featurecast-demo/clip.mp4',
+    )
+  })
+
+  it('stops the clock once the store answers, so a slow read survives', async () => {
+    // The deadline is sized for pushing hundreds of megabytes up the wire.
+    // Leaving it armed over the response body would put that same axe over a
+    // few hundred bytes of XML.
+    vi.stubGlobal('fetch', (_url: string, init: { signal: AbortSignal }) =>
+      Promise.resolve({
+        status: 200,
+        text: () =>
+          new Promise<string>((resolve, reject) => {
+            setTimeout(() => {
+              if (init.signal.aborted) {
+                reject(new Error('the deadline was still armed'))
+                return
+              }
+              resolve('<Ok/>')
+            }, 60)
+          }),
+      }),
+    )
+
+    await expect(
+      fetchTransport(transportRequest({ timeoutMs: 20 })),
+    ).resolves.toEqual({ body: '<Ok/>', status: 200 })
   })
 })
