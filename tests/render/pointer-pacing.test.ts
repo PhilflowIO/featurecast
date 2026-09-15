@@ -36,7 +36,6 @@ import {
  * the recording did per sample. There is no material for the extra distance;
  * it can only come from time being taken away.
  */
-const CAPTURE_SIZE = { height: 1600, width: 2560 }
 const FRAME_MS = 1000 / 60
 
 function fixture(name: string): RecordEvent[] {
