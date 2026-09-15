@@ -66,7 +66,7 @@ function stubs(
     assemble: vi.fn(async () => undefined),
     checkUploadConfigured: vi.fn(),
     lines,
-    loadScript: vi.fn(async () => async () => undefined),
+    loadScript: vi.fn(async () => ({ recording: async () => undefined })),
     record: vi.fn(async (_device, outputDirectory) => ({
       capture: RECORDED_CAPTURE,
       captureDirectory: outputDirectory,
@@ -434,8 +434,35 @@ describe('importScript', () => {
     const directory = await temporaryDirectory()
     const path = join(directory, 'recording.mjs')
     await writeFile(path, 'export default async () => "ran"\n')
-    const recording = await importScript(path)
-    expect(typeof recording).toBe('function')
+    const loaded = await importScript(path)
+    expect(typeof loaded.recording).toBe('function')
+    // No setup export means no setup step, not an empty one that runs.
+    expect(loaded.prepare).toBeUndefined()
+  })
+
+  it('carries a setup step that runs before the camera rolls', async () => {
+    const directory = await temporaryDirectory()
+    const path = join(directory, 'recording-prepare.mjs')
+    await writeFile(
+      path,
+      'export const prepare = async () => "signed in"\n' +
+        'export default async () => undefined\n',
+    )
+    const loaded = await importScript(path)
+    expect(typeof loaded.prepare).toBe('function')
+    // It is the file's own function, not a wrapper: what it returns comes
+    // back, so a setup step that throws throws where the caller can see it.
+    expect(await loaded.prepare?.({} as never)).toBe('signed in')
+  })
+
+  it('ignores a `prepare` that is not a function instead of calling it', async () => {
+    const directory = await temporaryDirectory()
+    const path = join(directory, 'recording-prepare-wrong.mjs')
+    await writeFile(
+      path,
+      'export const prepare = "soon"\nexport default async () => undefined\n',
+    )
+    expect((await importScript(path)).prepare).toBeUndefined()
   })
 
   it('accepts `recording` for a file that already has a default export', async () => {
@@ -445,7 +472,32 @@ describe('importScript', () => {
       path,
       'export default 42\nexport const recording = async () => undefined\n',
     )
-    expect(typeof (await importScript(path))).toBe('function')
+    expect(typeof (await importScript(path)).recording).toBe('function')
+  })
+
+  it('hands the setup step to the recorder, not to the demo wrapper', async () => {
+    // The chain's only job with `prepare` is to carry it intact: it is a plain
+    // Playwright page function, so it must not be wrapped, paced or written to
+    // the event log. Where it runs relative to the capture is `src/session.ts`'s
+    // promise, and the recording on the box is what shows it kept.
+    const prepare = async (): Promise<void> => undefined
+    const recording = async (): Promise<void> => undefined
+    const deps = stubs({
+      loadScript: vi.fn(async () => ({ prepare, recording })),
+    })
+    await runPipeline(
+      {
+        devices: ['desktop-wide'],
+        out: 'artifacts/prepare',
+        script: 'demo/feature-xy.ts',
+        upload: false,
+      },
+      deps,
+    )
+    const recordMock = deps.record as unknown as {
+      mock: { calls: unknown[][] }
+    }
+    expect(recordMock.mock.calls[0]?.[2]).toEqual({ prepare, recording })
   })
 
   it('says what a script has to export when it exports nothing usable', async () => {

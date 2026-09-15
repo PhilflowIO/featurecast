@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -187,16 +188,52 @@ describe('the ffmpeg jobs that are left', () => {
     expect(encode.arguments).toContain('+bitexact')
   })
 
-  it('passes the encoder settings through', () => {
-    const encode = buildEncodePlan(
+  it('spells rate control the way the named encoder understands it', () => {
+    // The two scales are not interchangeable, and this is the assertion that
+    // was missing while `-crf` was written unconditionally: NVENC does not
+    // understand `-crf`, so `--encoder nvenc-h264` produced a command the GPU
+    // rejects — accepted by the CLI, dead at the far end.
+    const cpu = buildEncodePlan(
       { width: 1920, height: 1080 },
       60,
-      '/tmp/out.mp4',
-      { crf: 23, preset: 'veryfast' },
+      '/tmp/o.mp4',
+      {
+        crf: 23,
+        encoder: 'x264',
+      },
     )
-    expect(encode.arguments[encode.arguments.indexOf('-crf') + 1]).toBe('23')
-    expect(encode.arguments[encode.arguments.indexOf('-preset') + 1]).toBe(
-      'veryfast',
+    expect(cpu.arguments[cpu.arguments.indexOf('-c:v') + 1]).toBe('libx264')
+    expect(cpu.arguments[cpu.arguments.indexOf('-crf') + 1]).toBe('23')
+    expect(cpu.arguments).not.toContain('-cq')
+    expect(cpu.arguments).not.toContain('-b:v')
+
+    const gpu = buildEncodePlan(
+      { width: 1920, height: 1080 },
+      60,
+      '/tmp/o.mp4',
+      {
+        cq: 21,
+        encoder: 'nvenc-hevc',
+      },
     )
+    expect(gpu.arguments[gpu.arguments.indexOf('-c:v') + 1]).toBe('hevc_nvenc')
+    expect(gpu.arguments[gpu.arguments.indexOf('-cq') + 1]).toBe('21')
+    expect(gpu.arguments).not.toContain('-crf')
+    // `-b:v 0` is load-bearing: a non-zero bitrate overrides `-cq`.
+    expect(gpu.arguments[gpu.arguments.indexOf('-b:v') + 1]).toBe('0')
+    expect(gpu.arguments[gpu.arguments.indexOf('-rc') + 1]).toBe('vbr')
+  })
+
+  it('carries no ffmpeg codec name of its own', () => {
+    // The house rule `src/encoders.ts` states: exactly one table at the
+    // boundary to ffmpeg. This module used to hold a second one.
+    const source = readFileSync(
+      new URL('../../src/render/ffmpeg.ts', import.meta.url),
+      'utf8',
+    )
+    const body = source.slice(source.indexOf('*/', source.indexOf('/**')) + 2)
+    for (const codec of ['libx264', 'h264_nvenc', 'hevc_nvenc']) {
+      expect(body).not.toContain(`'${codec}'`)
+    }
   })
 })

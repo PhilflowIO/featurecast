@@ -45,6 +45,36 @@ describe('the render command', () => {
     )
   })
 
+  it('leaves the encoder alone unless asked, and names it when asked', () => {
+    // Nothing set means nothing overridden: the device layer's own choice
+    // survives instead of being replaced by a render-side default.
+    expect(parseArguments(['in', 'out']).options.encoder).toBeUndefined()
+    expect(
+      parseArguments(['in', 'out', '--encoder', 'nvenc-h264']).options.encoder,
+    ).toEqual({ cq: 23, encoder: 'nvenc-h264' })
+    // The quality number lands on the scale its encoder speaks — `cq` for the
+    // GPU, `crf` for the CPU — because the two are not the same number.
+    expect(
+      parseArguments([
+        'in',
+        'out',
+        '--encoder',
+        'nvenc-hevc',
+        '--quality',
+        '21',
+      ]).options.encoder,
+    ).toEqual({ cq: 21, encoder: 'nvenc-hevc' })
+    expect(
+      parseArguments(['in', 'out', '--quality', '18']).options.encoder,
+    ).toEqual({ crf: 18, encoder: 'x264' })
+  })
+
+  it('refuses an encoder it does not have, by name', () => {
+    expect(() => parseArguments(['in', 'out', '--encoder', 'libx264'])).toThrow(
+      /Unknown encoder "libx264"\. Available: nvenc-h264, nvenc-hevc, x264/,
+    )
+  })
+
   it('rejects an unknown option instead of ignoring it', () => {
     expect(() => parseArguments(['in', 'out', '--sharpen'])).toThrow(
       /Unknown option/,

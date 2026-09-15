@@ -1,4 +1,11 @@
 import { fileURLToPath } from 'node:url'
+
+import {
+  DEFAULT_ENCODER as DEFAULT_ENCODER_NAME,
+  defaultQualityFor,
+  resolveEncoder,
+  type Encoder,
+} from '../encoders.js'
 import { DEFAULT_FORMATS, type AspectName, type FormatSpec } from './format.js'
 import { renderRecording, type RenderOptions } from './render.js'
 
@@ -21,8 +28,8 @@ Options
   --idle-hold <ms>          What a trimmed stretch is compressed to (250)
   --fps <n>                 Output frame rate (60)
   --threads <n>             Composition threads (what the machine can spare)
-  --crf <n>                 x264 quality, lower is better (18)
-  --preset <name>           x264 preset (medium)
+  --encoder <name>          x264, nvenc-h264 or nvenc-hevc (x264)
+  --quality <n>             Constant quality, lower is better (23)
   --dry-run                 Write decisions and commands, skip the encode
 `
 
@@ -61,7 +68,8 @@ export function parseArguments(argv: readonly string[]): Parsed {
   const cursor: NonNullable<RenderOptions['cursor']> = {}
   const zoom: NonNullable<RenderOptions['zoom']> = {}
   const idle: NonNullable<RenderOptions['idle']> = {}
-  const encoder: NonNullable<RenderOptions['encoder']> = {}
+  let encoderName: Encoder = DEFAULT_ENCODER_NAME
+  let quality: number | undefined
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
@@ -111,13 +119,13 @@ export function parseArguments(argv: readonly string[]): Parsed {
         options.threads = readNumber(argument, next)
         index += 1
         break
-      case '--crf':
-        encoder.crf = readNumber(argument, next)
+      case '--encoder':
+        if (next === undefined) throw new Error('--encoder needs a value')
+        encoderName = resolveEncoder(next)
         index += 1
         break
-      case '--preset':
-        if (next === undefined) throw new Error('--preset needs a value')
-        encoder.preset = next
+      case '--quality':
+        quality = readNumber(argument, next)
         index += 1
         break
       case '--dry-run':
@@ -137,7 +145,18 @@ export function parseArguments(argv: readonly string[]): Parsed {
   if (Object.keys(cursor).length > 0) options.cursor = cursor
   if (Object.keys(zoom).length > 0) options.zoom = zoom
   if (Object.keys(idle).length > 0) options.idle = idle
-  if (Object.keys(encoder).length > 0) options.encoder = encoder
+  // The encoder and its quality number travel together: `-crf` and `-cq` are
+  // different scales, so a number without a name is meaningless. Naming only
+  // the encoder takes that encoder's own default.
+  if (encoderName !== DEFAULT_ENCODER_NAME || quality !== undefined) {
+    const base = defaultQualityFor(encoderName)
+    options.encoder =
+      quality === undefined
+        ? base
+        : 'crf' in base
+          ? { crf: quality, encoder: base.encoder }
+          : { cq: quality, encoder: base.encoder }
+  }
   return { captureDirectory, options, outDirectory }
 }
 
