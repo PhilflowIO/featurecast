@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createRecorder,
+  planSwipes,
   serializeEvent,
   type Demo,
   type RecordPage,
@@ -142,7 +143,12 @@ function fakePage(viewport = { height: 720, width: 1280 }) {
       move: vi.fn().mockResolvedValue(undefined),
       wheel: vi.fn().mockResolvedValue(undefined),
     },
-    touchscreen: { tap: vi.fn().mockResolvedValue(undefined) },
+    touchscreen: {
+      down: vi.fn().mockResolvedValue(undefined),
+      move: vi.fn().mockResolvedValue(undefined),
+      tap: vi.fn().mockResolvedValue(undefined),
+      up: vi.fn().mockResolvedValue(undefined),
+    },
     viewportSize: vi.fn().mockReturnValue(viewport),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
   }
@@ -151,6 +157,117 @@ function fakePage(viewport = { height: 720, width: 1280 }) {
 function runtimeFor(page: ReturnType<typeof fakePage>): RecordRuntime {
   return { run: async (_options, script) => script(page) }
 }
+
+/** The event log as objects, in order. */
+async function readEventLog(
+  directory: string,
+): Promise<Record<string, unknown>[]> {
+  return (await readFile(join(directory, 'events.jsonl'), 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+}
+
+describe('scrolling on a device with a finger', () => {
+  it('draws a path instead of leaving the finger where it last pressed', async () => {
+    // The defect this exists for: a wheel-driven scroll on a phone moved the
+    // page and nothing else, so the recording showed content sliding while
+    // the drawn finger stood in the corner it last tapped. A swipe puts the
+    // travel in the log, where the render already knows what to do with it.
+    const output = await temporaryDirectory()
+    const page = fakePage({ height: 1920, width: 1080 })
+    page.hasTouch = true
+    const record = createRecorder(runtimeFor(page))
+
+    await record({ out: output, seed: 7 }, async (_page, demo) => {
+      await demo.scroll(0, 600)
+    })
+
+    const events = await readEventLog(output)
+    const scrollIndex = events.findIndex((event) => event.type === 'scroll')
+    const after = events.slice(scrollIndex + 1)
+    const path = after.filter((event) => event.type === 'pointer')
+    expect(path.length).toBeGreaterThan(10)
+
+    // Against the scroll: the page goes down, the finger goes up. Measured
+    // from the contact point rather than from the first sample, because the
+    // path also contains the travel that brought the finger there.
+    const ys = path.map((event) => (event as { y: number }).y)
+    const contact = Math.max(...ys)
+    expect(contact - ys[ys.length - 1]!).toBeGreaterThan(500)
+
+    expect(page.touchscreen.down).toHaveBeenCalledTimes(1)
+    expect(page.touchscreen.up).toHaveBeenCalledTimes(1)
+    // The gesture the browser was given and the path the render will draw
+    // are the same path — which is the whole reason the swipe lives in the
+    // recorder and not in the renderer.
+    const dispatched = page.touchscreen.move.mock.calls.map((call) => ({
+      x: Math.round(call[0] as number),
+      y: Math.round(call[1] as number),
+    }))
+    expect(dispatched.length).toBeGreaterThan(10)
+    expect(
+      path
+        .slice(-dispatched.length)
+        .map((event) => ({ x: event.x, y: event.y })),
+    ).toEqual(dispatched)
+    // And no wheel: a phone has none.
+    expect(page.mouse.wheel).not.toHaveBeenCalled()
+  })
+
+  it('still uses the wheel where there is one', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage({ height: 1920, width: 1080 })
+    const record = createRecorder(runtimeFor(page))
+
+    await record({ out: output, seed: 7 }, async (_page, demo) => {
+      await demo.scroll(0, 600)
+    })
+
+    const events = await readEventLog(output)
+    const scrollIndex = events.findIndex((event) => event.type === 'scroll')
+    expect(
+      events.slice(scrollIndex + 1).filter((event) => event.type === 'pointer'),
+    ).toEqual([])
+    expect(page.mouse.wheel).toHaveBeenCalled()
+    expect(page.touchscreen.down).not.toHaveBeenCalled()
+  })
+})
+
+describe('planSwipes', () => {
+  const viewport = { height: 1920, width: 1080 }
+
+  it('moves the finger against the scroll, centred in the picture', () => {
+    const [leg, ...rest] = planSwipes(0, 700, viewport)
+    expect(rest).toEqual([])
+    expect(leg?.from).toEqual({ x: 540, y: 1310 })
+    // The finger ends 700px above where it started: the page scrolls down.
+    expect((leg?.from.y ?? 0) - (leg?.scroll.y ?? 0)).toBe(610)
+    // And the whole path is on screen, which is what makes it legible.
+    expect(leg?.from.y).toBeLessThan(viewport.height)
+    expect((leg?.from.y ?? 0) - (leg?.scroll.y ?? 0)).toBeGreaterThan(0)
+  })
+
+  it('splits a scroll no finger could reach in one go', () => {
+    // A finger cannot travel further than the screen. 3000px over a 1920px
+    // picture is four swipes, which is also what a person does.
+    const legs = planSwipes(0, 3000, viewport)
+    expect(legs.length).toBeGreaterThan(1)
+    const total = legs.reduce((sum, leg) => sum + leg.scroll.y, 0)
+    expect(total).toBeCloseTo(3000, 9)
+    for (const leg of legs) {
+      const endY = leg.from.y - leg.scroll.y
+      expect(leg.from.y).toBeLessThanOrEqual(viewport.height)
+      expect(endY).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('handles a horizontal scroll the same way', () => {
+    const [leg] = planSwipes(-400, 0, viewport)
+    expect(leg?.from).toEqual({ x: 340, y: 960 })
+    expect((leg?.from.x ?? 0) - (leg?.scroll.x ?? 0)).toBe(740)
+  })
+})
 
 describe('record', () => {
   it('keeps the public options free of an injected page and passes its page to the script', async () => {

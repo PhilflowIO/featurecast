@@ -7,6 +7,7 @@ import {
   writeBrowserProvenance,
 } from './browser.js'
 import { generateMotionPoints, minimumJerk } from './motion.js'
+import { recordPageFor } from './surface.js'
 
 const EVENTS_FILE_NAME = 'events.jsonl'
 /**
@@ -65,7 +66,18 @@ export type RecordPage = {
     move: (x: number, y: number, options: { steps: number }) => Promise<void>
     wheel: (deltaX: number, deltaY: number) => Promise<void>
   }
-  touchscreen: { tap: (x: number, y: number) => Promise<void> }
+  /**
+   * A tap is one press; a swipe is a press, a path and a lift, so the three
+   * phases have to be separable. Playwright's own `Touchscreen` offers only
+   * `tap`, which is why these are implemented over the debugging protocol in
+   * `src/surface.ts` rather than taken from it.
+   */
+  touchscreen: {
+    down: (x: number, y: number) => Promise<void>
+    move: (x: number, y: number) => Promise<void>
+    tap: (x: number, y: number) => Promise<void>
+    up: (x: number, y: number) => Promise<void>
+  }
   /** Mirrors Playwright's synchronous `page.viewportSize()`. */
   viewportSize: () => ViewportSize | null
   waitForTimeout: (milliseconds: number) => Promise<void>
@@ -448,6 +460,88 @@ export function createRecorder(
         deriveMotionSeed(seed, INITIAL_MOVE_INDEX, PRIMARY_MOVE_ROLE),
       )
 
+      /**
+       * Scrolling with a wheel: what a pointer device does. The page moves
+       * under a cursor that does not.
+       */
+      const performWheel = async (
+        deltaX: number,
+        deltaY: number,
+        speedPxPerSecond: number,
+      ): Promise<number> => {
+        const positions = computeScrollPositions(
+          deltaX,
+          deltaY,
+          speedPxPerSecond,
+          EVENT_LOG_FPS,
+        )
+        await paceWheel(page, positions)
+        return positions.length
+      }
+
+      /**
+       * Scrolling with a finger: what a touch device does, and the only
+       * version of it a viewer can follow.
+       *
+       * A phone has no wheel and no scrollbar, so a wheel-driven recording
+       * shows content sliding with nothing on screen to explain it — and
+       * worse, with the drawn finger parked wherever it last pressed. Here
+       * the finger travels, which means the path lands in the event log the
+       * same way pointer travel does and the render draws it without knowing
+       * anything about scrolling.
+       *
+       * The finger moves against the scroll, arrives at its contact point
+       * through the ordinary paced curve, and lifts at the end. The eased
+       * path stops at zero velocity, which is also what keeps Chromium from
+       * turning the release into a fling the recorder cannot account for.
+       */
+      const performSwipe = async (
+        deltaX: number,
+        deltaY: number,
+        speedPxPerSecond: number,
+      ): Promise<number> => {
+        const viewport = page.viewportSize() ?? DEFAULT_VIEWPORT
+        const legs = planSwipes(deltaX, deltaY, viewport)
+        let samples = 0
+        for (const leg of legs) {
+          interactionIndex += 1
+          await moveToPoint(
+            leg.from,
+            deriveMotionSeed(seed, interactionIndex, PRIMARY_MOVE_ROLE),
+          )
+          const positions = computeScrollPositions(
+            leg.scroll.x,
+            leg.scroll.y,
+            speedPxPerSecond,
+            EVENT_LOG_FPS,
+          )
+          await page.touchscreen.down(leg.from.x, leg.from.y)
+          const start = Date.now()
+          for (const [index, travelled] of positions.entries()) {
+            await sleepUntil(page, start + ((index + 1) / EVENT_LOG_FPS) * 1000)
+            const at = {
+              x: leg.from.x - travelled.x,
+              y: leg.from.y - travelled.y,
+            }
+            const dispatchedAt = Date.now()
+            await page.touchscreen.move(at.x, at.y)
+            pointer = at
+            log(
+              {
+                type: 'pointer',
+                tick: tick + samples + index,
+                x: Math.round(at.x),
+                y: Math.round(at.y),
+              },
+              dispatchedAt,
+            )
+          }
+          await page.touchscreen.up(pointer.x, pointer.y)
+          samples += positions.length
+        }
+        return samples
+      }
+
       const demo: Demo = {
         point: async (target) => {
           await moveTo(target)
@@ -530,14 +624,10 @@ export function createRecorder(
           if (!Number.isFinite(speedPxPerSecond) || speedPxPerSecond <= 0) {
             throw new Error('Scroll speed must be a positive finite number')
           }
-          const positions = computeScrollPositions(
-            deltaX,
-            deltaY,
-            speedPxPerSecond,
-            EVENT_LOG_FPS,
-          )
           log({ type: 'scroll', tick, deltaX, deltaY })
-          await paceWheel(page, positions)
+          const sampleCount = page.hasTouch
+            ? await performSwipe(deltaX, deltaY, speedPxPerSecond)
+            : await performWheel(deltaX, deltaY, speedPxPerSecond)
           // Dispatching the last wheel event is not the same as the page
           // having arrived: Chromium animates the scroll and keeps painting
           // after the input stops. Waiting for that tail here is what makes
@@ -546,7 +636,7 @@ export function createRecorder(
           const restMs = await waitForScrollRest(page)
           // Same bookkeeping as hold(): the tick axis tracks wall clock, so
           // waited time has to advance it or every later event drifts.
-          tick += positions.length + Math.ceil((restMs / 1000) * EVENT_LOG_FPS)
+          tick += sampleCount + Math.ceil((restMs / 1000) * EVENT_LOG_FPS)
           // scroll() itself doesn't know which element will be interacted
           // with next (it takes no target), so it can't settle on the
           // geometry that actually matters. resolveTarget() — called by the
@@ -715,13 +805,17 @@ const defaultRuntime: RecordRuntime = {
       const context = await browser.newContext(descriptor)
       try {
         const page = await context.newPage()
-        // Attach the resolved touch capability so the wrapper can choose
-        // between a mouse click and a tap without re-reading the descriptor.
-        const recordPage = page as unknown as RecordPage
-        recordPage.hasTouch = Boolean(
-          (descriptor as { hasTouch?: boolean }).hasTouch,
+        // The same facade the captured path builds, for the same reason: a
+        // Playwright page is not a `RecordPage`, and the two places that
+        // pretended otherwise are where the touch primitives went missing.
+        // Scale 1 — this entry point films the page directly.
+        await script(
+          recordPageFor(page.mainFrame(), page, {
+            cdp: await context.newCDPSession(page),
+            hasTouch: Boolean((descriptor as { hasTouch?: boolean }).hasTouch),
+            scale: 1,
+          }),
         )
-        await script(recordPage)
       } finally {
         await context.close()
       }
@@ -774,6 +868,60 @@ export const DEFAULT_SCROLL_SPEED_PX_PER_SECOND = 700
  * duration to satisfy this cap.
  */
 export const MAX_SCROLL_STEP_PX = 30
+
+/**
+ * How much of the viewport's shorter useful span one swipe may cross, and
+ * how much is kept clear at each edge.
+ *
+ * A finger cannot travel further than the screen it is on, so a scroll longer
+ * than that is several swipes — which is also what a person does. Six tenths
+ * rather than everything: a gesture that starts and ends at the very rim
+ * looks like a system edge-swipe, and on a real phone it would often be one.
+ */
+export const SWIPE_TRAVEL_FRACTION = 0.6
+export const SWIPE_EDGE_INSET_PX = 80
+
+export type SwipeLeg = {
+  /** Where the finger touches down, in picture pixels. */
+  from: { x: number; y: number }
+  /** How far the page scrolls during this leg. The finger moves the other way. */
+  scroll: { x: number; y: number }
+}
+
+/**
+ * Splits a scroll into the swipes that perform it.
+ *
+ * The finger moves *against* the scroll: a page that scrolls down by 700 is a
+ * finger pushing 700 upwards. Each leg is centred in the viewport, so the
+ * whole path is on screen and the gesture is legible even at the edges of the
+ * travel — a swipe whose ending leaves the picture reads as a glitch.
+ */
+export function planSwipes(
+  deltaX: number,
+  deltaY: number,
+  viewport: ViewportSize,
+): SwipeLeg[] {
+  const usableX = Math.max(1, viewport.width - 2 * SWIPE_EDGE_INSET_PX)
+  const usableY = Math.max(1, viewport.height - 2 * SWIPE_EDGE_INSET_PX)
+  const reachX = usableX * SWIPE_TRAVEL_FRACTION
+  const reachY = usableY * SWIPE_TRAVEL_FRACTION
+  const legCount = Math.max(
+    1,
+    Math.ceil(Math.abs(deltaX) / reachX),
+    Math.ceil(Math.abs(deltaY) / reachY),
+  )
+  const legScroll = { x: deltaX / legCount, y: deltaY / legCount }
+  const centre = { x: viewport.width / 2, y: viewport.height / 2 }
+  const from = {
+    x: centre.x + legScroll.x / 2,
+    y: centre.y + legScroll.y / 2,
+  }
+  return Array.from({ length: legCount }, () => ({
+    from: { x: from.x, y: from.y },
+    scroll: { x: legScroll.x, y: legScroll.y },
+  }))
+}
+
 /**
  * A minimum-jerk ease profile's peak instantaneous "velocity" (in progress
  * units) is 1.875x its average — the same ratio `motion.ts` derives for
