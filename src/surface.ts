@@ -1,4 +1,4 @@
-import type { Frame, Page } from 'playwright'
+import type { CDPSession, Frame, Page } from 'playwright'
 
 import type { LocatorLike, RecordPage } from './record.js'
 
@@ -37,6 +37,26 @@ import type { LocatorLike, RecordPage } from './record.js'
  * what they were measured as.
  */
 /**
+ * One phase of a touch gesture.
+ *
+ * Playwright's `Touchscreen` can only tap — press and release at one point —
+ * so a swipe has to be spelled out over the debugging protocol. `touchEnd`
+ * carries no point by protocol: the lift is of whatever was touching, and
+ * naming a coordinate there is rejected.
+ */
+async function touch(
+  cdp: CDPSession,
+  type: 'touchEnd' | 'touchMove' | 'touchStart',
+  x: number,
+  y: number,
+): Promise<void> {
+  await cdp.send('Input.dispatchTouchEvent', {
+    touchPoints: type === 'touchEnd' ? [] : [{ x, y }],
+    type,
+  })
+}
+
+/**
  * A Playwright `Locator` narrowed to what the recorder uses.
  *
  * The narrowing is not cosmetic. `Locator.evaluate` types its argument
@@ -61,9 +81,9 @@ function locatorFor(frame: Frame, selector: string): LocatorLike {
 export function recordPageFor(
   frame: Frame,
   page: Page,
-  options: { hasTouch: boolean; scale: number },
+  options: { cdp: CDPSession; hasTouch: boolean; scale: number },
 ): RecordPage {
-  const { hasTouch, scale } = options
+  const { cdp, hasTouch, scale } = options
   return {
     evaluate: async (pageFunction) => frame.evaluate(pageFunction),
     goto: async (url) => {
@@ -88,8 +108,17 @@ export function recordPageFor(
       },
     },
     touchscreen: {
+      down: async (x, y) => {
+        await touch(cdp, 'touchStart', x, y)
+      },
+      move: async (x, y) => {
+        await touch(cdp, 'touchMove', x, y)
+      },
       tap: async (x, y) => {
         await page.touchscreen.tap(x, y)
+      },
+      up: async (x, y) => {
+        await touch(cdp, 'touchEnd', x, y)
       },
     },
     viewportSize: () => page.viewportSize(),

@@ -7,6 +7,7 @@ import {
   buildSourceList,
   sourceFrameForOutput,
 } from '../../src/render/ffmpeg.js'
+import { cursorLookFor } from '../../src/render/cursor.js'
 import type { FormatPlan, RenderPlan } from '../../src/render/plan.js'
 
 const BASE = { x: 0, y: 0, width: 2560, height: 1440 }
@@ -29,6 +30,7 @@ function format(overrides: Partial<FormatPlan> = {}): FormatPlan {
 }
 
 const PLAN: RenderPlan = {
+  cursor: cursorLookFor('arrow'),
   frames: [
     { file: 'frame-000000.jpg', outputMs: 0 },
     { file: 'frame-000001.jpg', outputMs: 16 },

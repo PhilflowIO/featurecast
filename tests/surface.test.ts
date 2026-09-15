@@ -7,6 +7,7 @@ type Call = [string, ...unknown[]]
 /** Two spies shaped like the two objects the facade composes. */
 function doubles(): {
   calls: Call[]
+  cdp: Parameters<typeof recordPageFor>[2]['cdp']
   frame: Parameters<typeof recordPageFor>[0]
   page: Parameters<typeof recordPageFor>[1]
 } {
@@ -35,8 +36,14 @@ function doubles(): {
     viewportSize: () => ({ height: 1920, width: 1080 }),
     waitForTimeout: record('page.waitForTimeout'),
   }
+  const cdp = {
+    send: vi.fn(async (method: string, params: unknown) => {
+      calls.push(['cdp.send', method, params])
+    }),
+  }
   return {
     calls,
+    cdp: cdp as unknown as Parameters<typeof recordPageFor>[2]['cdp'],
     frame: frame as unknown as Parameters<typeof recordPageFor>[0],
     page: page as unknown as Parameters<typeof recordPageFor>[1],
   }
@@ -44,15 +51,23 @@ function doubles(): {
 
 describe('the recording surface', () => {
   it('divides wheel deltas by the scale, so a scroll means picture pixels', async () => {
-    const { calls, frame, page } = doubles()
-    const surface = recordPageFor(frame, page, { hasTouch: true, scale: 2.75 })
+    const { calls, cdp, frame, page } = doubles()
+    const surface = recordPageFor(frame, page, {
+      cdp,
+      hasTouch: true,
+      scale: 2.75,
+    })
     await surface.mouse.wheel(0, 550)
     expect(calls).toEqual([['page.mouse.wheel', 0, 200]])
   })
 
   it('leaves wheel deltas alone for a direct capture', async () => {
-    const { calls, frame, page } = doubles()
-    const surface = recordPageFor(frame, page, { hasTouch: false, scale: 1 })
+    const { calls, cdp, frame, page } = doubles()
+    const surface = recordPageFor(frame, page, {
+      cdp,
+      hasTouch: false,
+      scale: 1,
+    })
     await surface.mouse.wheel(0, 550)
     expect(calls).toEqual([['page.mouse.wheel', 0, 550]])
   })
@@ -60,8 +75,12 @@ describe('the recording surface', () => {
   it('does not scale pointer coordinates, which are already picture pixels', async () => {
     // Playwright reports element boxes in main-frame coordinates and takes
     // input there. Scaling these too would double-apply the transform.
-    const { calls, frame, page } = doubles()
-    const surface = recordPageFor(frame, page, { hasTouch: true, scale: 2.75 })
+    const { calls, cdp, frame, page } = doubles()
+    const surface = recordPageFor(frame, page, {
+      cdp,
+      hasTouch: true,
+      scale: 2.75,
+    })
     await surface.mouse.move(540, 960, { steps: 4 })
     await surface.mouse.click(540, 960)
     await surface.touchscreen.tap(540, 960)
@@ -73,8 +92,12 @@ describe('the recording surface', () => {
   })
 
   it('queries and navigates the application, not the page around it', async () => {
-    const { calls, frame, page } = doubles()
-    const surface = recordPageFor(frame, page, { hasTouch: true, scale: 2.75 })
+    const { calls, cdp, frame, page } = doubles()
+    const surface = recordPageFor(frame, page, {
+      cdp,
+      hasTouch: true,
+      scale: 2.75,
+    })
     await surface.goto('https://app.example.com/x')
     expect(await surface.evaluate(() => 'ignored')).toBe('from-the-app')
     expect(await surface.locator('#thing').evaluate(() => undefined, 0)).toBe(
@@ -83,9 +106,59 @@ describe('the recording surface', () => {
     expect(calls).toEqual([['frame.goto', 'https://app.example.com/x']])
   })
 
+  it('spells a swipe out as press, path and lift over the protocol', async () => {
+    // Playwright's Touchscreen can only tap. A lift carries no coordinate by
+    // protocol, which is the one shape of these three calls that is not
+    // obvious from the names.
+    const { calls, cdp, frame, page } = doubles()
+    const surface = recordPageFor(frame, page, {
+      cdp,
+      hasTouch: true,
+      scale: 2.75,
+    })
+    await surface.touchscreen.down(540, 1300)
+    await surface.touchscreen.move(540, 1000)
+    await surface.touchscreen.up(540, 1000)
+    expect(calls).toEqual([
+      [
+        'cdp.send',
+        'Input.dispatchTouchEvent',
+        { touchPoints: [{ x: 540, y: 1300 }], type: 'touchStart' },
+      ],
+      [
+        'cdp.send',
+        'Input.dispatchTouchEvent',
+        { touchPoints: [{ x: 540, y: 1000 }], type: 'touchMove' },
+      ],
+      [
+        'cdp.send',
+        'Input.dispatchTouchEvent',
+        { touchPoints: [], type: 'touchEnd' },
+      ],
+    ])
+  })
+
+  it('does not scale gesture coordinates either — they are picture pixels', async () => {
+    const { calls, cdp, frame, page } = doubles()
+    const surface = recordPageFor(frame, page, {
+      cdp,
+      hasTouch: true,
+      scale: 2.75,
+    })
+    await surface.touchscreen.move(540, 1000)
+    expect(calls[0]?.[2]).toEqual({
+      touchPoints: [{ x: 540, y: 1000 }],
+      type: 'touchMove',
+    })
+  })
+
   it('reports the recorded area as the viewport, not the application width', async () => {
-    const { frame, page } = doubles()
-    const surface = recordPageFor(frame, page, { hasTouch: true, scale: 2.75 })
+    const { cdp, frame, page } = doubles()
+    const surface = recordPageFor(frame, page, {
+      cdp,
+      hasTouch: true,
+      scale: 2.75,
+    })
     expect(surface.viewportSize()).toEqual({ height: 1920, width: 1080 })
   })
 })

@@ -263,6 +263,7 @@ export async function recordSession(
       const runInteractions = createRecorder(
         capturedPageRuntime(
           recordPageFor(app, page, {
+            cdp: await context.newCDPSession(page),
             hasTouch: request.device.device.hasTouch,
             scale,
           }),

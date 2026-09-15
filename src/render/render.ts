@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { DEFAULT_CURSOR_LOOK, type CursorLook } from './cursor.js'
+import type { CursorLook } from './cursor.js'
 import { parseEventLog, parseEventTimes, toTimedEvents } from './events.js'
 import {
   buildDecodePlan,
@@ -166,10 +166,8 @@ export async function renderRecording(
     'utf8',
   )
 
-  const cursorLook: Required<CursorLook> = {
-    ...DEFAULT_CURSOR_LOOK,
-    ...options.cursor,
-  }
+  // From the plan, not assembled a second time: see `RenderPlan.cursor`.
+  const cursorLook: Required<CursorLook> = plan.cursor
   const drawsCursor = plan.formats.some((format) =>
     format.frames.some((frame) => frame.cursor !== null),
   )
