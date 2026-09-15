@@ -34,12 +34,32 @@ import {
  */
 export type RecordingScript = (page: RecordPage, demo: Demo) => Promise<void>
 
+/** Setup that runs before the capture starts. See `SessionRequest.prepare`. */
+export type PrepareStep = (page: Page) => Promise<void>
+
 export type SessionRequest = {
   /** The capture settings `requireCaptureSettings` already approved. */
   capture: CaptureSettings
   device: ResolvedDevice
   /** Directory that receives `frames/`, `timestamps.json`, `browser.json`. */
   outputDirectory: string
+  /**
+   * Everything that has to happen before the camera rolls: signing in,
+   * navigating to the screen the demo is about, dismissing a cookie banner.
+   *
+   * It runs against the same page the capture will attach to, but *outside*
+   * the capture window, so none of it reaches the video. Without it a
+   * recording of any real application opens on its login screen — and the
+   * pointer travel of the sign-in clicks is recorded too, which is worse,
+   * because those are seconds of a cursor moving through a screen the video
+   * is not about.
+   *
+   * It is deliberately a plain Playwright `Page` and not the `demo` wrapper:
+   * nothing here is being demonstrated, so nothing here should be smoothed,
+   * paced or written to the event log. `demo`'s pointer travel is a feature
+   * of the recording, and setup is not part of the recording.
+   */
+  prepare?: PrepareStep
   recording: RecordingScript
   seed: number
   settleTimeoutMs?: number
@@ -125,6 +145,10 @@ export async function recordSession(
     })
     try {
       const page = await context.newPage()
+      // Before the capture, not inside it. `captureScreencast` starts
+      // recording the moment it is called, so anything that must not appear
+      // in the video has to be finished by now.
+      if (request.prepare !== undefined) await request.prepare(page)
       const runInteractions = createRecorder(
         capturedPageRuntime(page, request.device.device.hasTouch),
       )

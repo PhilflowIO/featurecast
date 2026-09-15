@@ -1,22 +1,35 @@
 import { join, resolve } from 'node:path'
 
+import {
+  DEFAULT_OUTPUT_QUALITY,
+  encoderProfile,
+  qualityNumber,
+  type OutputQuality,
+} from '../encoders.js'
+
 import type { RenderPlan } from './plan.js'
 
 import type { Size } from './geometry.js'
 
-export type EncoderOptions = {
-  /** x264 constant-rate factor. Lower is better and bigger. */
-  crf?: number
-  preset?: string
-  /** Encoder name. NVENC on the 3090 box is issue #7, not this milestone. */
-  videoCodec?: string
-}
+/**
+ * Which encoder and at what quality — the same value the device layer carries
+ * and the assemble stage already speaks.
+ *
+ * **This module used to name ffmpeg itself.** It exported its own
+ * `DEFAULT_ENCODER` holding `videoCodec: 'libx264'` and `crf: 18`, against
+ * `src/encoders.ts`'s `DEFAULT_ENCODER` of `'x264'` and a quality of 23 — the
+ * same exported name, a different type, and two answers to one question. The
+ * consequence was not cosmetic: `-crf` was written unconditionally, and NVENC
+ * does not understand `-crf`. `--encoder nvenc-h264` would have been accepted
+ * by the chain and produced a command the GPU rejects.
+ *
+ * `src/encoders.ts` states the house rule this now follows: featurecast's own
+ * names in every interface, exactly one table at the boundary to ffmpeg, and
+ * nothing else in the repository carrying an ffmpeg codec string.
+ */
+export type EncoderOptions = OutputQuality
 
-export const DEFAULT_ENCODER: Required<EncoderOptions> = {
-  crf: 18,
-  preset: 'medium',
-  videoCodec: 'libx264',
-}
+export const DEFAULT_ENCODER: OutputQuality = DEFAULT_OUTPUT_QUALITY
 
 /**
  * The list of source frames to decode, in capture order, each exactly once.
@@ -148,9 +161,10 @@ export function buildEncodePlan(
   output: Size,
   fps: number,
   outputPath: string,
-  encoder: EncoderOptions = {},
+  quality: OutputQuality = DEFAULT_ENCODER,
 ): FfmpegPlan {
-  const { crf, preset, videoCodec } = { ...DEFAULT_ENCODER, ...encoder }
+  const { field, value } = qualityNumber(quality)
+  const profile = encoderProfile(quality.encoder)
   return {
     arguments: [
       '-hide_banner',
@@ -172,11 +186,17 @@ export function buildEncodePlan(
         'setparams=range=tv:colorspace=bt709:color_primaries=bt709:' +
         'color_trc=bt709',
       '-c:v',
-      videoCodec,
-      '-crf',
-      String(crf),
-      '-preset',
-      preset,
+      profile.ffmpegCodec,
+      // Rate control spelled out per family, from the same table
+      // `src/assemble.ts` reads. NVENC needs three flags rather than one:
+      // its own default is a bitrate target, which a dense scrolling
+      // screencast starves, and `-b:v 0` is load-bearing because a non-zero
+      // bitrate overrides `-cq`. `-preset` is gone — `medium` was libx264's
+      // own default, so saying it changed nothing, and on the NVENC path the
+      // word means something else entirely.
+      ...(profile.family === 'nvenc'
+        ? ['-rc', 'vbr', `-${field}`, String(value), '-b:v', '0']
+        : [`-${field}`, String(value)]),
       '-pix_fmt',
       'yuv420p',
       '-color_range',

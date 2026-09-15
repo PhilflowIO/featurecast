@@ -11,7 +11,7 @@ import {
 } from './devices.js'
 import { defaultQualityFor, type Encoder } from './encoders.js'
 import { assertCaptureSupported, recordSession } from './session.js'
-import type { RecordingScript } from './session.js'
+import type { PrepareStep, RecordingScript } from './session.js'
 import { uploadFile, resolveUploadConfig } from './upload.js'
 
 /**
@@ -26,7 +26,22 @@ import { uploadFile, resolveUploadConfig } from './upload.js'
 /** The shape a recording script has to export to be runnable by name. */
 export const SCRIPT_EXPORT_NAMES = ['default', 'recording'] as const
 
-export type ScriptLoader = (path: string) => Promise<RecordingScript>
+/**
+ * What a script file yields: the recording itself, and optionally everything
+ * that has to be true before the camera rolls.
+ *
+ * `prepare` is a second, optional export under that name. It runs against the
+ * page the capture will attach to but outside the capture window, so a
+ * sign-in, a navigation or a dismissed banner does not open the video — nor
+ * does the pointer travel of those clicks, which is the part that actually
+ * ruins a recording of a real application.
+ */
+export type LoadedScript = {
+  prepare?: PrepareStep
+  recording: RecordingScript
+}
+
+export type ScriptLoader = (path: string) => Promise<LoadedScript>
 
 export type DeviceOutcome =
   | {
@@ -73,7 +88,7 @@ export type PipelineDependencies = {
   record: (
     device: ResolvedDevice,
     outputDirectory: string,
-    recording: RecordingScript,
+    script: LoadedScript,
     seed: number,
   ) => Promise<{ capture: CaptureSettings; captureDirectory: string }>
   report: (line: string) => void
@@ -95,9 +110,16 @@ export const importScript: ScriptLoader = async (path) => {
     string,
     unknown
   >
+  const prepare = module_['prepare']
   for (const name of SCRIPT_EXPORT_NAMES) {
     const candidate = module_[name]
-    if (typeof candidate === 'function') return candidate as RecordingScript
+    if (typeof candidate !== 'function') continue
+    return {
+      recording: candidate as RecordingScript,
+      ...(typeof prepare === 'function'
+        ? { prepare: prepare as PrepareStep }
+        : {}),
+    }
   }
   throw new Error(
     `"${path}" exports no recording function. Export one as \`default\` or \`recording\`: ` +
@@ -138,14 +160,15 @@ const DEFAULT_DEPENDENCIES: PipelineDependencies = {
     resolveUploadConfig(process.env)
   },
   loadScript: importScript,
-  record: async (device, outputDirectory, recording, seed) => {
+  record: async (device, outputDirectory, script, seed) => {
     const capture = prepareCapture(device)
     const session = await recordSession({
       capture,
       device,
       outputDirectory,
-      recording,
+      recording: script.recording,
       seed,
+      ...(script.prepare === undefined ? {} : { prepare: script.prepare }),
     })
     return { capture, captureDirectory: session.captureDirectory }
   },
@@ -207,15 +230,13 @@ export async function runPipeline(
     )
   }
   if (request.upload) deps.checkUploadConfigured()
-  const recording = await deps.loadScript(request.script)
+  const script = await deps.loadScript(request.script)
   const stem = scriptStem(request.script)
   const seed = request.seed ?? 1
 
   const outcomes: DeviceOutcome[] = []
   for (const device of request.devices) {
-    outcomes.push(
-      await runOneDevice(deps, request, recording, device, stem, seed),
-    )
+    outcomes.push(await runOneDevice(deps, request, script, device, stem, seed))
   }
   for (const outcome of outcomes) {
     deps.report(formatOutcome(outcome))
@@ -229,7 +250,7 @@ export async function runPipeline(
 async function runOneDevice(
   deps: PipelineDependencies,
   request: RunRequest,
-  recording: RecordingScript,
+  script: LoadedScript,
   device: string,
   stem: string,
   seed: number,
@@ -252,7 +273,7 @@ async function runOneDevice(
 
   let recorded: { capture: CaptureSettings; captureDirectory: string }
   try {
-    recorded = await deps.record(resolved, directory, recording, seed)
+    recorded = await deps.record(resolved, directory, script, seed)
   } catch (error) {
     return { device, kind: 'failed', reason: messageOf(error), stage: 'record' }
   }

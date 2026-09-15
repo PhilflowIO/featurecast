@@ -358,7 +358,7 @@ describe('rendering a recording end to end', () => {
     const out = await scratch('featurecast-idle-')
     const result = await renderRecording(capture, out, {
       formats: [{ aspect: '16:9', desired: { width: 640, height: 360 } }],
-      encoder: { crf: 0, preset: 'ultrafast' },
+      encoder: { crf: 0, encoder: 'x264' },
     })
 
     // The capture is 1500ms of stillness plus a second of motion; the trimmer
@@ -466,7 +466,7 @@ describe('rendering a recording end to end', () => {
     // the portrait strip that is copied 1:1 go through different code paths in
     // the compositor, and only one of them used to be checked.
     const result = await renderRecording(capture, out, {
-      encoder: { crf: 0, preset: 'ultrafast' },
+      encoder: { crf: 0, encoder: 'x264' },
     })
     expect(result.plan.formats).toHaveLength(3)
 
