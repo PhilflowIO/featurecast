@@ -7,7 +7,7 @@ RTX 3090 box from the real UI of the recorded application.
 ## The owner watched it
 
 Verdict: **vertical scrolling is smooth, horizontal scrolling visibly
-hitches, reproducibly.** That is the acceptance criterion of issue #2 ("the
+hitches, reproducibly.** That is the acceptance criterion of issue 2 ("the
 result is watched"), and it fails.
 
 The comparison against a Screen Studio recording of the same UI was **not**
@@ -58,8 +58,8 @@ M1's pipeline — oversized capture, real timestamps, assembly to constant
 efficiency gate — is sound and stays. **The frame source underneath it has to
 change.** The capture path moves off the real-time CDP screencast; the
 measured candidates and the decision are tracked in the follow-up issue
-referenced from #2.
+referenced from ticket 2.
 
-This document records the visual verdict. It does not close #2: the milestone
+This document records the visual verdict. It does not close ticket 2: the milestone
 is accepted only when a recording of the same UI, through the new frame
 source, passes the same gate and is watched again.

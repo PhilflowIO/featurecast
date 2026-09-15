@@ -7,9 +7,9 @@ Nur der Browser variiert:
 
   cSTOCK  Playwright-Bundle (Standard-Chromium)
   cUNP    selbst gebaut 153.0.8010.12, ungepatcht
-  cPAT    selbst gebaut 153.0.8010.12, beide Patches (#17)
+  cPAT    selbst gebaut 153.0.8010.12, beide Patches (Ticket 17)
 
-Die Zuordnung Lauf -> Browser stammt aus dem Lauf selbst und ist in #23 und
+Die Zuordnung Lauf -> Browser stammt aus dem Lauf selbst und ist in Ticket 23 und
 docs/JOURNEY.md belegt (Aufnahme-Ausbeute 84,4 / 79,1 / 98,2 %).
 
 Was hier passiert: das fertige `output.mp4` wird mit DIESEM Werkzeug

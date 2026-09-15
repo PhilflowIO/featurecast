@@ -5,7 +5,7 @@ Date: 2026-09-15. Run on the RTX 3090 box, patched Chromium, container
 
 Everything below is **measured** — a command ran and its output is quoted —
 except the one line marked otherwise. The owner's verdict on how it _looks_ is
-not here, because it has not been given yet; that line is what closes #5.
+not here, because it has not been given yet; that line is what closes ticket 5.
 
 ## What ran
 
@@ -20,7 +20,7 @@ between two interactions this application does not change a pixel. The pointer
 moves at 60Hz anyway, because the renderer draws it from the event log rather
 than reading it out of the picture.
 
-## The three criteria of #5
+## The three criteria of ticket 5
 
 **Three formats out of one raw material, without a second browser run.** One
 render call, 16.6s wall clock, three files. `ffprobe` on each: constant 60fps,

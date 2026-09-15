@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { record, type BoundingBox } from '../src/record.js'
 
 /**
- * Issue #12 acceptance against a real headless Chromium. Every case here
+ * Issue 12 acceptance against a real headless Chromium. Every case here
  * is one the settle criterion has to get right *and* has been measured
  * getting wrong before: a finite animation that must settle in about its
  * own duration rather than a multiple of it, an asymmetric animation whose

@@ -95,16 +95,16 @@ def aus_lauf(lauf_verzeichnis: str | Path, fps: float, px_faktor: float,
        (|delta| in `scrollContainerToEdge`, src/m1-benchmark.ts). Das ist
        die richtige Zahl, und sie wird bevorzugt.
     2. `target`, z.B. "div.grid (x range 180px)" -- die volle Scrollweite
-       des Behaelters. Rueckfall fuer Laeufe, die vor #31 aufgenommen
+       des Behaelters. Rueckfall fuer Laeufe, die vor Ticket 31 aufgenommen
        wurden und `travelPx` noch nicht schreiben (dazu gehoeren die
        eingecheckten Browser-Arm-Fixtures).
 
     Warum die Reihenfolge so ist: beide Zahlen stimmen nur ueberein, solange
     ein Fenster von Kante zu Kante faehrt. `invoices:scroll-up` tut das
     nicht -- der Behaelter steht beim Oeffnen des Fensters rund 85
-    Aufnahmepixel unter `range` (#47), und der Streckenabgleich hat deshalb
+    Aufnahmepixel unter `range` (Ticket 47), und der Streckenabgleich hat deshalb
     in allen sechs gemessenen Laeufen 274-276 gegen 342 px gemeldet, obwohl
-    das Fenster genau so weit gefahren ist, wie ihm gesagt wurde (#31).
+    das Fenster genau so weit gefahren ist, wie ihm gesagt wurde (Ticket 31).
     Die Toleranz bleibt unveraendert; korrigiert wird die Erwartung, nicht
     die Schranke.
     """

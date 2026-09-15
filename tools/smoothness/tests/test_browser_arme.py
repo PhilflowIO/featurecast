@@ -1,6 +1,6 @@
 """Die Reihenfolge der drei Browser-Arme -- am echten Material festgenagelt.
 
-Das ist die Abnahmepruefung aus #29 (Kriterium 1 und 5) und #30
+Das ist die Abnahmepruefung aus Ticket 29 (Kriterium 1 und 5) und Ticket 30
 (Kriterium 3): das Geraet muss die drei Arme so ordnen, wie der Owner sie am
 2026-09-12 unaufgefordert beurteilt hat.
 
@@ -10,7 +10,7 @@ Das ist die Abnahmepruefung aus #29 (Kriterium 1 und 5) und #30
 
 Bedingungen:
   MUTATION         die erste Fassung des Geraets ordnete genau diese Daten
-                   falsch herum (#29); der Test prueft, dass die blosse
+                   falsch herum (Ticket 29); der Test prueft, dass die blosse
                    Haker-Zahl es weiterhin taete (Erreichbarkeit), und die
                    Mutationsprobe der PR baut die Schwere zurueck.
   ERREICHBARKEIT   `werte_aus` ist derselbe Weg, den `analysiere` nach dem
@@ -101,7 +101,7 @@ def test_das_geraet_ordnet_die_arme_wie_das_auge(berichte):
 
 
 def test_die_blosse_haker_zahl_ordnet_diese_daten_falsch(berichte):
-    """Erreichbarkeit: der Defekt aus #29 steckt wirklich in diesem Material.
+    """Erreichbarkeit: der Defekt aus Ticket 29 steckt wirklich in diesem Material.
     Auf den Rechts-Scrolls hat der gepatchte Arm MEHR Haker als der
     Standard-Browser -- ein Urteil nach Anzahl kaeme falsch herum heraus."""
     def haker_rechts(arm: str) -> int:
@@ -121,7 +121,7 @@ def test_die_riesenspruenge_heissen_teleport_und_nur_dort(berichte):
 
 
 def test_sortier_fenster_bekommen_am_echten_material_kein_urteil(berichte):
-    """#28 am echten Material: jedes Sortier-Fenster wird zurueckgehalten, und
+    """Ticket 28 am echten Material: jedes Sortier-Fenster wird zurueckgehalten, und
     kein zurueckgehaltenes Fenster traegt eine Haker-Zahl."""
     for arm, b in berichte.items():
         sortier = [w for w in b["fenster"] if ":sort-" in w["fenster"]]
@@ -140,7 +140,7 @@ def test_sortier_fenster_bekommen_am_echten_material_kein_urteil(berichte):
 
 
 def test_die_alten_arme_haben_keine_gefahrene_strecke_und_laufen_trotzdem(berichte):
-    """Der Rueckfallpfad aus #31, am echten Altmaterial.
+    """Der Rueckfallpfad aus Ticket 31, am echten Altmaterial.
 
     Diese drei Laeufe sind vom 2026-09-12 und schreiben `travelPx` noch
     nicht. Sie muessen weiter beurteilt werden -- ueber die volle

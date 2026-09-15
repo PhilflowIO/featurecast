@@ -12,7 +12,7 @@ neue Quote, die ihren Nenner vergisst, faellt hier auf, ohne dass jemand
 diesen Test anfassen muss.
 
 Beide Tests laufen ueber den PRODUKTPFAD (Fenster mit Sollstrecke aus der
-Wahrheitsdatei): ohne Sollstrecke gibt es seit #28 kein Urteil, und ein
+Wahrheitsdatei): ohne Sollstrecke gibt es seit Ticket 28 kein Urteil, und ein
 verweigertes Fenster fuehrt die Haker- und Wiederholungsquoten gar nicht erst
 -- der Test haette sie dann nie gesehen.
 """

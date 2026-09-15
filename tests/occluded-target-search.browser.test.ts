@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { record } from '../src/record.js'
 
 /**
- * Issue #13 acceptance against a real headless Chromium: the point search
+ * Issue 13 acceptance against a real headless Chromium: the point search
  * must find a genuinely free band wherever it sits and however narrow it
  * is, on a small target and on a full-screen hero alike. The unit tests in
  * record.test.ts prove the search's geometry against a predicate; these

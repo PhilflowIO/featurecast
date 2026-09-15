@@ -13,7 +13,7 @@ import {
 import { recordSession } from '../src/session.js'
 
 /**
- * The acceptance of issue #9: an interaction in the log has to sit on the
+ * The acceptance of issue 9: an interaction in the log has to sit on the
  * frame that shows it, and it has to keep sitting there after the recording
  * has spent real time doing something the log knows nothing about.
  *
@@ -160,7 +160,7 @@ describe('one clock for the frames and the events', () => {
       expect(firstLatency).toBeLessThan(500)
       expect(secondLatency).toBeLessThan(500)
 
-      // The defect #9 closes, stated as a number: three seconds of unlogged
+      // The defect ticket 9 closes, stated as a number: three seconds of unlogged
       // waiting must not move the second click relative to its own frame.
       expect(Math.abs(secondLatency - firstLatency)).toBeLessThan(4 * FRAME_MS)
 

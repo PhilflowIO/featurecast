@@ -21,7 +21,7 @@ them; it says what happened, in order, and which issue holds the detail.
 The owner watched `artifacts/m1-008/output.mp4`, recorded from the real UI
 of the recorded application on the RTX 3090 box. Verdict: **vertical scrolling is smooth,
 horizontal scrolling visibly hitches, reproducibly.** That is the acceptance
-criterion of #2, and it failed. Full reasoning in
+criterion of ticket 2, and it failed. Full reasoning in
 [`M1-VERDICT.md`](./M1-VERDICT.md).
 
 Two things were already clear and have survived everything since:
@@ -40,7 +40,7 @@ Measurement concentrated on _capture efficiency_: of the frames Chromium put
 on screen, how many did we receive. The number hovered around 80–86 % and
 would not move. Enormous effort went into explaining an 18 % loss.
 
-Two mechanisms were found and are real (detail in #17):
+Two mechanisms were found and are real (detail in ticket 17):
 
 1. **Chromium's `AnimatedContentSampler`** locks onto one damage rectangle
    after ~1 s of animation and refuses frames whose rectangle differs, for up
@@ -80,9 +80,9 @@ plainly because it has now happened twice with the same shape:
 In both cases the project's own green test suite passed. In both cases the
 thing that caught the error was an **external anchor**: a bound that does not
 come from the same calculation it is checking. That lesson is now a
-requirement on every instrument this project builds (#24).
+requirement on every instrument this project builds (ticket 24).
 
-> **Superseded:** earlier comments on #17 and #21 quote **86.7 %** for the
+> **Superseded:** earlier comments on ticket 17 and ticket 21 quote **86.7 %** for the
 > right-scroll. That figure comes from the broken `paint-rate` denominator.
 > Percentages measured against the old denominator are comparable _among
 > themselves_ — the Playwright ↔ unpatched ↔ patched comparison used one
@@ -91,7 +91,7 @@ requirement on every instrument this project builds (#24).
 
 ---
 
-## 2026-09-12 — the capture clock (#21, merged as #22)
+## 2026-09-12 — the capture clock (ticket 21, merged as ticket 22)
 
 Screencast frame timestamps sometimes step backwards. The assembler clamped a
 backwards timestamp forward onto its predecessor, which produced 37–42
@@ -103,14 +103,14 @@ through the real production chain.
 Fixed by sorting on capture order instead of clamping; confirmed at the pixel
 level (12:0 in favour of capture-order sorting).
 
-Still open on #21, deliberately: **re-basing the timeline onto Chromium's real
+Still open on ticket 21, deliberately: **re-basing the timeline onto Chromium's real
 presentation times is rejected but _unproven_**. The counter-experiment that
 rejected it had a bug of its own and lost 40 frames before the encoder ran.
 The lever is open; it was simply not the question at hand.
 
 ---
 
-## 2026-09-12 — the correction that invalidated three days of numbers (#23)
+## 2026-09-12 — the correction that invalidated three days of numbers (ticket 23)
 
 Two sets of runs, same source revision, same machine, reported **80–82 %** and
 **98–99 %** capture efficiency. Both were believed to be the patched build.
@@ -138,7 +138,7 @@ Fresh serial runs, same revision, same docker line, only the browser varying:
 The process defect behind it is worse than the wasted effort: **no artifact
 records which browser produced a run.** A set-but-ignored environment variable
 is invisible. Reconstructing provenance afterwards took forensic
-fingerprinting where one log line would have done. That is what #23 fixes.
+fingerprinting where one log line would have done. That is what ticket 23 fixes.
 
 ---
 
@@ -166,7 +166,7 @@ watches.
 
 ---
 
-## 2026-09-12 — the residual, and a live hypothesis (#25)
+## 2026-09-12 — the residual, and a live hypothesis (ticket 25)
 
 On the patched build the capture chain is no longer losing the right-scroll:
 Chromium presents ~38 frames/s there and we receive 100 % of them, verified
@@ -201,11 +201,11 @@ of 12 runs unanalysed.
 
 ---
 
-## 2026-09-12 — an instrument that looks at the artifact (#24)
+## 2026-09-12 — an instrument that looks at the artifact (ticket 24)
 
 Every number above except the pixel measurements is a counter _inside_ the
 capture chain. None of them looks at the MP4 the owner judges. That gap is
-what #24 closes: an instrument that measures motion smoothness on the finished
+what ticket 24 closes: an instrument that measures motion smoothness on the finished
 video.
 
 Its design is shaped entirely by this project's own history of wrong
@@ -243,7 +243,7 @@ named set of knobs, printable, not scattered through the code.
 
 ---
 
-## 2026-09-13 — the instrument ranked the arms backwards (#28, #29)
+## 2026-09-13 — the instrument ranked the arms backwards (ticket 28, ticket 29)
 
 The first run of the instrument across all three browser arms exposed two
 defects in its _summary_, not in its measurement:
@@ -251,12 +251,12 @@ defects in its _summary_, not in its measurement:
 - **Sort windows got a hitch.** The table re-renders, nothing slides, and the
   travel-distance bound had no expected value. "Not checked" was treated as
   "passed" and a direction was inferred from exactly 0 px. Now an unchecked
-  bound withholds the verdict just as a broken one does (#28). On real runs
+  bound withholds the verdict just as a broken one does (ticket 28). On real runs
   that leaves 10 of 38 windows judged — the report now says so up front.
 - **The hitch count ordered the arms the wrong way round.** The stock browser
   teleports the whole horizontal travel in one frame and got _one_ hitch; the
   patched build got _two_. The count records that something happened, never
-  how bad (#29). Verdicts now carry the largest step in _even steps_ (expected
+  how bad (ticket 29). Verdicts now carry the largest step in _even steps_ (expected
   travel ÷ frame pairs, both from `motion-windows.json`), and a frame that
   delivers half the travel is called a teleport.
 
@@ -280,15 +280,15 @@ speed; and the instrument held a whole run in memory (over 9 GB), so the arms
 could not be re-measured on the workstation at all. Both fixed. The re-measured
 frame pairs match the earlier measurement exactly, 12,359 of 12,359.
 
-Still open: the threshold itself is not calibrated against the eye (#30), and
+Still open: the threshold itself is not calibrated against the eye (ticket 30), and
 `invoices:scroll-up` misses its travel bound by the same ~20 % in all six
-instances — systematic, unexplained (#31).
+instances — systematic, unexplained (ticket 31).
 
 ---
 
-## 2026-09-14 — the provenance record that recorded nothing (#23, #36)
+## 2026-09-14 — the provenance record that recorded nothing (ticket 23, ticket 36)
 
-#23's fix was merged two days ago and had never launched a browser: the box
+ticket 23's fix was merged two days ago and had never launched a browser: the box
 was unreachable and the CI runner takes no jobs. Run on the box, the
 mechanism holds. Playwright's Chromium is a **direct child** of the node
 process in the measurement container, so `/proc/<pid>/exe` identifies it and
@@ -302,7 +302,7 @@ Three refusals, each with its own message, all reproduced in the container:
 with the "set but empty" message rather than falling back; and a wrapper
 script that execs a different binary is caught after launch — `Requested
 browser /fake-chrome (CHROME_BIN) but the running browser is
-/ms-playwright/.../chrome-headless-shell`. That last one is the #23 incident
+/ms-playwright/.../chrome-headless-shell`. That last one is the ticket 23 incident
 itself, provoked on purpose.
 
 Nine runs through the product entry point, three arms interleaved per
@@ -319,29 +319,29 @@ The ordering matches the 2026-09-12 table; the spread narrowed (the earlier
 
 **And the acceptance found what the fix still missed.** Both self-built arms
 mount their build at `/crbuild/chrome` and both report `Chromium
-153.0.8010.12`, so path plus version — everything #23 asked for — named the
+153.0.8010.12`, so path plus version — everything ticket 23 asked for — named the
 patched and the unpatched browser identically, while their capture efficiency
 differed by 16 points. A provenance record that cannot separate the two arms
 of the experiment it exists for is not a record. `browser.json` now carries a
-SHA-256 over the running binary's bytes (#36); the two arms come out as
+SHA-256 over the running binary's bytes (ticket 36); the two arms come out as
 `ed29ff73…` and `fdb37b22…`, matching the host's own `sha256sum`.
 
 Also standing: `demo/m1-capture.ts` ends in a hard error on the bundle and on
 the unpatched build, because capture efficiency below 95 % is a failure by
 design. That is the floor doing its job, not a broken run.
 
-The full Vitest suite ran on the box for the first time since #34/#35: 23
+The full Vitest suite ran on the box for the first time since ticket 34/ticket 35: 23
 files, 205 tests, green — including the five browser-driving suites. A second
 run of the same suite was red in exactly one case, and re-running that file
 alternates pass and fail: the scroll-rate floor of 50 distinct positions per
 second sits inside the measurement's own spread (47.3-50+), so it says nothing
-either way (#38).
+either way (ticket 38).
 
 ---
 
-## 2026-09-14 — the pacing fix held its tick and made the hitch worse (#25, #40, #42)
+## 2026-09-14 — the pacing fix held its tick and made the hitch worse (ticket 25, ticket 40, ticket 42)
 
-The input pacing from #35 does what it claims: the same scroll travel now
+The input pacing from ticket 35 does what it claims: the same scroll travel now
 takes 20 frame pairs instead of 23. What it does not do is remove the
 hitch.
 
@@ -355,7 +355,7 @@ travel was never lost — the same runs show the full 171.8 px when the
 instrument decomposes the motion itself. A scroll now returns when the page
 has stopped moving, observed by listening for `scroll` events rather than
 polling offsets, because polling is main-thread work during the capture
-being measured (#40).
+being measured (ticket 40).
 
 The second correction is a lesson about this suite. That fix shipped with
 two test files run, not the suite; `tests/tsx-pipeline.test.ts` exists
@@ -363,15 +363,15 @@ precisely because Vitest transforms without `keepNames` while `tsx` does
 not, and a named function inside a `page.evaluate` payload therefore dies
 in production and nowhere else. Every real run crashed on
 `ReferenceError: __name is not defined` while the browser suites stayed
-green (#42). **For `src/record.ts`, the whole suite on the box is the gate,
+green (ticket 42). **For `src/record.ts`, the whole suite on the box is the gate,
 not a selection.**
 
 With both arms carrying the window fix, three interleaved repetitions each:
 
-| Arm        | hitches per window | worst jump, median | worst jump, max |
-| ---------- | ------------------ | ------------------ | --------------- |
-| before #35 | mostly 2           | 4.70 even steps    | 5.70            |
-| after #35  | mostly 1           | **6.60**           | **12.10**       |
+| Arm              | hitches per window | worst jump, median | worst jump, max |
+| ---------------- | ------------------ | ------------------ | --------------- |
+| before ticket 35 | mostly 2           | 4.70 even steps    | 5.70            |
+| after ticket 35  | mostly 1           | **6.60**           | **12.10**       |
 
 Fewer disturbances, much heavier ones. Measured independently of the
 instrument (phase correlation straight off the video), the after-arm puts
@@ -379,14 +379,14 @@ instrument (phase correlation straight off the video), the after-arm puts
 directions; the before-arm's worst is 31 px and only at the start. The
 owner watched both recordings at normal speed and ruled: "A ist nur am
 Anfang ruckelig einmal, sonst ist A aber viel besser. B ruckelt zurück ja
-auch komplett." So #35's pacing gets reverted and the window fix stays.
+auch komplett." So ticket 35's pacing gets reverted and the window fix stays.
 
 Two things worth keeping from this. The hitch **count** favoured the arm
-the eye rejected; only severity got it right, which is the #28/#29
+the eye rejected; only severity got it right, which is the ticket 28/ticket 29
 decision confirmed on real material. And "ruckelt zurück" is not backwards
 motion — there is no step against the direction of travel in either arm.
 It is one jump big enough to read as a teleport, which is the first
-calibration bracket the eye has ever given this project (#30): ~5 even
+calibration bracket the eye has ever given this project (ticket 30): ~5 even
 steps is tolerated, ~12 is unusable.
 
 The cause of the hitch is therefore still open, and the compositor
@@ -394,7 +394,7 @@ suspicion above is what is left.
 
 ---
 
-## 2026-09-14, night — the revert, measured (#45, #25)
+## 2026-09-14, night — the revert, measured (ticket 45, ticket 25)
 
 The owner's verdict was a verdict on a video. Reverting on that alone
 would have left the project with a decision it could not defend six
@@ -403,16 +403,16 @@ been: three interleaved repetitions per arm on the patched build against
 the same live application, alternating so the application's own drift
 hits both arms equally.
 
-| Arm                      | worst jump, median | worst jump, max | hitch events |
-| ------------------------ | ------------------ | --------------- | ------------ |
-| revert (new)             | **3.59**           | **5.94**        | 61           |
-| after #35 (new, control) | 6.61               | 13.80           | 105          |
-| before #35 (2026-09-14)  | 4.54               | 5.66            | 57           |
-| after #35 (2026-09-14)   | 6.58               | 12.08           | 94           |
+| Arm                            | worst jump, median | worst jump, max | hitch events |
+| ------------------------------ | ------------------ | --------------- | ------------ |
+| revert (new)                   | **3.59**           | **5.94**        | 61           |
+| after ticket 35 (new, control) | 6.61               | 13.80           | 105          |
+| before ticket 35 (2026-09-14)  | 4.54               | 5.66            | 57           |
+| after ticket 35 (2026-09-14)   | 6.58               | 12.08           | 94           |
 
-The revert lands in the band of the old before-#35 arm. What makes the
+The revert lands in the band of the old before-ticket 35 arm. What makes the
 two campaigns comparable at all is the **control arm carried along**:
-re-running the after-#35 build today reproduces its own earlier numbers.
+re-running the after-ticket 35 build today reproduces its own earlier numbers.
 Without it, every difference could equally have been a change in the
 application.
 
@@ -451,29 +451,29 @@ wheel event, whatever its delta, so the tail is ~330 ms however the
 wheels arrived. The protected assertion and its bound are unchanged.
 
 This is the third time in this project that a green suite was hiding
-behind a measurement device that could not move (#38, #42, and now this)
+behind a measurement device that could not move (ticket 38, ticket 42, and now this)
 — and the second time the **full** suite on the box was what caught it.
 
 ### The honest gap
 
 A mutation probe shows that **no test in the suite dies** if the
 deadline in the wheel pacing is removed outright. The behaviour restored
-here is not test-covered — it was not covered before #35 either. The
+here is not test-covered — it was not covered before ticket 35 either. The
 evidence that it is better comes from the measurement, not from the
 suite.
 
 ---
 
-## 2026-09-14, night — a target distance that was never the target (#31, #47)
+## 2026-09-14, night — a target distance that was never the target (ticket 31, ticket 47)
 
 `invoices:scroll-up` had been failing its distance bound in all six
 measured cases, always by the same ~20 %, while its sibling scroll-down
-held to 1 %. The suspicion was that #40 — the motion window that ended
+held to 1 %. The suspicion was that ticket 40 — the motion window that ended
 with the input rather than with the motion — explained it too.
 
 It does not, and the fixtures were enough to prove that without a
 browser: after the up-window, 0.7 px of motion remain. There is no
-truncated tail for #40's fix to recover; the upward motion really is
+truncated tail for ticket 40's fix to recover; the upward motion really is
 shorter.
 
 The defect was in the expectation, not the measurement. The recording
@@ -491,7 +491,7 @@ feeling. **The 10 % bound was not touched**, and runs without the new
 field — including the checked-in browser-arm fixtures — still fall back
 to the old number and say so in their provenance.
 
-The residual 85 px is a finding of its own (#47): the recording does not
+The residual 85 px is a finding of its own (ticket 47): the recording does not
 return to its starting state, so repetition 2 begins somewhere
 repetition 1 did not. For a tool whose core promise is repeatability
 that is a precondition, not a footnote.
@@ -530,7 +530,7 @@ them.
 
 ---
 
-## 2026-09-14, night — we were not scrolling the container we meant (#47, #31)
+## 2026-09-14, night — we were not scrolling the container we meant (ticket 47, ticket 31)
 
 `invoices:scroll-up` had been failing its distance bound by ~20 % in
 every measured case. The window now carried the scroll offsets before and
@@ -565,7 +565,7 @@ scrollable element in between wins. If none is free the run stops; there
 is no fall-back to the centre, because falling back to the broken point
 is the defect itself.
 
-**What this says about #31.** Repairing the reported distance would not
+**What this says about ticket 31.** Repairing the reported distance would not
 have been enough. The motion really was short. With the wheel delivered
 correctly, the distance bound holds in every window — `invoices:scroll-up`
 at 0.2 % deviation — and not a single tolerance was touched.
@@ -575,7 +575,7 @@ instrument being right.
 
 ---
 
-## 2026-09-15 — M4 landed, and the first real video failed on pacing (#5, #60, #64)
+## 2026-09-15 — M4 landed, and the first real video failed on pacing (ticket 5, ticket 60, ticket 64)
 
 The post-processing work — zoom onto the element that was hit, the pointer
 drawn from the event log, idle trimming, three formats from one recording —
@@ -605,7 +605,7 @@ mutation did not fail but hung: removing the no-upscale floor sends the
 suite into an infinite loop, which this suite can only reveal as a CI
 timeout.
 
-Both rounds landed as #60, the chain work as #64. Then the chain produced a
+Both rounds landed as ticket 60, the chain work as ticket 64. Then the chain produced a
 real video for the first time: 20.7 s of recording, 117 source frames, three
 formats in 16.6 s from one render call, deterministic to the byte, a look
 change costing 9.1 s instead of a second browser run. The portrait format
@@ -616,11 +616,11 @@ not sharpness, and sharp portrait is M3.
 A 2560×1600 capture delivered at 1920×1080 is already 1.33×, and that is the
 entire zoom budget. The 32×32 dark-mode button asked for 4.62× and got 1.33×.
 That is not a bug in the zoom; it is the arithmetic of over-capturing. The
-owner chose to capture larger (3840×2400) rather than deliver smaller (#67).
+owner chose to capture larger (3840×2400) rather than deliver smaller (ticket 67).
 
 ---
 
-## 2026-09-15 — the pointer moved like a slideshow, and the camera was innocent (#9, #66)
+## 2026-09-15 — the pointer moved like a slideshow, and the camera was innocent (ticket 9, ticket 66)
 
 The owner watched the video and rejected it: the pointer motion reads as a
 slideshow. The diagnosis was run as an experiment, not as reading. Three
@@ -650,7 +650,7 @@ go green by having nothing to measure. A synthetic reconstruction failed to
 reproduce the defect for exactly that reason: marking one frame per
 interaction puts every gap's end on an interaction, where the protection
 window shields it, so nothing was trimmed and the bound passed vacuously.
-The fixture is the real recording the owner watched (#66, deliberately red
+The fixture is the real recording the owner watched (ticket 66, deliberately red
 at 86.3 px against 20).
 
 **Underneath sits a second defect, and it dictates the order of the fix.**
@@ -659,36 +659,36 @@ The trimmed stretches are wall-clock frame times; the events carry counted
 20.7 s. A protection window built from slot counts guards the wrong second —
 which `plan.ts` already said about itself, with the caveat that no harm had
 been reproduced. It has been reproduced now. So the order reverses: one
-clock first (#9), then teach trimming that a stretch is only still when the
+clock first (ticket 9), then teach trimming that a stretch is only still when the
 page _and_ the pointer are still.
 
 ---
 
 ## Where the truth lives
 
-| Question                                                          | Where                                        |
-| ----------------------------------------------------------------- | -------------------------------------------- |
-| Frame supply, the two Chromium patches, the owner's video verdict | #17                                          |
-| Capture clock and the honest denominator                          | #21 (merged as #22)                          |
-| Browser provenance, the `CHROME_BIN` trap                         | #23, #36                                     |
-| The smoothness instrument                                         | #24, [`SMOOTHNESS.md`](./SMOOTHNESS.md)      |
-| Instrument verdict: unchecked bounds, severity                    | #28, #29                                     |
-| Eye calibration of the hitch threshold                            | #30                                          |
-| Wheel pacing drift, why it was reverted, and the proof            | #25, #45                                     |
-| Motion windows that report travel instead of range                | #31, #47                                     |
-| Device layer, upload, recipes                                     | #6, #7, #8                                   |
-| Motion windows that end with the motion                           | #40                                          |
-| M1 acceptance                                                     | #2, [`M1-VERDICT.md`](./M1-VERDICT.md)       |
-| One clock for capture and event log                               | #9                                           |
-| M4 acceptance: what the chain produced, and what is unproven      | #5, [`M4-ACCEPTANCE.md`](./M4-ACCEPTANCE.md) |
-| Pointer pacing, the slideshow verdict, the instrument             | #66                                          |
-| Unreached bounds found by the mutation round                      | #62                                          |
-| Capturing larger, and what breaks below 2560x1600                 | #67, #63                                     |
-| Mechanisms, in detail and dated                                   | [`CAPTURE-CADENCE.md`](./CAPTURE-CADENCE.md) |
+| Question                                                          | Where                                              |
+| ----------------------------------------------------------------- | -------------------------------------------------- |
+| Frame supply, the two Chromium patches, the owner's video verdict | ticket 17                                          |
+| Capture clock and the honest denominator                          | ticket 21 (merged as ticket 22)                    |
+| Browser provenance, the `CHROME_BIN` trap                         | ticket 23, ticket 36                               |
+| The smoothness instrument                                         | ticket 24, [`SMOOTHNESS.md`](./SMOOTHNESS.md)      |
+| Instrument verdict: unchecked bounds, severity                    | ticket 28, ticket 29                               |
+| Eye calibration of the hitch threshold                            | ticket 30                                          |
+| Wheel pacing drift, why it was reverted, and the proof            | ticket 25, ticket 45                               |
+| Motion windows that report travel instead of range                | ticket 31, ticket 47                               |
+| Device layer, upload, recipes                                     | ticket 6, ticket 7, ticket 8                       |
+| Motion windows that end with the motion                           | ticket 40                                          |
+| M1 acceptance                                                     | ticket 2, [`M1-VERDICT.md`](./M1-VERDICT.md)       |
+| One clock for capture and event log                               | ticket 9                                           |
+| M4 acceptance: what the chain produced, and what is unproven      | ticket 5, [`M4-ACCEPTANCE.md`](./M4-ACCEPTANCE.md) |
+| Pointer pacing, the slideshow verdict, the instrument             | ticket 66                                          |
+| Unreached bounds found by the mutation round                      | ticket 62                                          |
+| Capturing larger, and what breaks below 2560x1600                 | ticket 67, ticket 63                               |
+| Mechanisms, in detail and dated                                   | [`CAPTURE-CADENCE.md`](./CAPTURE-CADENCE.md)       |
 
 **Reading the older ticket comments:** percentages predating 2026-09-12 are
 measured against the broken denominator, and the runs called "patched" before
-#23 may not have been. Check which build a number came from before quoting it.
+ticket 23 may not have been. Check which build a number came from before quoting it.
 
 ---
 

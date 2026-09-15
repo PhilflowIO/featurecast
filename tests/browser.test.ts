@@ -114,7 +114,7 @@ describe('launchChromium', () => {
   })
 
   it('is a hard error when the running browser is not the requested one', async () => {
-    // The #23 incident: CHROME_BIN named the patched build, the bundle ran.
+    // The ticket 23 incident: CHROME_BIN named the patched build, the bundle ran.
     const deps = dependencies({ runningExecutable: BUNDLE })
     await expect(
       launchChromium(
@@ -260,7 +260,7 @@ describe('operating-system mechanisms (real processes, no browser)', () => {
       resolveExecutableFile(join(directory, 'missing')),
     ).rejects.toThrow()
 
-    // Two binaries that differ only in their bytes -- the #36 case, where
+    // Two binaries that differ only in their bytes -- the ticket 36 case, where
     // both builds are mounted at the same container path and report the
     // same version.
     const twin = join(directory, 'twin')

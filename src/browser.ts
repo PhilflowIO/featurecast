@@ -24,7 +24,7 @@ import type { Browser, LaunchOptions } from 'playwright'
  * `CHROME_BIN` pointing at a patched Chromium build, nothing read it, and
  * Playwright silently launched its bundled browser instead. From the outside
  * the run looked patched; the "18 % capture loss" it appeared to prove does
- * not exist on the patched build (#23, docs/JOURNEY.md). A set-but-ignored
+ * not exist on the patched build (ticket 23, docs/JOURNEY.md). A set-but-ignored
  * variable is invisible, so three rules hold here:
  *
  * 1. `CHROME_BIN` (or an explicit path) is honoured, and a value that does
@@ -38,7 +38,7 @@ import type { Browser, LaunchOptions } from 'playwright'
  *    bench that mounts every candidate build at the same container path:
  *    the patched and the unpatched Chromium are both `/crbuild/chrome` and
  *    both report `Chromium 153.0.8010.12`, so path and version alone name
- *    an identity that is none (#36).
+ *    an identity that is none (ticket 36).
  */
 
 export const BROWSER_ENV_VARIABLE = 'CHROME_BIN'
@@ -214,7 +214,7 @@ export async function readExecutableVersion(
  * Hashes the binary itself. Two builds from the same pinned source tree
  * differ in their bytes long before they differ in their version string, and
  * a bench that mounts each candidate at the same path has no other way to
- * tell its arms apart (#36).
+ * tell its arms apart (ticket 36).
  */
 export async function readExecutableFingerprint(
   executablePath: string,

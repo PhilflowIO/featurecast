@@ -284,7 +284,7 @@ def schreibe_lauf_ueber_ganzes_video(ziel: Path, bilder: int, label: str,
 
     Fuer Tests, die ein synthetisches Video ueber den Produktpfad urteilen
     lassen muessen: ohne Sollstrecke und externe Dauer gibt das Geraet kein
-    Urteil ab (#28). Beide Zahlen muessen deshalb von AUSSEN kommen --
+    Urteil ab (Ticket 28). Beide Zahlen muessen deshalb von AUSSEN kommen --
     `bilder` aus dem Erzeuger oder der Mutation, `strecke_aufnahme_px` aus
     der Wahrheitsdatei. Keine davon stammt aus der Messung.
     """

@@ -7,7 +7,7 @@ import type { Page } from 'playwright'
  * gave evidence of an actual visual change**.
  *
  * **This is context, not a frame count, and it must never be a
- * denominator again.** It was one until #21, and it was wrong in the
+ * denominator again.** It was one until ticket 21, and it was wrong in the
  * direction that hides failure: the callback runs on the renderer's main
  * thread, while smooth scrolling is driven by the compositor thread and
  * keeps presenting frames whether or not the main thread gets a slice. So

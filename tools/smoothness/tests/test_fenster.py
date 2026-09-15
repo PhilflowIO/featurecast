@@ -11,7 +11,7 @@ FIXTURE-HERKUNFT: `motion-windows.json` und `timestamps.json` sind hier von
 Hand gebaut, aber NICHT frei erfunden -- sie haben genau die Form, die
 demo/m1-capture.ts schreibt: `windows[]` aus `computeMotionWindowCadence`
 (src/cadence.ts) mit `label`, `start`, `end`, `durationSeconds`, `target`
-und -- seit #31 -- `travelPx`/`scrollStartPx`/`scrollEndPx`,
+und -- seit Ticket 31 -- `travelPx`/`scrollStartPx`/`scrollEndPx`,
 und ein `TimestampManifest` (src/capture.ts) mit `session.startedAt` und
 `frames[].timestamp` in Millisekunden der `Date.now()`-Zeitachse. Ein echter
 Lauf kann diese Fixture ersetzen, sobald der Aufnahmerechner wieder
@@ -181,7 +181,7 @@ def test_ohne_unabhaengige_bildzahl_meldet_die_schranke_tautologisch():
 
 
 # --------------------------------------------------------------------------
-# Gefahrene Strecke gegen volle Scrollweite (#31)
+# Gefahrene Strecke gegen volle Scrollweite (Ticket 31)
 # --------------------------------------------------------------------------
 
 def _lauf_mit(tmp_path: Path, fenster: list[dict]) -> Path:
@@ -200,16 +200,16 @@ def _lauf_mit(tmp_path: Path, fenster: list[dict]) -> Path:
 
 
 def _invoices_hoch(**extra) -> dict:
-    """Das Fenster aus #31, mit den echten Zahlen des Laufs vom 2026-09-12:
+    """Das Fenster aus Ticket 31, mit den echten Zahlen des Laufs vom 2026-09-12:
     volle Scrollweite 342 px, gefahren wurden 275 -- der Behaelter stand
-    beim Oeffnen 67 px unter der Kante (#47, nicht hier zu beheben)."""
+    beim Oeffnen 67 px unter der Kante (Ticket 47, nicht hier zu beheben)."""
     return {"label": "invoices:scroll-up:1", "start": STARTED_AT + 100,
             "end": STARTED_AT + 600, "durationSeconds": 0.5,
             "target": "div.MuiDataGrid-virtualScroller (y range 342px)", **extra}
 
 
 def test_sollstrecke_ist_die_gefahrene_strecke_nicht_die_scrollweite(tmp_path):
-    """Der Kern von #31. Beide Zahlen stehen im selben Fenster und sind
+    """Der Kern von Ticket 31. Beide Zahlen stehen im selben Fenster und sind
     verschieden; das Geraet muss die gefahrene nehmen.
 
     ERREICHBARKEIT: der Test zeigt zuerst, dass die falsche Wahl hier
@@ -247,7 +247,7 @@ def test_der_streckenabgleich_haelt_erst_mit_der_gefahrenen_strecke(tmp_path):
 
 
 def test_lauf_ohne_travelpx_faellt_auf_die_scrollweite_zurueck(tmp_path):
-    """Rueckfallpfad fuer Laeufe von vor #31. Er bleibt erlaubt, gibt sich
+    """Rueckfallpfad fuer Laeufe von vor Ticket 31. Er bleibt erlaubt, gibt sich
     aber in der Herkunft als Rueckfall zu erkennen."""
     lauf = _lauf_mit(tmp_path, [_invoices_hoch()])
     (f,) = aus_lauf(lauf, fps=60.0, px_faktor=1.0, anzahl_bildpaare=119)

@@ -10,7 +10,7 @@ import { assertTsxCli } from './support/tsx-cli.js'
 const execFileAsync = promisify(execFile)
 
 /**
- * P3 (issue #15) acceptance: two *separate OS processes* running the exact
+ * P3 (issue 15) acceptance: two *separate OS processes* running the exact
  * same script and seed must produce byte-identical `events.jsonl`. Running
  * both in-process (as most of tests/record.test.ts does) only proves the
  * generator is a pure function of its JS inputs within a single process;

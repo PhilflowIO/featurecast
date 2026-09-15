@@ -501,7 +501,7 @@ re-measurements above are single runs per variant, so run-to-run spread is
 unknown; the completeness of the caller search rests on GitHub's code-search
 index over the Chromium mirror.
 
-## PLAN.md / docs/DEVICES.md divergence (resolved 2026-09-14, #55)
+## PLAN.md / docs/DEVICES.md divergence (resolved 2026-09-14, ticket 55)
 
 Fixing the crop-shears-the-toolbar defect (see the main report, item 5)
 surfaced a disagreement between the two docs that this task did not resolve:
@@ -517,7 +517,7 @@ Both spend pixels outside the finished frame, and a natively-16:9 capture has
 none. The honest limit of that margin is written down in `docs/DEVICES.md`:
 16:9, 16:10 and 1:1 fall out of it sharp, 9:16 does not.
 
-## The capture clock and the efficiency denominator (added 2026-09-12, #21)
+## The capture clock and the efficiency denominator (added 2026-09-12, ticket 21)
 
 Two numbers this document relied on were being produced the wrong way. Both
 are fixed; the corrected figures supersede every efficiency percentage above.
@@ -714,7 +714,7 @@ three runs and one older run at 98.1%. Measured against load directly, three
 product runs scored 80.2% at load 17, 81.9% at load 2 and 82.1% at load 20 —
 no dependence, and the spread is run-to-run noise. The loss is stable and
 concentrated: the sort windows capture 1–2 of 15–17 presentations, and the
-right-scroll reproducibly 4 of 13–14. That is a finding for #17, not weather.
+right-scroll reproducibly 4 of 13–14. That is a finding for ticket 17, not weather.
 
 ### Acceptance point 1 belongs to the frame supply, not to this document
 
@@ -727,7 +727,7 @@ is under 10%.
 
 So in most runs the target is not reachable by any change to the timeline or
 to the capture path. How many frames arrive at all is decided by the frame
-supplier, which is #17 and #2. This ticket delivers the timebase and an
+supplier, which is ticket 17 and ticket 2. This ticket delivers the timebase and an
 honest measuring instrument; it does not deliver that number, and no version
 of it will.
 
@@ -791,5 +791,5 @@ capture events equal delivered frames plus folded duplicates, difference
 builds they do not: Chromium discards 70 to 110 frames it had already
 captured (`stock` 70/77, `unpatched` 92/104/110), so a mapping built there
 would silently move content in time. The exact mapping is therefore
-available only behind #17's patch. Whether it would buy anything is open: the
+available only behind ticket 17's patch. Whether it would buy anything is open: the
 one experiment that said no deleted 40 frames on its way in.

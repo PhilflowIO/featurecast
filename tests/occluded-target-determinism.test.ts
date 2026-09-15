@@ -15,7 +15,7 @@ function sha256(content: string): string {
 }
 
 /**
- * Issue #13 acceptance, in three *separate OS processes* — not three
+ * Issue 13 acceptance, in three *separate OS processes* — not three
  * in-process calls, which would only prove the flood fill is a pure
  * function within one process. The point the grid search returns feeds
  * straight into the logged pointer curve and click coordinates, so a

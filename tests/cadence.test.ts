@@ -167,7 +167,7 @@ describe('computeMotionWindowCadence', () => {
   it('carries a scroll window travel and its offsets into the report', () => {
     // These three numbers are the only route from `scrollContainerToEdge`
     // into `motion-windows.json`, which is what tools/smoothness reads to
-    // know how far a window was supposed to move (#31). Dropping them here
+    // know how far a window was supposed to move (ticket 31). Dropping them here
     // would silently send the smoothness tool back to the container range.
     const manifest = manifestWithTimestamps([0, 16.667, 33.334])
 

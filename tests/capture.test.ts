@@ -454,7 +454,7 @@ describe('captureScreencast', () => {
   })
 
   it('never lets a delivery-order inversion produce a zero-length gap', async () => {
-    // The counter-example test the acceptance of #21 asks for: if forward
+    // The counter-example test the acceptance of ticket 21 asks for: if forward
     // clamping ever returns, two frames end up sharing a timestamp, the
     // earlier one gets no dwell time in `buildCaptureTimeline`, and it
     // disappears from the video. This asserts the property directly — every
@@ -568,7 +568,7 @@ describe('captureScreencast', () => {
   })
 
   it('records the area it was handed rather than one of its own', async () => {
-    // The defect #55 fixes: the screencast used to start at a module
+    // The defect ticket 55 fixes: the screencast used to start at a module
     // constant, so `desktop` (and every future capture area) could not be
     // recorded at all. A size other than M1's 2560x1600 proves the value
     // travels from the caller to `Screencast.start` and into the manifest.

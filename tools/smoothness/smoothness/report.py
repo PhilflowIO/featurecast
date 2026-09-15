@@ -7,13 +7,13 @@ Drei Regeln bestimmen diese Datei:
    hat, bekommt "NICHT MESSBAR" mit Grund und KEIN Glaette-Urteil. "Nicht
    geprueft" ist nie "bestanden" -- die erste Fassung hat das nur fuer die
    gerissene Schranke durchgesetzt und Sortier-Fenster, in denen sich nichts
-   bewegt, mit einem Haker benotet (#28). Ein Lauf ganz ohne auswertbares
+   bewegt, mit einem Haker benotet (Ticket 28). Ein Lauf ganz ohne auswertbares
    Fenster sagt ausdruecklich, dass das kein gutes Zeugnis ist.
 2. JEDE QUOTE NENNT IHREN NENNER, je Fenster und in der Zusammenfassung.
    Erzwungen ueber den Typ `Quote` in hitches.py, nicht ueber Disziplin.
 3. SCHWERE, NICHT NUR ANZAHL. Die Zahl der Haker allein sortiert einen
    Teleport ueber die ganze Strecke besser ein als zwei kleine Nachholer
-   (#29). Jedes Urteil nennt deshalb den groessten Sprung, gemessen am
+   (Ticket 29). Jedes Urteil nennt deshalb den groessten Sprung, gemessen am
    GLEICHSCHRITT: Sollstrecke durch Bildpaare des Fensters. Beide Groessen
    kommen von aussen (motion-windows.json), nicht aus dieser Messung.
 
@@ -67,7 +67,7 @@ def beurteile_fenster(pairs: list[Pair], fenster: Fenster, fps: float,
     gerichtete_summe = float(komp.sum()) if len(komp) else 0.0
     # Translation heisst: mindestens ein gueltiges Bildpaar bewegt sich ueber
     # die Rauschgrenze hinaus. Eine Richtung aus einer Messung abzuleiten, die
-    # identisch null ist, hiesse sie zu erfinden (#28).
+    # identisch null ist, hiesse sie zu erfinden (Ticket 28).
     translation = bool(len(komp)) and bool(np.any(np.abs(komp) >= k.still_px))
     if fenster.richtung is not None:
         richtung, richtung_herkunft = fenster.richtung, "Fenstername"
@@ -230,7 +230,7 @@ def vergleiche_laeufe(berichte: dict[str, dict]) -> dict[str, object]:
     sonst gewinnt der Lauf, dessen schlimmstes Fenster zufaellig verweigert
     wurde. Massstab je Lauf ist der groesste Sprung in Gleichschritten ueber
     diese gemeinsamen Fenster: die Schwere der schlimmsten Stelle, nicht die
-    Zahl der Stellen (#29).
+    Zahl der Stellen (Ticket 29).
     """
     urteile = {name: {u["fenster"]: u for u in b["fenster"]} for name, b in berichte.items()}
     alle_namen = set().union(*(set(u) for u in urteile.values())) if urteile else set()

@@ -142,7 +142,7 @@ export function firstClearPoint(
  * Chromium binds a wheel gesture to the element under the pointer and does not
  * hand the rest of the gesture on to the ancestor once the inner element stops
  * short, so delivering a wheel on top of a nested scroller loses most of the
- * commanded distance. Measured on the box (#47): with the pointer in the
+ * commanded distance. Measured on the box (ticket 47): with the pointer in the
  * center of the container, `invoices:scroll-up` was commanded 454px and
  * stopped at 91, `tasks:scroll-up` at 3 instead of 0, while every other
  * scrollable element on the page stood at 0 afterwards — the pixels never
@@ -174,7 +174,7 @@ export async function chooseWheelPoint(
       `chooseWheelPoint: (${context.axis}) every one of the ` +
         `${String(points.length)} candidate points on ${context.description} ` +
         'is covered by another scrollable element; a wheel there would be ' +
-        'captured by that inner scroller instead of moving the target (#47)',
+        'captured by that inner scroller instead of moving the target (ticket 47)',
     )
   }
   return point

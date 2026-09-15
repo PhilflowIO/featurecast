@@ -137,7 +137,7 @@ def finde_haker(schritte: np.ndarray, erstes_bildpaar: int, fps: float,
     # Jede Stoerstelle traegt ihre Schwere, nicht nur ihre Existenz: der
     # groesste Schritt darin (Pixel) und die stehende Zeit darin (ms). Ohne
     # das zaehlt ein Teleport ueber die ganze Strecke genau so viel wie ein
-    # kleiner Nachholer -- der Defekt aus #29.
+    # kleiner Nachholer -- der Defekt aus Ticket 29.
     stellen: list[dict] = []
     for e in ereignisse:
         sprung_px = float(e.get("sprung_px", e.get("nachsprung_px", 0.0)))

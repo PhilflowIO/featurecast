@@ -2,7 +2,7 @@
 
 Date: 2026-09-15. Alle Läufe auf der AI-Box (RTX 3090, GPU1, Container `featurecast-box:1`, gepatchtes Chromium 153.0.8010.12), gegen die echte, dichte Oberfläche der gefilmten Anwendung.
 
-Die Frage von [Ticket #4](https://forgejo.philflow.me/Phil/featurecast/issues/4): ein 1080×1920-Video einer echten mobilen Oberfläche, Fließtext in normaler Größe lesbar, kein Mauszeiger im Bild.
+Die Frage von Ticket 4: ein 1080×1920-Video einer echten mobilen Oberfläche, Fließtext in normaler Größe lesbar, kein Mauszeiger im Bild.
 
 ## Die Ursache, in einem Satz
 

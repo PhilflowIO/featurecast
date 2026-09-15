@@ -15,7 +15,7 @@ erreichbar. Die Zahlen von dort stehen in
 .claude/handoffs/messtechnik-glaette.md, Abschnitt 3; sie sind hier NICHT
 nachgestellt und gelten als ungeprueft, bis der Lauf wiederholbar ist.
 
-Seit #28 laeuft jede Probe, die ein Urteil erwartet, ueber den PRODUKTPFAD:
+Seit Ticket 28 laeuft jede Probe, die ein Urteil erwartet, ueber den PRODUKTPFAD:
 ein Fenster ueber das ganze Video mit Sollstrecke aus der Wahrheitsdatei und
 Bildzahl aus der Mutation. Ohne Sollstrecke verweigert das Geraet das Urteil
 -- die Proben liefen vorher ueber die eigene Zerlegung und haetten damit ab
