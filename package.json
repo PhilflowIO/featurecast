@@ -16,6 +16,7 @@
     "format": "prettier --check .",
     "lint": "eslint .",
     "prepare": "simple-git-hooks",
+    "render": "tsx src/render/cli.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

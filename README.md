@@ -54,6 +54,226 @@ Ein Ziel, dessen Bounding-Box gar keine sichtbare Überschneidung mit dem Viewpo
 
 `device` wird bereits gegen Playwrights Geräteregistrierung aufgelöst, unter anderem für `hasTouch`, damit `tap` in einem echten Touch-Kontext läuft statt abzustürzen. Ein unbekannter Name bricht mit einer Fehlermeldung ab, die ähnliche oder verfügbare Namen nennt. Die kuratierte Voreinstellungs-Ebene darüber (Aufnahme-/Ausgabeformat, Zeiger-Art) folgt in M5.
 
+## Nachbearbeitung: Zoom, Zeiger, Tempo, Formate
+
+`pnpm render <aufnahme-ordner> <ziel-ordner>` macht aus einer Rohaufnahme
+fertige Videos. Es startet keinen Browser und kann keinen starten: die Eingabe
+sind die Einzelbilder, die die Aufnahme geschrieben hat, und das Ereignis-Log
+daneben. Ein anderer Zeiger, ein anderer Zoom, ein anderes Seitenverhältnis ist
+deshalb ein erneuter Lauf dieses Kommandos, kein erneuter Lauf des Skripts.
+
+```sh
+pnpm render artifacts/m1-008 dist/feature-xy
+pnpm render artifacts/m1-008 dist/feature-xy --padding 40 --cursor-size 32
+```
+
+Aus demselben Rohmaterial entstehen 16:9, 9:16 und 1:1. **Zoom ist immer ein
+Ausschnitt aus dem Original, nie eine Vergrößerung** — und das hat eine Folge,
+die die meisten Werkzeuge verschweigen: in einer 2560×1600-Desktop-Aufnahme
+steckt kein scharfes 1080×1920-Hochformat. Das größte 9:16-Rechteck darin ist
+900×1600. Der Renderer liefert dann 900×1600 in voller Schärfe und sagt es in
+der Ausgabe, statt hochzuskalieren. Ein scharfes Hochformat entsteht durch eine
+Aufnahme im Hochformat, das ist M3.
+
+Kein Zoom heißt aber nicht kein Schwenk. Ein 900 Pixel breites Fenster kann
+überall in einer 2560 Pixel breiten Aufnahme stehen, und dieses Verschieben
+kostet nichts — es ist immer noch derselbe Ausschnitt aus dem Original. Das
+Hochformat folgt dem angeklickten Element deshalb seitlich, mit derselben Feder
+wie alles andere, statt als eingefrorener Mittelstreifen 65 % der Oberfläche nie
+zu zeigen. Für 1:1 gilt dasselbe. 16:9 füllt die Breite der Aufnahme ohnehin
+schon aus und ändert sich dadurch nicht; dass dort oben angeschnitten wird und
+nicht mittig, bleibt eine bewusste Entscheidung — Navigationsleisten und
+Werkzeugleisten wohnen genau dort.
+
+Der Zoom rahmt beim Klick die Bounding-Box des getroffenen Elements. Diese Box
+ist die **Ruhelage** des Elements, nicht seine Geometrie im Bild, in dem der
+Klick landete: bei einem Element, das einblendet oder pulsiert, die Geometrie,
+in der es sich am längsten aufhält — nicht der Mittelwert seiner Extreme, denn
+bei einer unsymmetrischen Animation ist der Mittelwert eine Größe, die das
+Element in keinem einzigen Bild hat. Der Ausschnitt steht deshalb still, während
+das Element atmet, und wird nie nachträglich aufgeweitet.
+
+Folgen zwei Interaktionen dichter aufeinander, als die Kamera zum Anfahren
+braucht, teilen sich **Halten und Anfahrt** die Zeit zwischen den beiden
+Ereignissen: reicht sie für beide Wünsche, bekommt jeder seinen, sonst geben
+beide anteilig nach — mit den Standardwerten (900 ms halten, 650 ms anfahren)
+58 % der Lücke an das Halten. Die frühere Einstellung wird dabei nie vor ihrem
+eigenen Klick beendet — sonst zeigte das Bild im Moment des Klicks einen Punkt
+auf dem Weg zum nächsten Element statt das Element, das geklickt wurde, und bei
+zwei Zielen auf gegenüberliegenden Seiten wäre das geklickte Element überhaupt
+nicht im Bild. Musste das Halten gekürzt werden, sagt der Renderer es in seiner
+Ausgabe, statt die Einstellung still auf ein Bild zusammenzuschrumpfen.
+
+Zwei Interaktionen im **selben Augenblick auf demselben Element** sind eine
+einzige Einstellung: die Kamera rahmt das Element und hält über beide Ereignisse
+hinweg. Das ist der Normalfall, kein Sonderfall — ein zweimal umgelegter
+Schalter oder ein zweimal gedrückter Zähler landen im Ereignis-Log auf demselben
+Zeitschlitz, weil `click` den Zähler nicht weiterstellt und eine Bewegung auf
+ein Ziel, auf dem der Zeiger schon steht, keine Proben erzeugt. Weil beide
+Boxen dieselbe sind, ist die Rahmung der Einstellung Bit für Bit die Rahmung
+jedes einzelnen Ereignisses.
+
+Zwei Interaktionen im selben Augenblick auf **verschiedenen** Elementen bricht
+der Renderer ab — dafür gibt es keine Kamera —, und nennt dabei das Mittel, das
+heute hilft: ein `demo.hold(…)` zwischen den beiden. Auch überlappende Elemente
+sind verschiedene Elemente: eine gemeinsame Rahmung beider wäre die Hülle, und
+die Hülle eines Symbols in einer seitenfüllenden Fläche ist die ganze Seite —
+ein „Zoom", der sich nicht bewegt.
+
+Ebenso bricht der Renderer ab, wenn zwischen zwei Interaktionen zu wenig Zeit
+liegt, um die Kamera ehrlich hinüberzubringen: das Halten der ersten Einstellung
+braucht mindestens ein Bild, die Anfahrt der zweiten mindestens acht. Ein
+Abstand, der beides nicht bezahlt, ist ein Schnitt und kein Kameraweg.
+
+Die Kamera schneidet nie: in keinem einzelnen Ausgabebild legt sie mehr ihres
+Wegs zurück, als die Feder, auf der sie fährt, über die kürzeste zugelassene
+Anfahrt in ihrem schnellsten Bild zurücklegt — 42,6 % des Wegs. Gewöhnliche
+Bewegung bleibt weit darunter (9,2 %), die gedrängteste im Korpus bei 33,1 %.
+Die Schranke liest bewusst nichts aus der Einstellung, über die sie urteilt:
+eine Schranke, die aus dem gekürzten Fenster selbst berechnet wird, vergleicht
+die Bewegung mit sich selbst und lässt alles durch. Zusätzlich gilt: eine
+Einstellung beginnt exakt dort, wo die Kamera ohnehin steht, und über die Naht
+zwischen zwei Einstellungen darf nur so viel Bewegung liegen, wie die Ausfahrt
+der vorigen selbst erzeugt. Wege unter 16 Quellpixeln sind kein Kameraweg und
+werden nicht beurteilt — eine rein relative Schranke ohne absoluten Boden hat in
+Runde vier eine gültige Aufnahme in allen drei Formaten verweigert.
+
+Das ist keine Testzusage, sondern eine Zusicherung im Renderer selbst: eine
+Einstellungsliste, die sie verletzt, verlässt `buildZoomSegments` nicht.
+
+Zeiger und Klick-Ripple werden hier gezeichnet, nicht aufgenommen: Headless
+Chromium rendert überhaupt keinen Zeiger, das Log ist die einzige Quelle. Größe,
+Form und Ripple-Dauer sind Parameter.
+
+Leerlauf wird gerafft. Das Signal dafür sind die Zeitstempel der Aufnahme
+selbst: die Aufnahme faltet bitgleiche Folgebilder bereits zusammen, eine große
+Lücke zwischen zwei überlebenden Bildern ist also eine Strecke, in der sich das
+Bild nicht geändert hat — nicht bloß ein Animationstakt ohne Neuzeichnung.
+Gerafft wird über eine einzige, streng monotone Zeitabbildung, durch die Bilder
+und Ereignisse gemeinsam laufen; sie können deshalb nicht auseinanderdriften.
+
+Das Kernstück ist eine reine Funktion von (Ereignissen mit einer Zeit in
+Millisekunden, Bild-Zeitstempeln in Millisekunden) auf Ausschnitt-Rechteck und
+Zeiger-Zeichenliste je Bild. Diese Entscheidungsdaten landen als
+`decisions.json` neben dem Video.
+
+**Gleiche Entscheidungsdaten, gleiches Video — Byte für Byte.** Das Zuschneiden,
+Skalieren und Zeichnen des Zeigers passiert Bild für Bild in eigenem Code, nicht
+in ffmpegs Filtergraph. ffmpeg behält die Aufgaben, die es gut kann — dekodieren,
+kodieren, Zeitbasis — und verliert die, bei der es unzuverlässig war: pro Bild
+eine andere Geometrie zu setzen. Über einen zeitgesteuerten Kommandokanal
+(`sendcmd`) war das nicht reproduzierbar: sechs identische Läufe über dieselbe
+Kommandodatei erzeugten vier verschiedene Videos, mit falsch gerahmten
+Einzelbildern und einem Zeiger, der nicht dem folgte, was in `decisions.json`
+steht. Jetzt ist zwischen Entscheidung und Pixel nichts mehr, das von Lauf zu
+Lauf anders ausfallen könnte; sechs Läufe in sechs Prozessen ergeben pro Format
+genau eine Prüfsumme.
+
+Die fertigen Dateien sagen auch, welche Farben sie meinen: `tv`-Bereich,
+bt709. Ohne diese Beschriftung liest jede nachgelagerte Kette ein `yuv420p` im
+Zweifel als Vollbereich und zieht die Pegel auseinander — die Pixel wären
+richtig und das Bild trotzdem falsch. Geprüft wird das an `ffprobe` auf einem
+echten Encode, nicht an der ffmpeg-Kommandozeile: ein Argument ist eine Absicht,
+die Datei ist das Ergebnis.
+
+Das Hochformat zahlt dafür nicht mit Schärfe, im Gegenteil: ein 9:16-Ausschnitt
+ist genauso groß wie das Ausgabebild, wird also gar nicht skaliert, sondern
+1:1 aus dem Original kopiert.
+
+### Der Filter, der verkleinert
+
+Aufgenommen wird in 2560×1600 und ausgeliefert in 1920×1080, weil das der
+einzige Weg zu scharfem Text ist. Der Filter, der diese Verkleinerung macht, ist
+deshalb kein Implementierungsdetail, sondern genau das Merkmal, für das die
+hohe Aufnahmeauflösung existiert. Verkleinert wird mit einem Lanczos-3-Kern —
+gefensterte Sinc, separabel, am Maßstab gestreckt —, demselben Verfahren, das
+M1 über ffmpeg benutzt hat. Gemessen an vier echten Aufnahmebildern, Ausschnitt
+2560×1440 → 1920×1080, also exakt der 1,33× Reserve:
+
+| Filter                      | Kantenenergie (Laplace-RMS) | Rundlauf-PSNR |
+| --------------------------- | --------------------------- | ------------- |
+| **featurecast (Lanczos-3)** | **39,3**                    | **31,60 dB**  |
+| ffmpeg Lanczos (M1)         | 39,3                        | 31,60 dB      |
+| ffmpeg bicubic              | 35,7                        | 31,24 dB      |
+| bilinear (Runde 2)          | 35,4                        | 30,72 dB      |
+| ffmpeg area                 | 32,4                        | 30,61 dB      |
+| ffmpeg bilinear             | 26,9                        | 30,02 dB      |
+
+Das kostet Rechenzeit, und zwar erheblich: ein 16:9-Bild aus dem vollen Raster
+braucht 179 ms statt 17,6 ms, ein 1:1-Bild 109 ms statt 10,7 ms — rund das
+Zehnfache. Der Ausschnitt, der genauso groß ist wie das Ausgabebild, wird nach
+wie vor gar nicht gefiltert, sondern zeilenweise kopiert (0,18 ms), und das
+bleibt so: Hochformat lebt von dieser 1:1-Kopie.
+
+### Was das Rendern kostet, und auf welcher Maschine
+
+Das Zuschneiden und Skalieren ist die gesamte Rechenarbeit des Renderers und
+läuft deshalb auf mehreren Threads: aufgeteilt nach Bildzeilen über alle Formate
+hinweg, gewichtet nach der gemessenen Arbeit je Zeile — ein Format ohne
+Zoomreserve wird kopiert statt gefiltert und zählt entsprechend wenig, sonst
+warten die Threads, die es gezeichnet haben, auf den Rest. Zusätzlich wird kein
+Bild zweimal gerechnet: eine Aufnahme liefert weniger Einzelbilder als das Video
+Bilder hat (m1-008: 1332 gegen 2873), und solange Quellbild und Ausschnitt
+gleich bleiben, ist das fertige Bild dasselbe — der Zeiger kommt danach darauf.
+
+Gemessen auf der Workstation (16 Threads, unter Last), 300 echte Aufnahmebilder
+aus `artifacts/m1-008`, 11,8 Sekunden Video, 709 Ausgabebilder, drei Formate:
+
+|                                     | 1 Thread | 6 Threads | 14 Threads |
+| ----------------------------------- | -------- | --------- | ---------- |
+| bilinear (Runde 2)                  | —        | 18,2 s    | 16,2 s     |
+| Lanczos-3, naiv                     | 190,2 s  | 82,2 s    | 67,3 s     |
+| **Lanczos-3, mit Wiederverwendung** | —        | 43,4 s    | **38,3 s** |
+
+Die volle Aufnahme, nicht hochgerechnet sondern gemessen: `artifacts/m1-008`,
+47,9 Sekunden Video, 2873 Ausgabebilder, drei Formate, 14 Threads —
+**136,7 Sekunden**, also 2,9 Sekunden Rechenzeit pro Sekunde Video, gegen 79
+Sekunden mit der bilinearen Variante. Die Zwei-Minuten-Grenze des Meilensteins
+hält damit für Material bis rund 42 Sekunden und wird von dieser Aufnahme um
+14 % überschritten. **Das ist der bewusst bezahlte Preis für die Schärfe** — nicht ein Versehen: die hohe
+Aufnahmeauflösung existiert genau für diesen Filter, und ein weicheres Bild
+wäre ein Verlust am Produkt, während eine längere Wartezeit Bequemlichkeit
+kostet. Wer das anders gewichtet, hat mit ffmpeg-bicubic (31,24 dB gegen 31,60)
+eine messbar benannte Alternative, die etwa halb so lange braucht.
+
+Die Hardware-Annahme steht damit ausdrücklich hier statt implizit im Code:
+**gerechnet wird mit einer Maschine, die mindestens acht Kerne hat.** Der
+Standard ist „alle Kerne minus zwei" — zwei bleiben für diesen Thread, der den
+Dekoder leerzieht und drei Encoder füttert. Auf einer Drei-Kern-Maschine
+komponiert der Renderer auf einem einzigen Thread und ist rund fünfmal langsamer
+als hier gemessen; die Zwei-Minuten-Grenze hält dort für keine
+nennenswerte Aufnahme.
+
+Bildzeilen sind voneinander unabhängig, deshalb hängt das Ergebnis nicht an der
+Kernzahl: derselbe Lauf mit einem und mit sechs Threads erzeugt dieselbe Datei,
+Byte für Byte. `--threads <n>` stellt es ein, ändert aber nur die Dauer.
+
+### Cursor- und Zoom-Zeitpunkte sind noch falsch — bis Issue #9
+
+Das Ereignis-Log trägt heute **keine Uhrzeit**, sondern einen Zähler: er läuft
+weiter für alles, was das Skript selbst tut (Zeigerbewegung, Tippen, `hold`), und
+bleibt stehen für alles, was echte Zeit kostet, ohne geplant zu sein — Seiten
+laden, auf stabile Geometrie warten, der Umlauf eines Klicks. **Zeiger und Zoom
+sitzen deshalb nur bei Aufnahmen richtig, in denen nirgends gewartet wird.**
+
+Der Fehler ist keine gleichmäßige Abweichung, die man mit einem Faktor
+geradeziehen könnte, sondern eine Treppe: innerhalb eines Blocks geplanter
+Aktionen liegt er bei 11–15 %, zwischen zwei Blöcken springt er in Stufen. In der
+Aufnahme `m1-008` sind das nacheinander +25,8 s, +3,2 s, +8,6 s und +2,9 s — nach
+62 Sekunden Aufnahme summiert sich der Versatz auf **42,6 Sekunden**. Sichtbar
+wird das so: der einzige Zoom dieser Aufnahme rahmt ein leeres Suchfeld 1,64
+Sekunden bevor dort etwas passiert, und ist wieder herausgefahren, bevor der
+getippte Text erscheint.
+
+Wer ein gerendertes Video sieht und den Zoom an der falschen Stelle findet: das
+ist kein Fehler im Zoom, sondern diese fehlende Uhr. [Issue
+#9](https://forgejo.philflow.me/Phil/featurecast/issues/9) legt das Log auf die
+Uhr der Einzelbilder und räumt es aus dem Weg; die Umrechnung steckt bis dahin in
+genau einem kleinen Modul am Rand (`src/render/clock.ts`), das dabei ersatzlos
+verschwindet. Die zwei Stellschrauben darin (`originMs`, `rateScale`) verschieben
+und kippen eine Gerade — gegen eine Treppe hilft keine von beiden, und eine
+dritte kommt nicht dazu.
+
 ## Ein Kommando für die ganze Kette
 
 ```sh
