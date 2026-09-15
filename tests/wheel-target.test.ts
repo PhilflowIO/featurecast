@@ -10,12 +10,12 @@ import {
 } from '../src/wheel-target.js'
 
 /**
- * The real geometry from the ticket 47 measurement: the recorded
- * application's page scroll container at the 2560x1600 capture viewport,
- * with the grid's own
- * `MuiDataGrid-virtualScroller` (2px of range, enough to capture a wheel and
- * not enough to travel with it) covering everything but the container's
- * outer margin.
+ * The real geometry from the ticket 47 measurement: a page scroll container at the
+ * 2560x1600 capture viewport, with the grid's own inner scroller (2px of
+ * range, enough to capture a wheel and not enough to travel with it)
+ * covering everything but the container's outer margin. The bench corpus
+ * has the same shape by construction — a grid that scrolls, inset inside a
+ * page that scrolls (`tests/fixture-page.browser.test.ts`).
  */
 const CONTAINER: BoxRect = { height: 800, width: 2000, x: 0, y: 0 }
 const VIEWPORT = { height: 1600, width: 2560 }

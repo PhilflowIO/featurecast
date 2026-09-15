@@ -6,40 +6,50 @@ import type { WheelPoint } from './wheel-target.js'
 
 import { chooseWheelPoint } from './wheel-target.js'
 
-export const ONLYDASH_GUEST_BENCHMARK_URL = 'https://app.onlydash.io/'
 const DEFAULT_OUTPUT_DIRECTORY = 'artifacts/m1-capture'
 
 /**
- * Measured live against all 43 OnlyDash tables at the real 2560x1600
- * capture viewport: only these hold >=10 records (`tasks` 19, `invoices`
- * 17, `users` 13, `expenses` 13) — everything else, including most of a
- * previous version's 16-table rotation, holds 0-2. A 2-row table on a
- * ~70% empty dark background held for a full second is not the dense UI
- * M1 asks for, no matter how many distinct such tables a script visits.
- * `tasks` and `invoices` are additionally the only tables with a
- * meaningfully scrollable grid at this viewport (528px/369px vertical
- * range; every other table measured <=71px) — real within-table motion,
- * not just a sequence of static screenshots.
+ * The four collections this benchmark films, out of the corpus's five.
+ *
+ * Every one of them clears the ten-record floor by a wide margin (`tasks`
+ * 58, `expenses` 51, `invoices` 47, `users` 36) and every one has a grid
+ * that really scrolls on both axes at the 2560x1600 capture viewport
+ * (measured: 1,289px vertically, 1,882px horizontally). `projects` is left
+ * out on purpose: it is where the warm-up lands, so filming it first would
+ * make the opening table switch a no-op.
+ *
+ * The floor stays even though the corpus is ours — `assertTableIsDense`
+ * reads the live record count, so an edit to the corpus that thins a
+ * collection out stops the run instead of quietly measuring a sparse page.
  */
 const DENSE_TABLES = ['tasks', 'invoices', 'users', 'expenses'] as const
 const MIN_TABLE_RECORDS = 10
 
 /**
  * Below this, a scroll is not worth claiming as a motion window (see
- * `scrollContainerToEdge`). 150, not 200: measured live, `tasks`'
- * horizontal range is 180px — real, visible column-scroll — and a 200px
- * floor made that scroll unreachable for no reason.
+ * `scrollContainerToEdge`). It is a floor against a container that has a
+ * few pixels of slack rather than a real range — the corpus's own ranges
+ * are an order of magnitude above it on both axes.
  */
 const MIN_MEANINGFUL_SCROLL_PX = 150
 
-export function resolveM1CaptureArguments(arguments_: readonly string[]): {
+/**
+ * `[url, outputDirectory]` from the command line, with the corpus's own
+ * origin as the fallback for the first.
+ *
+ * The origin is a parameter rather than a constant because the corpus is
+ * served on a port the operating system hands out per run
+ * (src/fixture-server.ts); there is no address to hard-code.
+ */
+export function resolveM1CaptureArguments(
+  arguments_: readonly string[],
+  fallbackUrl: string,
+): {
   outputDirectory: string
   url: string
 } {
-  const [
-    url = ONLYDASH_GUEST_BENCHMARK_URL,
-    outputDirectory = DEFAULT_OUTPUT_DIRECTORY,
-  ] = arguments_
+  const [url = fallbackUrl, outputDirectory = DEFAULT_OUTPUT_DIRECTORY] =
+    arguments_
   return { outputDirectory, url }
 }
 
@@ -47,17 +57,22 @@ type ScrollableMetrics = { current: number; range: number }
 
 /**
  * How long every scroll range on the page must stay unchanged before a
- * scroll target may be chosen. Measured live on the AI box (RTX 3090):
- * after a table switch OnlyDash's DataGrid root starts at the height the
- * previous view left behind and then grows by exactly 1px per rendered
- * frame (~24fps while it grows, because every step re-lays-out the whole
- * grid) until it fits every row — 27s for `tasks` after the Projects view.
- * While it grows, scroll range drains from the grid's own
- * `.MuiDataGrid-virtualScroller` into the page's `main` container (their
- * sum stays ~590px for `tasks`), so "the element with the largest range"
- * is decided by how far that growth has got at the instant of asking. A
- * 1px step every ~40ms changes the signature well inside 500ms, so this
- * window cannot mistake a growing layout for a settled one.
+ * scroll target may be chosen.
+ *
+ * The defect this window exists against was measured on a real business
+ * application: after a table switch its grid root started at the height the
+ * previous view had left behind and then grew by 1px per rendered frame
+ * until it fitted every row — 27 seconds in the worst case. While it grew,
+ * scroll range drained out of the grid's own inner scroller into the page's
+ * container (their sum stayed constant), so "the element with the largest
+ * range" was decided by how far that growth had got at the instant of
+ * asking. A 1px step every ~40ms changes the signature well inside 500ms,
+ * so this window cannot mistake a growing layout for a settled one.
+ *
+ * The corpus lays its grid out in one pass and settles immediately, which
+ * is why the transient has a browser test of its own
+ * (`tests/scroll-geometry.browser.test.ts`) rather than relying on the
+ * benchmark to run into it.
  */
 export const SCROLL_GEOMETRY_STABLE_MS = 500
 const SCROLL_GEOMETRY_SAMPLE_MS = 50
@@ -149,19 +164,18 @@ export async function waitForStableScrollGeometry(
  * every `overflow: auto|scroll` element plus the document's own scrolling
  * element — instead of a hard-coded selector.
  *
- * A hard-coded `.MuiDataGrid-virtualScroller` selector was the root cause
- * of the dead-scroll-pass bug across several earlier rounds of this
- * benchmark: measured live, that element's own vertical range depends on
- * MUI's row-virtualization layout timing and was observed anywhere from 2px
- * (once its layout has settled — indistinguishable, to this benchmark, from
- * "there is genuinely nothing to scroll") to 500+px (right after a table
- * switch, before it settles) for the exact same table and viewport. The
- * element that actually carries the page's real scroll at 2560x1600 turned
- * out to be the *page's own* scroll container
- * (`main.flex-1.overflow-auto.min-w-0` in OnlyDash's current layout, not
- * hard-coded here either, since a future layout change would silently make
- * that selector wrong too) — this function measures ranges directly instead
- * of trusting either selector to still be the right one.
+ * A hard-coded selector for the grid's inner scroller was the root cause of
+ * the dead-scroll-pass bug across several earlier rounds of this benchmark:
+ * measured live against a virtualizing grid, that element's own vertical
+ * range depended on layout timing and was observed anywhere from 2px (once
+ * settled — indistinguishable, to this benchmark, from "there is genuinely
+ * nothing to scroll") to 500+px for the exact same table and viewport, while
+ * the range that mattered had moved into the page's own container.
+ *
+ * Which of the corpus's two nested containers holds the larger range also
+ * depends on the viewport — at a phone's width the page container carries
+ * more of it than the grid does, at the capture viewport it is the other way
+ * round — so measuring beats naming here even on a fixture we own.
  */
 async function findLargestScrollElement(
   page: Page,
@@ -312,9 +326,9 @@ async function probeWheelPoints(
  * up as a number instead of as a mystery.
  *
  * Where the pointer goes before the wheel starts is not cosmetic: Chromium
- * binds a wheel gesture to the element under the pointer, so the center of the
- * container — where OnlyDash's grid keeps its own 2px-range virtual scroller —
- * swallowed most of the commanded distance (#47, numbers in
+ * binds a wheel gesture to the element under the pointer, so a wheel aimed at
+ * the center of the page container is swallowed by the grid that sits there
+ * and most of the commanded distance never arrives (#47, numbers in
  * `chooseWheelPoint`). The point is chosen by hit-testing candidates across the
  * target's visible area and taking the first that reaches the target with no
  * other scrollable element in between; if none does, this throws instead of
@@ -323,7 +337,7 @@ async function probeWheelPoints(
  * Hovers the target with a single `boundingBox()` read and jump, not
  * `demo.point`'s verified-hit-test-and-settle machinery: `demo.point`'s
  * 80ms-stability window never closed within a 10s `settleTimeoutMs` against
- * a MUI grid's virtualized scroller, which keeps recalculating its own
+ * a virtualizing grid, which keeps recalculating its own
  * geometry while scrolling — inflating the claimed motion window with
  * several seconds of static waiting *before* any real scrolling starts, the
  * exact frozen-motion-window problem this benchmark exists to avoid. The
@@ -420,13 +434,11 @@ async function waitForLoadingToClear(page: Frame | Page): Promise<void> {
 /**
  * Re-sorts the grid by clicking its first column header twice (ascending,
  * then descending) — a guaranteed row-reorder, independent of scroll
- * range. Added after a live probe found the grid's scroller grows to fit
- * all rows once the layout settles (`tasks`: 517px vertical range on
- * first visit, 2px on a second visit to the same table — the container
- * itself, not `demo.scroll` or the measurement, since a fresh measurement
- * runs every time). Scrolling is real motion when it is available (mostly
- * the first visit to a table); sorting is real motion always, so a later
- * cycle is not just a sequence of static holds once scroll range runs out.
+ * range. Added after a live probe found a virtualizing grid's scroller can
+ * grow to fit all its rows once the layout settles, leaving a second visit
+ * to the same table with nothing left to scroll. Scrolling is real motion
+ * when it is available; sorting is real motion always, so a later cycle is
+ * not just a sequence of static holds once scroll range runs out.
  */
 async function sortFirstColumn(
   windows: MotionWindow[],
@@ -498,55 +510,25 @@ async function switchToTable(
 }
 
 /**
- * Signs into OnlyDash's public guest sandbox and lands on the dense
- * Projects data grid. Deliberately run *before* `captureScreencast` starts:
- * capturing this sequence produced ~0.9s of blank white frames at the head
- * of a real recording (the auth screen and the post-login "Connect Your
- * Account" upsell are not the content M1 is meant to show), and M1's
- * acceptance criterion is 20s of the actual dense UI, not 20s that includes
- * a loading screen.
+ * Opens the corpus and waits until its first collection is on screen.
  *
- * Verified live 2026-09-11 with Playwright MCP against a cleared session:
- * guest sign-in needs no credentials, "Demo, changes are not saved"/"Writes
- * are simulated" confirms nothing written is persisted, and sign-in lands
- * on a "Connect Your Account" upsell over the Projects collection —
- * clicking the Projects sidebar entry again is what actually reveals the
- * grid.
+ * Deliberately run *before* `captureScreencast` starts: capturing a page's
+ * arrival produced ~0.9s of blank frames at the head of a real recording,
+ * and M1's acceptance criterion is 20s of dense UI, not 20s that includes a
+ * loading screen.
+ *
+ * There is no sign-in and no menu to open — the corpus shows the same
+ * controls at every width on purpose, which is what lets one recording
+ * script serve a desktop, a tablet and two phones (#77). Everything a
+ * warm-up still has to do is wait: the heading and the grid have to be there
+ * before the camera rolls.
  */
-export async function warmUpOnlyDash(
+export async function warmUpBenchApp(
   app: Frame | Page,
-  url = ONLYDASH_GUEST_BENCHMARK_URL,
+  url: string,
 ): Promise<void> {
   await app.goto(url, { waitUntil: 'domcontentloaded' })
-  await app.getByRole('button', { name: 'Continue as Guest' }).click()
-  // At a phone's width OnlyDash puts its sidebar behind a menu button, so
-  // the Projects link the desktop flow clicks is present but not reachable.
-  // Opening the menu first is the same journey a person on a phone makes.
-  //
-  // It is a question about the layout, not about the device — writing it as
-  // `if (device.isMobile)` would put a fact about a layout in a place that
-  // cannot see the layout. And it is a *wait*, not a bare visibility check,
-  // because a check asked the instant after sign-in races the mount and
-  // answers "no" on a phone too. The cost of the wait is up to five seconds
-  // on a wide viewport, spent outside the capture, where it buys the
-  // difference between a reliable warm-up and an occasional one.
-  const menu = app.getByRole('button', { name: /toggle menu/i })
-  const behindAMenu = await menu
-    .waitFor({ state: 'visible', timeout: 5_000 })
-    .then(() => true)
-    .catch(() => false)
-  if (behindAMenu) await menu.click()
-  await app.getByRole('link', { exact: true, name: 'Projects' }).click()
-  // The drawer does not close itself when a link inside it is followed: the
-  // grid is behind it, present and hidden. Measured — without this the
-  // warm-up waits out its timeout on a `role="grid"` that resolves 59 times
-  // and is hidden every time. It is closed by its own close control rather
-  // than by the button that opened it, because the open drawer covers that
-  // button and intercepts the click.
-  if (behindAMenu) {
-    await app.locator('aside [data-testid="CloseIcon"]').first().click()
-  }
-  await app.getByRole('heading', { name: 'Projects', level: 1 }).waitFor()
+  await app.getByRole('heading', { level: 1, name: 'Projects' }).waitFor()
   await app.getByRole('grid').waitFor()
   await waitForLoadingToClear(app)
   // Lets any remaining mount transition finish before the first frame is
@@ -570,7 +552,7 @@ export async function warmUpOnlyDash(
  * reading `page.url()`, and text-based "Loading…" polling — `Demo` is
  * purely an interaction API, not a DOM inspection one.
  */
-export async function runOnlyDashMotion(
+export async function runBenchMotion(
   page: Page,
   demo: Demo,
 ): Promise<MotionWindow[]> {
@@ -676,7 +658,7 @@ export async function runOnlyDashMotion(
     }
     if (windows.length === windowsBeforeCycle) {
       throw new Error(
-        `runOnlyDashMotion: cycle ${String(cycle)} produced no motion windows at all across ${DENSE_TABLES.join(', ')}`,
+        `runBenchMotion: cycle ${String(cycle)} produced no motion windows at all across ${DENSE_TABLES.join(', ')}`,
       )
     }
   }
@@ -685,12 +667,12 @@ export async function runOnlyDashMotion(
   return windows
 }
 
-/** Full OnlyDash benchmark: warm up unrecorded, then run the recorded motion. */
-export async function runOnlyDashBenchmark(
+/** The whole benchmark: warm up unrecorded, then run the recorded motion. */
+export async function runBenchmark(
   page: Page,
   demo: Demo,
-  url = ONLYDASH_GUEST_BENCHMARK_URL,
+  url: string,
 ): Promise<MotionWindow[]> {
-  await warmUpOnlyDash(page, url)
-  return runOnlyDashMotion(page, demo)
+  await warmUpBenchApp(page, url)
+  return runBenchMotion(page, demo)
 }
