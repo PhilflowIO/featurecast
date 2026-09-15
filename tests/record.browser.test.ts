@@ -12,6 +12,7 @@ import {
   type Demo,
   type RecordPage,
 } from '../src/record.js'
+import { parseEventTimes } from '../src/render/events.js'
 
 /**
  * M2 acceptance: proves the wrapper's contract against a real headless
@@ -235,6 +236,28 @@ describe('record against a real headless Chromium', () => {
     const logA = await readFile(join(runA, 'events.jsonl'), 'utf8')
     const logB = await readFile(join(runB, 'events.jsonl'), 'utf8')
     expect(logB).toBe(logA)
+
+    // The times live beside the log, and this is why. Each run reads a
+    // different wall clock, so the two time files differ — while the log they
+    // describe is byte-identical. Put the readings in the log and this
+    // paragraph's first assertion dies; the split is what lets both promises
+    // hold at once. The ticks tie the two files to the same run, which is also
+    // what the reader checks before it trusts them.
+    const timesA = parseEventTimes(
+      await readFile(join(runA, 'event-times.jsonl'), 'utf8'),
+    )
+    const timesB = parseEventTimes(
+      await readFile(join(runB, 'event-times.jsonl'), 'utf8'),
+    )
+    expect(timesA.entries.map((entry) => entry.tick)).toEqual(
+      timesB.entries.map((entry) => entry.tick),
+    )
+    expect(timesA.startedAt).not.toBe(timesB.startedAt)
+    expect(timesA.entries.length).toBe(logA.trim().split('\n').length - 1)
+    // Time only moves forward, and the run is not instantaneous.
+    const readings = timesA.entries.map((entry) => entry.ms)
+    expect(readings).toEqual([...readings].sort((left, right) => left - right))
+    expect(readings[readings.length - 1]).toBeGreaterThan(0)
 
     const events = logA
       .trim()

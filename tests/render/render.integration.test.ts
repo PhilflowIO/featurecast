@@ -7,7 +7,11 @@ import { promisify } from 'node:util'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { serializeEvent, type RecordEvent } from '../../src/record.js'
+import {
+  serializeEvent,
+  serializeEventTimes,
+  type RecordEvent,
+} from '../../src/record.js'
 import { createRaster, type Raster } from '../../src/render/compose.js'
 import { DEFAULT_CURSOR_LOOK } from '../../src/render/cursor.js'
 import {
@@ -263,6 +267,21 @@ async function makeCapture(): Promise<string> {
   await writeFile(
     join(directory, 'events.jsonl'),
     `${events.map(serializeEvent).join('\n')}\n`,
+    'utf8',
+  )
+  // The times beside the log, as the recorder writes them. This fixture is
+  // synthetic, so the tick axis *is* its timeline — but the renderer no longer
+  // knows how to read a tick, and rightly so: it reads what the recording says
+  // the clock was. Writing that here keeps the fixture honest about the shape
+  // a capture directory has.
+  await writeFile(
+    join(directory, 'event-times.jsonl'),
+    serializeEventTimes(
+      events.filter((event) => event.type !== 'header'),
+      events
+        .filter((event) => event.type !== 'header')
+        .map((event) => STARTED_AT + (event.tick * 1000) / 60),
+    ),
     'utf8',
   )
   return directory

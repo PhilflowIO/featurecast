@@ -1,5 +1,3 @@
-export { tickToMilliseconds, toTimedEvents } from './clock.js'
-export type { ClockOptions, TimedEvent } from './clock.js'
 export {
   cursorAt,
   DEFAULT_CURSOR_LOOK,
@@ -15,7 +13,13 @@ export {
   resample,
 } from './compose.js'
 export type { Raster, RgbaRaster } from './compose.js'
-export { parseEventLine, parseEventLog } from './events.js'
+export {
+  parseEventLine,
+  parseEventLog,
+  parseEventTimes,
+  toTimedEvents,
+} from './events.js'
+export type { EventTimes, TimedEvent } from './events.js'
 export {
   buildDecodePlan,
   buildEncodePlan,

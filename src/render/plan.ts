@@ -1,6 +1,3 @@
-import type { RecordEvent } from '../record.js'
-
-import { toTimedEvents, type ClockOptions, type TimedEvent } from './clock.js'
 import {
   cursorAt,
   DEFAULT_CURSOR_LOOK,
@@ -9,6 +6,7 @@ import {
   type CursorKind,
   type CursorLook,
 } from './cursor.js'
+import type { TimedEvent } from './events.js'
 import {
   DEFAULT_FORMATS,
   resolveFormat,
@@ -44,7 +42,6 @@ export type CaptureInput = {
 }
 
 export type PlanOptions = {
-  clock?: ClockOptions
   cursor?: CursorLook
   formats?: readonly FormatSpec[]
   fps?: number
@@ -99,18 +96,11 @@ export type RenderPlan = {
 /**
  * The moments idle trimming must not cut near.
  *
- * These times inherit the clock defect described in `src/render/clock.ts`:
- * they come from the event log's tick counter, which does not advance for real
- * but unplanned time, while the stretches being trimmed come from the capture's
- * own frame timestamps, which do. The two are on different clocks and the
- * offset between them grows in steps. In the m1-008 recording the `type`
- * event's 250 ms protection window sits at 5967 ms while the interaction it is
- * meant to protect happened at 7611 ms — it guards the wrong second.
- *
- * No harm has been reproduced, because no trimmable stillness happens to sit
- * there. It becomes a real defect the moment one does, and it dies with the
- * same change: issue #9 puts the events on the frame clock, after which these
- * times and the frame times are the same clock and the mismatch cannot exist.
+ * Until #9 these times came from the event log's `tick` counter while the
+ * stretches being trimmed came from the capture's frame timestamps — two
+ * clocks, with an offset that grew in steps, so a 250 ms protection window
+ * routinely guarded the wrong second. Both sides now read the same wall clock,
+ * so a protected moment sits where the interaction actually happened.
  */
 function interactionTimes(events: readonly TimedEvent[]): number[] {
   const times: number[] = []
@@ -139,8 +129,9 @@ function remapEvents(
 /**
  * The whole post-processing decision, as a pure function.
  *
- * Inputs are events that already carry a time in milliseconds and frame
- * timestamps in milliseconds; nothing here knows what a `tick` is. The output
+ * Inputs are events that already carry a time in milliseconds — lifted there
+ * by `toTimedEvents` from the times the recorder wrote — and frame timestamps
+ * in milliseconds. Nothing here knows what a `tick` is. The output
  * is, per format, one crop rectangle and one cursor draw instruction per
  * output frame — the data an encoder needs and the data a test can check
  * exactly. No pixels are touched at this level, which is why changing a look
@@ -148,7 +139,7 @@ function remapEvents(
  */
 export function planRender(
   capture: CaptureInput,
-  events: readonly RecordEvent[],
+  events: readonly TimedEvent[],
   options: PlanOptions = {},
 ): RenderPlan {
   const fps = options.fps ?? 60
@@ -158,16 +149,15 @@ export function planRender(
   const frameTimes = capture.frames.map(
     (frame) => frame.timestamp - capture.sessionStartedAt,
   )
-  const timedEvents = toTimedEvents(events, options.clock)
   const mapping = buildTimeMapping(
     frameTimes,
     capture.sessionDurationMs,
-    interactionTimes(timedEvents),
+    interactionTimes(events),
     options.idle,
   )
   // One clock for everybody: the same mapping bends the frames and the events,
   // so trimming cannot pull the two timelines apart.
-  const outputEvents = remapEvents(timedEvents, mapping)
+  const outputEvents = remapEvents(events, mapping)
   const frames = capture.frames.map((frame, index) => ({
     file: frame.file,
     outputMs: mapTime(mapping, frameTimes[index] ?? 0),
