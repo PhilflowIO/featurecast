@@ -1,6 +1,6 @@
 import {
   cursorAt,
-  DEFAULT_CURSOR_LOOK,
+  cursorLookFor,
   inferCursorKind,
   rippleStarts,
   type CursorKind,
@@ -92,6 +92,12 @@ export type FormatPlan = {
 }
 
 export type RenderPlan = {
+  /**
+   * The resolved pointer look. Stored rather than re-derived: the painter has
+   * to raster the very pointer the plan placed, and a second assembly of the
+   * same defaults is a second decision waiting to disagree.
+   */
+  cursor: Required<CursorLook>
   /** Source frames with their output timestamps, after idle trimming. */
   frames: ReadonlyArray<{ file: string; outputMs: number }>
   formats: readonly FormatPlan[]
@@ -181,11 +187,10 @@ export function planRender(
     outputMs: mapTime(mapping, frameTimes[index] ?? 0),
   }))
 
-  const cursorLook = {
-    ...DEFAULT_CURSOR_LOOK,
-    kind: inferCursorKind(outputEvents),
-    ...options.cursor,
-  }
+  const cursorLook = cursorLookFor(
+    inferCursorKind(outputEvents),
+    options.cursor,
+  )
   const zoomLook = resolveLook(options.zoom)
   const samples = pointerSamples(outputEvents)
   const ripples = rippleStarts(outputEvents)
@@ -249,6 +254,7 @@ export function planRender(
   }
 
   return {
+    cursor: cursorLook,
     frames,
     formats,
     fps,

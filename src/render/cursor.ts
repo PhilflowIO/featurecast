@@ -94,6 +94,43 @@ export const DEFAULT_CURSOR_LOOK: Required<CursorLook> = {
   visible: true,
 }
 
+/**
+ * The size of the two pointers, which is not one number.
+ *
+ * 46px is an arrow's height, and an arrow is a small shape with a sharp tip:
+ * the eye finds it because it is pointed, not because it is large. A touch dot
+ * has no tip — it is a disc, and a disc that small on a 1080-wide portrait
+ * frame reads as a speck of dust rather than as a finger. A real fingertip
+ * presses roughly 45 CSS pixels of a phone's screen, which is about 125 of a
+ * mobile recording's picture pixels; 84 is deliberately under that, big enough
+ * to follow across a swipe and small enough not to sit on the content it is
+ * pointing at.
+ */
+const TOUCH_SIZE_PX = 84
+const TOUCH_RIPPLE_RADIUS_PX = 132
+
+/**
+ * The look for a recording, with the defaults that belong to its pointer.
+ *
+ * One function rather than two spread objects: the plan decides which pointer
+ * a recording gets, and the painter has to raster exactly that one. When both
+ * assembled their own look from the same constant they agreed by luck, and a
+ * kind-dependent default is precisely the change that would have broken it.
+ */
+export function cursorLookFor(
+  kind: CursorKind,
+  overrides: CursorLook = {},
+): Required<CursorLook> {
+  return {
+    ...DEFAULT_CURSOR_LOOK,
+    ...(kind === 'touch'
+      ? { rippleRadiusPx: TOUCH_RIPPLE_RADIUS_PX, sizePx: TOUCH_SIZE_PX }
+      : {}),
+    kind,
+    ...overrides,
+  }
+}
+
 /** What to draw at one moment, in source-capture pixels. */
 export type CursorFrame = {
   kind: CursorKind
