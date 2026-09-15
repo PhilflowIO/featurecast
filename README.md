@@ -282,18 +282,30 @@ pnpm featurecast run demo/feature-xy.ts --devices desktop-wide --upload
 ```
 
 `featurecast run` spielt ein Aufnahme-Skript einmal pro Gerät ab, nimmt die
-Einzelbilder auf, rendert sie zu MP4 und lädt sie auf Wunsch in den
-S3-kompatiblen Speicher. Ein Skript exportiert dafür den Rumpf der Aufnahme
-statt `record()` selbst aufzurufen; Aufbau, Schalter und das vollständige
-Beispiel stehen in
+Einzelbilder auf, schickt sie **durch die Nachbearbeitung** — Zoom, Zeiger,
+Leerlauf-Raffung — und lädt das Ergebnis auf Wunsch in den S3-kompatiblen
+Speicher. Ein Skript exportiert dafür den Rumpf der Aufnahme statt `record()`
+selbst aufzurufen; Aufbau, Schalter und das vollständige Beispiel stehen in
 [docs/RECORDING-SCRIPTS.md](docs/RECORDING-SCRIPTS.md#ein-kommando-für-die-ganze-kette).
 
 Welches Gerät aufgenommen wird, entscheidet allein sein Name: das aufgelöste
 Gerät bringt seine Aufnahmefläche, seine Ausgabegröße und seine
-Encoder-Einstellung mit bis in den ffmpeg-Aufruf. Alle drei Desktop-Presets
-laufen durch; die mobilen warten weiter auf die Entscheidung über ihre
-Aufnahmefläche (M3) und sagen das beim Namen, statt still eine Zahl zu
-wählen.
+Encoder-Einstellung mit bis in den ffmpeg-Aufruf. Alle elf Presets laufen
+durch, Desktop wie mobil.
+
+**Geliefert wird die eine Größe, die das Gerät verspricht.** `--all-formats`
+macht daraus 16:9, 9:16 und 1:1 — aus derselben Aufnahme, ohne zweiten
+Browser-Lauf. Drei Formate sind ein Schalter und keine Voreinstellung: zwei
+davon wären Ausschnitte, die niemand bestellt hat, und aus einer mobilen
+Aufnahme lassen sich zwei der drei gar nicht scharf schneiden.
+
+Nebeneinander liegen zwei Ordner je Gerät: die Aufnahme (`frames/`,
+`timestamps.json`, das Ereignis-Log) und daneben die Videos samt
+`decisions.json`. Was Rohmaterial ist und was Ergebnis, sieht man am Ordner.
+
+**Ein Look wird hier nicht geändert.** Jeder Look-Schalter gehört `pnpm render`,
+das eine fertige Aufnahme liest und keinen Browser kostet — genau dafür ist die
+Nachbearbeitung eine eigene Stufe.
 
 ## Entwicklung
 

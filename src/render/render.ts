@@ -10,7 +10,6 @@ import {
   sourceFrameForOutput,
   type EncoderOptions,
 } from './ffmpeg.js'
-import type { AspectName } from './format.js'
 import {
   planRender,
   serializePlan,
@@ -18,7 +17,7 @@ import {
   type RenderPlan,
 } from './plan.js'
 import {
-  runPipeline,
+  runComposePipeline,
   type CursorPainter,
   type PipelineSpawn,
 } from './pipeline.js'
@@ -39,7 +38,7 @@ export type RenderOptions = PlanOptions & {
 }
 
 export type RenderOutput = {
-  aspect: AspectName
+  label: string
   clamps: readonly string[]
   outputPath: string
   height: number
@@ -55,8 +54,8 @@ export type RenderResult = {
 }
 
 /** `16:9` is not a file name on every filesystem worth supporting. */
-export function aspectSlug(aspect: AspectName): string {
-  return aspect.replace(':', '-')
+export function formatSlug(label: string): string {
+  return label.replace(':', '-')
 }
 
 type CaptureManifest = {
@@ -178,15 +177,15 @@ export async function renderRecording(
   }
 
   const outputs: RenderOutput[] = plan.formats.map((format) => ({
-    aspect: format.aspect,
+    label: format.label,
     clamps: format.clamps,
     height: format.output.height,
-    outputPath: join(outDirectory, `${aspectSlug(format.aspect)}.mp4`),
+    outputPath: join(outDirectory, `${formatSlug(format.label)}.mp4`),
     width: format.output.width,
   }))
 
   if (options.dryRun !== true) {
-    await runPipeline({
+    await runComposePipeline({
       cursor,
       decode: buildDecodePlan(listPath),
       encode: plan.formats.map((format, index) => {

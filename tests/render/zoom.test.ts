@@ -39,15 +39,15 @@ const FLOOR_FRACTION = approachStepFraction(DEFAULT_ZOOM_LOOK)
 const PULL_OUT_FRACTION = pullOutStepFraction(DEFAULT_ZOOM_LOOK)
 
 const LANDSCAPE: FormatSpec = {
-  aspect: '16:9',
+  label: '16:9',
   desired: { width: 1920, height: 1080 },
 }
 const PORTRAIT: FormatSpec = {
-  aspect: '9:16',
+  label: '9:16',
   desired: { width: 1080, height: 1920 },
 }
 const SQUARE: FormatSpec = {
-  aspect: '1:1',
+  label: '1:1',
   desired: { width: 1080, height: 1080 },
 }
 const CAPTURE = { width: 2560, height: 1600 }

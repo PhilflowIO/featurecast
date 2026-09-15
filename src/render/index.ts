@@ -27,7 +27,7 @@ export {
   sourceFrameForOutput,
 } from './ffmpeg.js'
 export { aspectRatio, DEFAULT_FORMATS, resolveFormat } from './format.js'
-export type { AspectName, FormatSpec, ResolvedFormat } from './format.js'
+export type { FormatSpec, ResolvedFormat } from './format.js'
 export { baseRect, contains } from './geometry.js'
 export type { Rect, Size } from './geometry.js'
 export { buildTimeMapping, DEFAULT_IDLE, mapTime } from './idle.js'
@@ -39,9 +39,9 @@ export type {
   PlanOptions,
   RenderPlan,
 } from './plan.js'
-export { composeFrame, runPipeline } from './pipeline.js'
+export { composeFrame, runComposePipeline } from './pipeline.js'
 export type { CursorPainter } from './pipeline.js'
-export { aspectSlug, renderRecording } from './render.js'
+export { formatSlug, renderRecording } from './render.js'
 export type { RenderOptions, RenderResult } from './render.js'
 export { detectRestZones } from './rest.js'
 export { relaxSpring, solveSpring1d, springEase } from './spring.js'

@@ -33,7 +33,7 @@ describe('the render command', () => {
 
   it('accepts a subset of the formats', () => {
     const parsed = parseArguments(['in', 'out', '--formats', '9:16,1:1'])
-    expect(parsed.options.formats?.map((format) => format.aspect)).toEqual([
+    expect(parsed.options.formats?.map((format) => format.label)).toEqual([
       '9:16',
       '1:1',
     ])

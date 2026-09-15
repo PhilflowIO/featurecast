@@ -14,7 +14,7 @@ const BASE = { x: 0, y: 0, width: 2560, height: 1440 }
 
 function format(overrides: Partial<FormatPlan> = {}): FormatPlan {
   return {
-    aspect: '16:9',
+    label: '16:9',
     base: BASE,
     clamps: [],
     frames: [

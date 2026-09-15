@@ -4,11 +4,10 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { EncodeTarget } from '../src/assemble.js'
 import { resolveDevice } from '../src/devices.js'
 import {
   deviceSlug,
-  encodeTargetFor,
+  formatsFor,
   importScript,
   prepareCapture,
   runPipeline,
@@ -69,7 +68,18 @@ function stubs(
 ): PipelineDependencies & { lines: string[] } {
   const lines: string[] = []
   return {
-    assemble: vi.fn(async () => undefined),
+    render: vi.fn<PipelineDependencies['render']>(
+      async (_capture, outDirectory, request) => ({
+        decisionsPath: join(outDirectory, 'decisions.json'),
+        outputs: request.formats.map((format) => ({
+          label: format.label,
+          outputPath: join(
+            outDirectory,
+            `${format.label.replace(':', '-')}.mp4`,
+          ),
+        })),
+      }),
+    ),
     checkUploadConfigured: vi.fn(),
     lines,
     loadScript: vi.fn(async () => ({ recording: async () => undefined })),
@@ -104,32 +114,39 @@ describe('runPipeline', () => {
       'rendered',
     ])
     expect(
-      report.outcomes.map((outcome) =>
-        outcome.kind === 'rendered' ? outcome.url : undefined,
+      report.outcomes.flatMap((outcome) =>
+        outcome.kind === 'rendered'
+          ? outcome.deliveries.map((delivery) => delivery.url)
+          : [],
       ),
     ).toEqual([
-      'https://store.example/feature-xy/desktop-wide.mp4',
-      'https://store.example/feature-xy/desktop-chrome.mp4',
+      // 16:10 for desktop-wide: the key carries the format, or a device that
+      // ships more than one video would land them all on one object.
+      'https://store.example/feature-xy/desktop-wide-1920x1200.mp4',
+      'https://store.example/feature-xy/desktop-chrome-16-9.mp4',
     ])
-    // Each device gets its own directory, so a second device cannot land on
-    // the first one's frames.
-    expect(dependencies.assemble).toHaveBeenNthCalledWith(
+    // Each device reads its own capture directory and writes to its own
+    // sister directory, so neither the frames nor the videos can collide —
+    // and the render's own artifacts never land between the frames.
+    expect(dependencies.render).toHaveBeenNthCalledWith(
       1,
       join('artifacts/feature-xy', 'desktop-wide'),
-      join('artifacts/feature-xy', 'desktop-wide', 'output.mp4'),
+      join('artifacts/feature-xy', 'desktop-wide-video'),
       expect.anything(),
     )
-    expect(dependencies.assemble).toHaveBeenNthCalledWith(
+    expect(dependencies.render).toHaveBeenNthCalledWith(
       2,
       join('artifacts/feature-xy', 'desktop-chrome'),
-      join('artifacts/feature-xy', 'desktop-chrome', 'output.mp4'),
+      join('artifacts/feature-xy', 'desktop-chrome-video'),
       expect.anything(),
     )
   })
 
-  it('hands the resolved device its own output geometry and quality', async () => {
+  it('delivers exactly the one size the device promises', async () => {
     // The gap this command closes: before it, nothing carried a resolved
     // device's output layer to the encoder, and every render was 1920x1080.
+    // `desktop-wide` promises 16:10, which is also the case that proves the
+    // format is a size and not one of three names.
     const dependencies = stubs()
     await runPipeline(
       {
@@ -140,15 +157,31 @@ describe('runPipeline', () => {
       },
       dependencies,
     )
-    const target = vi.mocked(dependencies.assemble).mock.calls[0]?.[2]
-    expect(target).toEqual({
-      capture: { height: 1600, width: 2560 },
-      output: {
-        height: 1200,
-        quality: { crf: 23, encoder: 'x264' },
-        width: 1920,
+    expect(vi.mocked(dependencies.render).mock.calls[0]?.[2]).toEqual({
+      formats: [{ desired: { height: 1200, width: 1920 }, label: '1920x1200' }],
+      quality: { crf: 23, encoder: 'x264' },
+    })
+  })
+
+  it('delivers all three formats when asked, from the one recording', async () => {
+    const dependencies = stubs()
+    await runPipeline(
+      {
+        allFormats: true,
+        devices: ['desktop-wide'],
+        out: 'out',
+        script: 'demo/feature-xy.ts',
+        upload: false,
       },
-    } satisfies EncodeTarget)
+      dependencies,
+    )
+    expect(dependencies.record).toHaveBeenCalledTimes(1)
+    const request = vi.mocked(dependencies.render).mock.calls[0]?.[2]
+    expect(request?.formats.map((format) => format.label)).toEqual([
+      '16:9',
+      '9:16',
+      '1:1',
+    ])
   })
 
   it('does not stop the other devices when one is refused', async () => {
@@ -168,7 +201,7 @@ describe('runPipeline', () => {
     expect(report.ok).toBe(false)
     expect(report.outcomes[0]?.kind).toBe('failed')
     expect(report.outcomes[1]?.kind).toBe('rendered')
-    expect(dependencies.assemble).toHaveBeenCalledTimes(1)
+    expect(dependencies.render).toHaveBeenCalledTimes(1)
   })
 
   it('refuses a framed device whose script never named the application', async () => {
@@ -385,38 +418,34 @@ describe('prepareCapture', () => {
   })
 })
 
-describe('encodeTargetFor', () => {
-  it('overrides the preset encoder when a caller names one', () => {
-    // One encoder per render: --encoder replaces what the device stored
-    // rather than sitting beside it as a second setting.
-    const device = resolveDevice('desktop-wide')
-    const target = encodeTargetFor(
-      prepareCapture(device),
-      device.output,
-      'nvenc-hevc',
+describe('formatsFor', () => {
+  it('delivers the one size the preset promises, labelled by its ratio', () => {
+    expect(formatsFor(resolveDevice('desktop').output, false)).toEqual([
+      { desired: { height: 1080, width: 1920 }, label: '16:9' },
+    ])
+    expect(formatsFor(resolveDevice('iphone').output, false)).toEqual([
+      { desired: { height: 1920, width: 1080 }, label: '9:16' },
+    ])
+  })
+
+  it('names a ratio that has no name by its pixels', () => {
+    // `desktop-wide` is 16:10 and `tablet` is 3:4. Neither is one of the
+    // curated three, and both used to be unreachable from the chain because
+    // a format was a name rather than a size.
+    expect(formatsFor(resolveDevice('desktop-wide').output, false)).toEqual([
+      { desired: { height: 1200, width: 1920 }, label: '1920x1200' },
+    ])
+    expect(formatsFor(resolveDevice('tablet').output, false)[0]?.label).toBe(
+      '1200x1600',
     )
-    expect(target.output.quality).toEqual({ cq: 23, encoder: 'nvenc-hevc' })
-    expect(target.output.width).toBe(1920)
-    expect(target.output.height).toBe(1200)
   })
 
-  it('carries the capture geometry it was handed, not the one M1 records', () => {
-    // A capture area other than 2560x1600 is what M3 will produce; the
-    // encode target must follow the recording rather than a constant.
-    const device = resolveDevice('desktop-wide')
+  it('switches to all three only when asked', () => {
     expect(
-      encodeTargetFor(
-        { ...RECORDED_CAPTURE, height: 1440, width: 2560 },
-        device.output,
-      ).capture,
-    ).toEqual({ height: 1440, width: 2560 })
-  })
-
-  it('keeps the preset encoder when no caller names one', () => {
-    const device = resolveDevice('desktop-wide')
-    expect(
-      encodeTargetFor(prepareCapture(device), device.output).output.quality,
-    ).toEqual({ crf: 23, encoder: 'x264' })
+      formatsFor(resolveDevice('desktop-wide').output, true).map(
+        (format) => format.label,
+      ),
+    ).toEqual(['16:9', '9:16', '1:1'])
   })
 })
 

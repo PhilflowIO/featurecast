@@ -1,36 +1,44 @@
 import { baseRect, type Rect, type Size } from './geometry.js'
 
-/** The three deliverables M4 owes from one raw recording. */
-export type AspectName = '16:9' | '9:16' | '1:1'
-
+/**
+ * One deliverable: a size to ship and a name to ship it under.
+ *
+ * It used to be a size plus one of three aspect *names*, and the ratio was
+ * looked up from the name. That worked for as long as the render command was
+ * the only caller, because it only ever asked for those three. It stopped
+ * working the moment the chain started delivering what a device promises:
+ * `desktop-wide` promises 1920x1200, which is 16:10 and therefore has no name
+ * in that list — the one preset whose own output could not be requested.
+ *
+ * So the ratio comes from the size, where it always was, and the name is a
+ * label the caller chooses. `docs/DEVICES.md` made the same move for the same
+ * reason: an aspect is an input shorthand and a derived label, never a stored
+ * field that can contradict the pixels next to it.
+ */
 export type FormatSpec = {
-  aspect: AspectName
   /**
    * The size we would like to ship. It is a wish, not a promise: see
    * `resolveFormat`, which refuses to reach it by upscaling.
    */
   desired: Size
+  /** What to call it — in the file name, the report and every message. */
+  label: string
 }
 
+/** What `pnpm render` delivers when nobody names a format. */
 export const DEFAULT_FORMATS: readonly FormatSpec[] = [
-  { aspect: '16:9', desired: { width: 1920, height: 1080 } },
-  { aspect: '9:16', desired: { width: 1080, height: 1920 } },
-  { aspect: '1:1', desired: { width: 1080, height: 1080 } },
+  { desired: { width: 1920, height: 1080 }, label: '16:9' },
+  { desired: { width: 1080, height: 1920 }, label: '9:16' },
+  { desired: { width: 1080, height: 1080 }, label: '1:1' },
 ]
 
-export function aspectRatio(aspect: AspectName): number {
-  switch (aspect) {
-    case '16:9':
-      return 16 / 9
-    case '9:16':
-      return 9 / 16
-    case '1:1':
-      return 1
-  }
+/** The ratio a format is cut to, read off the size it asks for. */
+export function aspectRatio(desired: Size): number {
+  return desired.width / desired.height
 }
 
 export type ResolvedFormat = {
-  aspect: AspectName
+  label: string
   /** The resting crop: the whole picture, at this aspect ratio. */
   base: Rect
   /**
@@ -90,7 +98,7 @@ function evenFloor(value: number): number {
  * cannot; it is never met by inventing pixels.
  */
 export function resolveFormat(spec: FormatSpec, source: Size): ResolvedFormat {
-  const aspect = aspectRatio(spec.aspect)
+  const aspect = aspectRatio(spec.desired)
   const raw = baseRect(source, aspect)
   // The height follows from the rounded width rather than being rounded on its
   // own. Rounding both independently leaves the resting frame slightly off its
@@ -114,8 +122,8 @@ export function resolveFormat(spec: FormatSpec, source: Size): ResolvedFormat {
     const clampedWidth = evenFloor(width * scale)
     const clampedHeight = evenFloor(clampedWidth / aspect)
     upscaleClamp =
-      `${spec.aspect} was asked for ${width}x${height}, but the largest ` +
-      `${spec.aspect} rectangle inside the ${source.width}x${source.height} ` +
+      `${spec.label} was asked for ${width}x${height}, but the largest ` +
+      `${spec.label} rectangle inside the ${source.width}x${source.height} ` +
       `capture is ${base.width}x${base.height}. Delivering ` +
       `${clampedWidth}x${clampedHeight} at full sharpness instead of ` +
       'upscaling. Record in this aspect ratio to get the requested size.'
@@ -124,8 +132,8 @@ export function resolveFormat(spec: FormatSpec, source: Size): ResolvedFormat {
   }
 
   return {
-    aspect: spec.aspect,
     base,
+    label: spec.label,
     maxZoom: base.width / width,
     output: { width, height },
     panBounds: {

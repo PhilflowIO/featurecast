@@ -30,7 +30,7 @@ describe('one raw recording, three formats', () => {
 
   it('delivers 16:9, 9:16 and 1:1 from a single pass over the same frames', () => {
     const plan = planRender(input, events)
-    expect(plan.formats.map((format) => format.aspect)).toEqual([
+    expect(plan.formats.map((format) => format.label)).toEqual([
       '16:9',
       '9:16',
       '1:1',

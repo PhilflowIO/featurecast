@@ -23,8 +23,14 @@ import {
 
 const USAGE = `featurecast run <script> [options]
 
-  Records <script> once per device, renders each recording to MP4 and
-  optionally uploads it.
+  Records <script> once per device, runs the recording through
+  post-production — zoom, pointer, idle trimming — and optionally uploads
+  what comes out.
+
+  A look is not changed here. Every look parameter belongs to \`pnpm render\`,
+  which reads a finished recording and costs no browser run: that is the whole
+  reason post-production is its own stage, and putting its dials on this
+  command would invite a re-record to change a colour.
 
   The script exports the body of the recording, it does not call record():
 
@@ -41,6 +47,8 @@ const USAGE = `featurecast run <script> [options]
 
 Options
   --devices <a,b>   Comma-separated device or preset names. Required.
+  --all-formats     Deliver 16:9, 9:16 and 1:1 instead of the one size the
+                    device promises. One recording either way.
   --out <dir>       Root output directory. Default: artifacts/<script name>.
   --upload          Upload each finished video and print its URL.
   --encoder <name>  Override the encoder: ${ENCODERS.join(', ')}.
@@ -110,6 +118,7 @@ function messageOf(error: unknown): string {
 function parseRunArguments(argv: readonly string[]):
   | undefined
   | {
+      allFormats: boolean
       devices: string[]
       encoder?: Encoder
       out: string
@@ -121,6 +130,7 @@ function parseRunArguments(argv: readonly string[]):
     allowPositionals: true,
     args: [...argv],
     options: {
+      'all-formats': { type: 'boolean' },
       devices: { type: 'string' },
       encoder: { type: 'string' },
       help: { short: 'h', type: 'boolean' },
@@ -156,6 +166,7 @@ function parseRunArguments(argv: readonly string[]):
     )
   }
   return {
+    allFormats: values['all-formats'] === true,
     devices,
     out: values.out ?? `artifacts/${scriptStem(script)}`,
     script,

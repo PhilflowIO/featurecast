@@ -96,8 +96,12 @@ in die Seite, sie müssen in den Text der Funktion hinein.
 ## Ein Kommando für die ganze Kette
 
 `featurecast run` nimmt ein Aufnahme-Skript, spielt es einmal pro Gerät ab,
-nimmt dabei die Einzelbilder auf, rendert sie zu MP4 und lädt das Ergebnis
-auf Wunsch hoch.
+nimmt dabei die Einzelbilder auf, schickt sie durch die Nachbearbeitung —
+Zoom, Zeiger, Leerlauf-Raffung — und lädt das Ergebnis auf Wunsch hoch.
+
+Geliefert wird die eine Größe, die das Gerät verspricht; `--all-formats`
+macht daraus 16:9, 9:16 und 1:1 aus derselben Aufnahme. Neben dem
+Aufnahme-Ordner entsteht ein zweiter mit den Videos und `decisions.json`.
 
 ```sh
 pnpm featurecast run demo/feature-xy.ts --devices desktop-wide --upload
@@ -121,6 +125,13 @@ export default async function featureXy(page: RecordPage, demo: Demo) {
 Ein vollständiges Beispiel liegt in
 [`demo/feature-xy.ts`](../demo/feature-xy.ts). Statt `default` geht auch ein
 Export namens `recording`.
+
+Ein drittes, optionales Export: **`url` nennt die Anwendung**, die gefilmt
+wird. Für ein Zeigergerät ist das freiwillig — das Skript navigiert selbst
+dorthin —, für ein Touch-Gerät ist es Pflicht, weil die Hülle, in der die
+Anwendung gefilmt wird, von deren eigenem Ursprung ausgeliefert wird
+([`src/framed.ts`](../src/framed.ts)). Fehlt sie, bricht die Kette ab, bevor
+ein Browser startet.
 
 | Schalter    | Bedeutung                                                                  |
 | ----------- | -------------------------------------------------------------------------- |
