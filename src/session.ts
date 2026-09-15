@@ -72,14 +72,14 @@ export type SessionRequest = {
    * Everything that has to happen before the camera rolls: signing in,
    * navigating to the screen the demo is about, dismissing a cookie banner.
    *
-   * It runs against the same page the capture will attach to, but *outside*
-   * the capture window, so none of it reaches the video. Without it a
+   * It runs against the same document the recording will be driven against,
+   * but *outside* the capture window, so none of it reaches the video. Without it a
    * recording of any real application opens on its login screen — and the
    * pointer travel of the sign-in clicks is recorded too, which is worse,
    * because those are seconds of a cursor moving through a screen the video
    * is not about.
    *
-   * It is deliberately a plain Playwright `Page` and not the `demo` wrapper:
+   * It is deliberately a bare Playwright `Frame` and not the `demo` wrapper:
    * nothing here is being demonstrated, so nothing here should be smoothed,
    * paced or written to the event log. `demo`'s pointer travel is a feature
    * of the recording, and setup is not part of the recording.
