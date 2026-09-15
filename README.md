@@ -48,7 +48,7 @@ Das alles ist unabhängig davon, wodurch sich die Geometrie bewegt haben könnte
 
 Weil das Anfahren selbst 0,4 bis über 4 Sekunden dauern kann, reicht "die Geometrie war beim Start stabil" allein nicht: das Ziel kann sich währenddessen bewegen, neu gerendert werden, in der Größe ändern oder von etwas anderem verdeckt werden. Deshalb ist die Interaktion selbstverifizierend. Vor der Bewegung wird der tatsächliche Interaktionspunkt gegen die lebende Seite geprüft — welches Element liegt wirklich an diesen Koordinaten (`document.elementFromPoint`)? Geprüft wird zuerst genau der oben bestimmte Punkt, der Mittelpunkt der Ruhebox: ist er frei, ist er der Interaktionspunkt — der häufige, günstige Fall, eine einzige Prüfung. Ist er verdeckt (ein Sticky-Header, oder zwei Overlays von gegenüberliegenden Seiten), sucht ein deterministisches Raster von Prüfpunkten über die ganze sichtbare Fläche die größte zusammenhängende freie Region und wählt darin den Punkt nächst ihrem Schwerpunkt — nicht neun feste Stellen an Rändern und Ecken, die eine freie Zone irgendwo dazwischen (etwa zwischen zwei Overlays) systematisch verfehlt haben. Der Abstand zwischen zwei Prüfpunkten ist ein fester, größenunabhängiger Wert (6 px) statt eines Durchschnitts, der mit der Zielgröße gröber wird: die _Anzahl_ der Prüfpunkte wächst mit dem Ziel, nicht ihr Abstand, sodass ein 6 px schmaler freier Streifen auf einem 300-px-Ziel genauso zuverlässig gefunden wird wie ein 30-px-Streifen auf einem 1200 px hohen Hero. Zwei Läufe gegen dieselbe Verdeckung wählen denselben Punkt — über drei separate Prozesse per `sha256(events.jsonl)` nachgewiesen (`tests/occluded-target-determinism.test.ts`). Das kostet etwas, und zwar nur im verdeckten Fall: auf einem bildschirmfüllenden Hero (1280×720 sichtbare Fläche, rund 26 000 Prüfpunkte in einem Round-Trip) wurden auf dem Messrechner 1,86 s pro Interaktion gemessen (4,28 s gegenüber 2,43 s für denselben Hero ohne Verdeckung, je Mittel aus drei Läufen); ist dieser erste Punkt frei, fällt das Raster komplett weg. Nach der Ankunft wird die Geometrie vollständig neu aufgelöst — nicht nur wenn etwas auffällig war, denn ein Ziel kann um denselben Mittelpunkt wachsen und den Treffertest dabei nie verlieren. Ob dafür ein zweiter, ebenso Pixel-limitierter Bewegungsabschnitt nötig ist, entscheidet allein ein Treffertest an der aktuellen Zeigerposition: „würde ein Klick hier jetzt das Ziel treffen“ ist eine Ja/Nein-Frage, die ein Pixel Messrauschen nicht kippen kann — deshalb braucht es dafür keine Toleranzkonstante mehr. Die geloggte Bounding-Box ist die bei der Ankunft bestimmte Ruhegeometrie, nie ein einzelner roher Lesewert unmittelbar vor dem Klick: ein solcher Lesewert liefert bei einem animierten Ziel genau die Phase, die dieser eine Round-Trip zufällig erwischt hat — die falsche Box und in jedem Prozess eine andere. Bemerkt der Treffertest nach der Ankunft eine Veränderung, wird komplett neu aufgelöst. Schlägt die Verifikation fehl, bricht `record` mit einer Fehlermeldung ab, statt zu raten. Das ist eine sehr starke, aber keine absolute Garantie: zwischen der letzten Prüfung und dem tatsächlichen `page.mouse.click` liegt noch ein einzelner Netzwerk-Umlauf, in dem sich die Seite theoretisch ein letztes Mal ändern könnte — dieses Fenster ist absichtlich klein gehalten (ein Evaluate-Aufruf statt der vollen 0,4–4 Sekunden Anfahrt), aber nicht auf null reduziert. Ein plausibel aussehender, aber nie ausgeführter Klick ist trotzdem der schlimmste Fehlerfall dieses Werkzeugs: Meilenstein M4 würde später auf ein Ereignis zoomen, das nie passiert ist.
 
-`tick` ist der geplante 60-Hz-Zeitschlitz-Index, nicht Echtzeit, aber ein durchgängiger Zeitmaßstab: alles, was geplante Zeit verbraucht, zählt ihn weiter. Zeigerproben erhöhen ihn um eins pro Probe — auch eine Probe, die auf demselben Pixel wie ihr Vorgänger landet (der Zeiger "hält" kurz), wird protokolliert und zählt einen Schlitz. `hold(ms)` zählt `ceil(ms / 1000 * 60)` weiter, `scroll` einen Schlitz pro 60-Hz-Rad-Inkrement, und `type` die Summe der (seed-abhängigen, also deterministischen) Zeichenverzögerungen in Schlitzen. **Was `tick` nicht kennt:** alles, was echte Zeit kostet, aber nicht selbst geplant ist — `page.goto`, jede `boundingBox()`-Messung samt der Warteschleife auf stabile Geometrie und der Verifikations-Hit-Tests, die Round-Trip-Zeit eines Klicks. Dadurch laufen `tick` und die Wanduhr auseinander: in dieser Session gemessen rund +14–15 % bei einem gewöhnlichen Skript (Klick, Tippen, Hold, Scroll, Klick), und rund das 1,3-Fache bei einem Skript mit einem langsam animierenden inneren Scroll-Container — je nach Animation der Seite kann das deutlich mehr sein. Die Selbstverifikation oben hat diesen Wert in dieser Session nicht spürbar verschlechtert (die zusätzlichen Prüfungen sind klein gegen die ohnehin mehrhundert Millisekunden lange Zeigerbewegung). Das ist kein Bug, sondern der offene Rand dieses Meilensteins: die Abbildung von `tick` auf die echte Capture-Uhr ist Sache von Issue #9, das genau deshalb diese Gleichförmigkeit von `tick` braucht.
+`tick` ist der geplante 60-Hz-Zeitschlitz-Index, nicht Echtzeit, aber ein durchgängiger Zeitmaßstab: alles, was geplante Zeit verbraucht, zählt ihn weiter. Zeigerproben erhöhen ihn um eins pro Probe — auch eine Probe, die auf demselben Pixel wie ihr Vorgänger landet (der Zeiger "hält" kurz), wird protokolliert und zählt einen Schlitz. `hold(ms)` zählt `ceil(ms / 1000 * 60)` weiter, `scroll` einen Schlitz pro 60-Hz-Rad-Inkrement, und `type` die Summe der (seed-abhängigen, also deterministischen) Zeichenverzögerungen in Schlitzen. **Was `tick` nicht kennt:** alles, was echte Zeit kostet, aber nicht selbst geplant ist — `page.goto`, jede `boundingBox()`-Messung samt der Warteschleife auf stabile Geometrie und der Verifikations-Hit-Tests, die Round-Trip-Zeit eines Klicks. Dadurch laufen `tick` und die Wanduhr auseinander: in dieser Session gemessen rund +14–15 % bei einem gewöhnlichen Skript (Klick, Tippen, Hold, Scroll, Klick), und rund das 1,3-Fache bei einem Skript mit einem langsam animierenden inneren Scroll-Container — je nach Animation der Seite kann das deutlich mehr sein. Die Selbstverifikation oben hat diesen Wert in dieser Session nicht spürbar verschlechtert (die zusätzlichen Prüfungen sind klein gegen die ohnehin mehrhundert Millisekunden lange Zeigerbewegung). Das ist kein Bug, sondern der offene Rand dieses Meilensteins: die Abbildung von `tick` auf die echte Capture-Uhr ist Sache von Ticket 9, das genau deshalb diese Gleichförmigkeit von `tick` braucht.
 
 Ein Ziel, dessen Bounding-Box gar keine sichtbare Überschneidung mit dem Viewport hat, lässt `record` mit einer Fehlermeldung abbrechen, die auf `demo.scroll` verweist — ein automatisches Scrollen würde einen unsichtbaren Sprung ins Video einbauen. Ist die Box größer als der Viewport (ein hoher Hero-Bereich, ein Overlay) oder teilweise von etwas anderem verdeckt (ein Sticky-Header), wird nicht abgebrochen: der oben beschriebene Punktetest findet die sichtbare, tatsächlich klickbare Stelle, und die volle Bounding-Box bleibt trotzdem im Log stehen. Erst wenn keiner der Prüfpunkte trifft, bricht `record` ab.
 
@@ -332,22 +332,23 @@ ffprobe -v error -select_streams v:0 \
   -of json artifacts/m1-capture/output.mp4
 ```
 
-Der Befehl ist kein automatisierter Test. Er verwendet standardmäßig
-`https://app.onlydash.io/` als öffentliche, zugangsfrei erreichbare OnlyDash-
-Gastoberfläche für den dichten UI-Benchmark. Eine abweichende öffentliche URL
-und ein Artefaktordner können als erstes und zweites Argument angegeben werden.
-Der Artefaktordner muss bei jedem Lauf neu sein oder vorher bewusst gelöscht
-werden; die Aufnahme überschreibt bestehende Artefakte nicht. Verwende dafür
-einen eindeutigen Pfad als zweites Argument, etwa
-`pnpm demo:m1-capture https://app.onlydash.io/ artifacts/m1-capture-001`.
+Der Befehl ist kein automatisierter Test. Er startet standardmäßig den
+mitgelieferten Messkorpus aus `fixtures/bench/` über einen lokalen Server und
+filmt den — kein Konto, kein Netz, kein fremder Dienst, und für jeden, der das
+Repository klont, dieselbe Oberfläche. Eine abweichende öffentliche URL und ein
+Artefaktordner können als erstes und zweites Argument angegeben werden. Der
+Artefaktordner muss bei jedem Lauf neu sein oder vorher bewusst gelöscht werden;
+die Aufnahme überschreibt bestehende Artefakte nicht. Verwende dafür einen
+eindeutigen Pfad als zweites Argument, etwa
+`pnpm demo:m1-capture https://example.com/ artifacts/m1-capture-001`.
 
 **Welcher Browser aufnimmt.** Ohne weitere Angabe startet Playwrights
 mitgelieferter Chromium. Ein anderes Binär — etwa der selbst gebaute,
-gepatchte Chromium aus #17 — wird über `CHROME_BIN` gewählt:
+gepatchte Chromium aus Ticket 17 — wird über `CHROME_BIN` gewählt:
 
 ```sh
 CHROME_BIN=/pfad/zu/chromium/src/out/Release/chrome \
-  pnpm demo:m1-capture https://app.onlydash.io/ artifacts/m1-capture-002
+  pnpm demo:m1-capture
 ```
 
 Ein `CHROME_BIN`, das leer ist oder kein ausführbares Binär benennt, bricht
@@ -358,9 +359,9 @@ absolutem Pfad, `--version` und SHA-256 des laufenden Binärs in den
 Artefaktordner, ebenso `record()` in seinen `out`-Ordner. Der Hash ist das
 einzige Feld, das zwei Builds auseinanderhält, die an derselben Stelle
 eingehängt sind und dieselbe Versionszeile melden — genau der Fall im
-Messplatz, wo jeder Arm seinen Build nach `/crbuild` mountet (#36). Hintergrund: drei Tage Messungen
+Messplatz, wo jeder Arm seinen Build nach `/crbuild` mountet (Ticket 36). Hintergrund: drei Tage Messungen
 wurden dem falschen Browser zugeschrieben, weil ein gesetztes `CHROME_BIN`
-still ignoriert wurde (#23, [docs/JOURNEY.md](docs/JOURNEY.md)).
+still ignoriert wurde (Ticket 23, [docs/JOURNEY.md](docs/JOURNEY.md)).
 
 Frame-Erfassung und Festplatten-Schreiben sind entkoppelt: `onFrame` reiht nur
 synchron ein, ein separater Writer schreibt im Hintergrund, damit ein
