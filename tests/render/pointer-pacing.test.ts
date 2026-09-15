@@ -4,8 +4,12 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { MAX_POINTER_STEP_PX } from '../../src/motion.js'
-import type { RecordEvent } from '../../src/record.js'
-import { parseEventLog } from '../../src/render/events.js'
+import {
+  parseEventLog,
+  parseEventTimes,
+  toTimedEvents,
+  type TimedEvent,
+} from '../../src/render/events.js'
 import {
   planRender,
   type CaptureInput,
@@ -24,11 +28,11 @@ import {
  * timeline the idle trimmer has already bent — and bending the timeline is
  * precisely what turns a smooth path into a series of jumps.
  *
- * Measured on the first real recording (OnlyDash, 2026-09-15, 20.7s): the
- * shipped decisions moved the pointer up to **66px in one output frame**,
- * against the 20px the recorder guarantees between two samples. The owner's
- * verdict on that video was "krasse Diashow". No test in the suite objected,
- * because no test looked here.
+ * Measured on the real recording (OnlyDash, 2026-09-15, 20.7s): the shipped
+ * decisions moved the pointer up to **330px in one output frame**, against the
+ * 20px the recorder guarantees between two samples. The owner's verdict on that
+ * video was "krasse Diashow". No test in the suite objected, because no test
+ * looked here. It reads 16.7px now.
  *
  * The bound is the recorder's own cap and not a number chosen here: the
  * renderer may slow the pointer down — that is what a compressed idle stretch
@@ -36,14 +40,14 @@ import {
  * the recording did per sample. There is no material for the extra distance;
  * it can only come from time being taken away.
  */
-const FRAME_MS = 1000 / 60
-
-function fixture(name: string): RecordEvent[] {
-  return parseEventLog(
-    readFileSync(
-      join(import.meta.dirname, 'fixtures', `${name}.jsonl`),
-      'utf8',
+function fixture(name: string, originMs: number): TimedEvent[] {
+  const directory = join(import.meta.dirname, 'fixtures')
+  return toTimedEvents(
+    parseEventLog(readFileSync(join(directory, `${name}.jsonl`), 'utf8')),
+    parseEventTimes(
+      readFileSync(join(directory, `${name}.times.jsonl`), 'utf8'),
     ),
+    originMs,
   )
 }
 
@@ -70,20 +74,8 @@ function onlydashCapture(): CaptureInput {
       join(import.meta.dirname, 'fixtures', 'capture-onlydash.json'),
       'utf8',
     ),
-  ) as {
-    frames: Array<{ file: string; offsetMs: number }>
-    sessionDurationMs: number
-    source: { height: number; width: number }
-  }
-  return {
-    frames: manifest.frames.map((frame) => ({
-      file: frame.file,
-      timestamp: frame.offsetMs,
-    })),
-    sessionDurationMs: manifest.sessionDurationMs,
-    sessionStartedAt: 0,
-    source: manifest.source,
-  }
+  ) as CaptureInput
+  return manifest
 }
 
 function worstPointerStep(plan: RenderPlan): {
@@ -117,8 +109,8 @@ function worstPointerStep(plan: RenderPlan): {
 }
 
 describe('the drawn pointer never moves further in one output frame than the recording moved in one sample', () => {
-  const events = fixture('run-onlydash')
   const capture = onlydashCapture()
+  const events = fixture('run-onlydash', capture.sessionStartedAt)
 
   it('holds over the recording the owner watched', () => {
     const plan = planRender(capture, events)
@@ -131,12 +123,23 @@ describe('the drawn pointer never moves further in one output frame than the rec
   })
 
   it('breaks when the pointer is trimmed through, which is why it passes', () => {
-    // The mutation, applied by hand: squeeze every still stretch and protect
-    // nothing. The path is the same and the frames to cross it in are gone, so
-    // the pointer has to jump — and the bound says so.
+    // The mutation, applied by hand: let the trimmer treat any stretch the
+    // picture held still as trimmable, whatever the pointer was doing in it —
+    // which is what it did before, and what the owner watched. The path is the
+    // same and the frames to cross it in are gone, so the pointer has to jump,
+    // and the bound says so.
+    //
+    // This is the shape the instrument has to fail in. An earlier version
+    // mutated `compressToMs` and `protectMs` instead, and once the fix was in
+    // place that mutation stopped biting: the pointer rule held the line no
+    // matter how hard the stretch was squeezed, so the counter-example proved
+    // nothing about the bound above.
     const squeezed = worstPointerStep(
       planRender(capture, events, {
-        idle: { compressToMs: 4 * FRAME_MS, protectMs: 0, thresholdMs: 120 },
+        idle: {
+          pointerStillPxPerMs: Number.POSITIVE_INFINITY,
+          maxPointerSpeedPxPerMs: Number.POSITIVE_INFINITY,
+        },
       }),
     )
     expect(squeezed.worst).toBeGreaterThan(MAX_POINTER_STEP_PX * 2)

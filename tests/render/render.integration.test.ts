@@ -388,9 +388,16 @@ describe('rendering a recording end to end', () => {
     const gap = result.plan.idle.trimmed[0]
     expect(gap).toBeDefined()
     if (gap === undefined) return
-    // The still stretch runs from the last frame before the hole to the first
-    // one after it, so it is the hole plus one frame of spacing.
-    const stillMs = IDLE_GAP_MS + FRAME_SPACING_MS
+    // **The trimmed stretch is the overlap, not the whole hole.** The gap
+    // between surviving frames opens at 500ms, but this fixture's pointer is
+    // still walking until 1000ms — its log carries a sample per tick up to
+    // tick 60 — and a stretch the pointer moves through is not still however
+    // unchanged the picture is. So the still stretch runs from the end of the
+    // pointer path to the frame that ends the hole.
+    const pointerEndsMs = (60 * 1000) / 60
+    const stillMs =
+      IDLE_AFTER_FRAME * FRAME_SPACING_MS + IDLE_GAP_MS - pointerEndsMs
+    expect(gap.startMs).toBeCloseTo(pointerEndsMs, 0)
     expect(gap.endMs - gap.startMs).toBeCloseTo(stillMs, 0)
     expect(result.removedIdleSeconds).toBeCloseTo((stillMs - 250) / 1000, 2)
     expect(result.plan.idle.outputDurationMs).toBeCloseTo(
@@ -409,9 +416,14 @@ describe('rendering a recording end to end', () => {
     expect(frames).toBeGreaterThanOrEqual(expectedFrames - 1)
     expect(frames).toBeLessThanOrEqual(expectedFrames + 1)
     // And the untrimmed recording would have been markedly longer, which is
-    // the denominator of the claim above.
-    expect(expectedFrames).toBeLessThan(
-      Math.round((SESSION_DURATION_MS / 1000) * result.plan.fps) - 60,
+    // the denominator of the claim above. Stated exactly rather than as a
+    // margin: 750ms of the 1500ms hole is removed — the other half is the
+    // stretch the pointer is still walking through, plus the 250ms the hold
+    // keeps — and at 60fps that is 45 frames.
+    const savedFrames = Math.round(((stillMs - 250) / 1000) * result.plan.fps)
+    expect(savedFrames).toBe(45)
+    expect(expectedFrames).toBe(
+      Math.round((SESSION_DURATION_MS / 1000) * result.plan.fps) - savedFrames,
     )
   }, 180_000)
 

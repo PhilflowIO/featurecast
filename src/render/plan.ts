@@ -161,10 +161,16 @@ export function planRender(
   const frameTimes = capture.frames.map(
     (frame) => frame.timestamp - capture.sessionStartedAt,
   )
+  // The pointer path in *recording* time, before the mapping bends it. Idle
+  // trimming needs it to tell "the page is still" from "the page is still and
+  // the pointer is crossing it", and it has to ask on the timeline it is about
+  // to change, not on the one it produced.
+  const recordedSamples = pointerSamples(events)
   const mapping = buildTimeMapping(
     frameTimes,
     capture.sessionDurationMs,
     interactionTimes(events),
+    recordedSamples,
     options.idle,
   )
   // One clock for everybody: the same mapping bends the frames and the events,

@@ -1,3 +1,6 @@
+import { pointerTravelPx } from './cursor.js'
+import type { PointerSample } from './rest.js'
+
 /**
  * Idle trimming.
  *
@@ -14,8 +17,27 @@
  * so they cannot drift apart: there is only one clock, and trimming bends it
  * for everybody at once.
  *
- * Known limit, untested at runtime: the signal is byte-equality of consecutive
- * frames, and there is no floor under it. One changed pixel per frame — a
+ * **The picture is not the whole truth, and the frame gap is not the unit.**
+ * A page at rest while the pointer crosses it produces no new frames either, so
+ * a long gap between two surviving frames can be a stretch in which nothing
+ * happened *or* the stretch the pointer needed to get somewhere. Compressing
+ * the second kind is what the owner watched and called a slideshow: 338px of
+ * drawn pointer in one output frame, against the 20px the recorder guarantees
+ * between two samples.
+ *
+ * Refusing any gap the pointer moves in would be the easy answer and the wrong
+ * one. Measured on that recording, every gap over the threshold contains both:
+ * one of them is 5.4 seconds long, and the pointer needs 2.0 of those to walk
+ * its path — so "there is motion in here" would have trimmed nothing at all,
+ * and a recording of a real application would never be shortened again.
+ *
+ * So the unit is the *intersection*: a stretch is trimmable where the picture
+ * does not change **and** the pointer is standing still. The first comes from
+ * the frame gaps, the second from the pointer path this module is handed. Both
+ * are stretches of time; the answer is the overlap.
+ *
+ * Known limit, untested at runtime: the picture signal is byte-equality of
+ * consecutive frames, and there is no floor under it. One changed pixel per frame — a
  * spinner in a corner, a blinking caret, a clock in the page — defeats the
  * capture's duplicate fold, every frame survives, no gap opens, and nothing is
  * ever trimmed on that page. The fix is a tolerance rather than equality, which
@@ -34,6 +56,35 @@ export type IdleOptions = {
    * the pause that lets a click land is not the thing that gets cut.
    */
   protectMs?: number
+  /**
+   * How fast the drawn pointer may drift and still count as standing still, in
+   * capture pixels per millisecond.
+   *
+   * Derived rather than chosen: one pixel per output frame at 60fps. Below it
+   * the pointer does not visibly move between two frames, so the stretch is
+   * still in the only sense a viewer can check. For comparison, the recorder's
+   * own cap is 20px per sample, which is 1.2px/ms — twenty times this.
+   *
+   * It has to be a speed and not a distance. The log carries no samples at all
+   * while a script holds, so the two samples bracketing a one-second pause sit
+   * a full move's step apart; judged on distance that pause looks like motion,
+   * and every hold in every recording would survive trimming.
+   */
+  pointerStillPxPerMs?: number
+  /**
+   * How fast the drawn pointer may move after compression, in capture pixels
+   * per millisecond. The recorder's own cap, 20px between two samples at 60fps,
+   * which is 1.2px/ms.
+   *
+   * Even a stretch that qualifies as still carries a little drift, and
+   * compression multiplies it: squeezing eight seconds into 250ms is a factor
+   * of 32, and drift the viewer could not see at recording speed becomes a jump
+   * at playback speed. Measured, that alone still left 26px in one output frame
+   * after the stillness rule was in place. So a stretch is held long enough for
+   * whatever path it does contain, and `compressToMs` is a floor rather than
+   * the answer.
+   */
+  maxPointerSpeedPxPerMs?: number
 }
 
 export type TimeMapping = {
@@ -50,6 +101,8 @@ export type TimeMapping = {
 export const DEFAULT_IDLE: Required<IdleOptions> = {
   compressToMs: 250,
   protectMs: 250,
+  maxPointerSpeedPxPerMs: (20 * 60) / 1000,
+  pointerStillPxPerMs: 60 / 1000,
   thresholdMs: 600,
 }
 
@@ -58,14 +111,24 @@ export const DEFAULT_IDLE: Required<IdleOptions> = {
  *
  * `frameTimesMs` are the capture's frame timestamps relative to the session
  * start, in order. `protectedTimesMs` are moments that must stay untouched.
+ * `pointerSamples` is the path the drawn pointer takes, on the same clock: a
+ * stretch the pointer moves through is not still, however unchanged the
+ * picture is.
  */
 export function buildTimeMapping(
   frameTimesMs: readonly number[],
   sessionDurationMs: number,
-  protectedTimesMs: readonly number[] = [],
+  protectedTimesMs: readonly number[],
+  pointerSamples: readonly PointerSample[],
   options: IdleOptions = {},
 ): TimeMapping {
-  const { compressToMs, protectMs, thresholdMs } = {
+  const {
+    compressToMs,
+    maxPointerSpeedPxPerMs,
+    protectMs,
+    pointerStillPxPerMs,
+    thresholdMs,
+  } = {
     ...DEFAULT_IDLE,
     ...options,
   }
@@ -75,13 +138,18 @@ export function buildTimeMapping(
     )
   }
 
-  const trimmed: Array<{ endMs: number; startMs: number }> = []
+  const trimmed: Array<{ endMs: number; heldMs: number; startMs: number }> = []
   const protectedTimes = [...protectedTimesMs].sort((a, b) => a - b)
   const isProtected = (startMs: number, endMs: number): boolean =>
     protectedTimes.some(
       (time) => time >= startMs - protectMs && time <= endMs + protectMs,
     )
 
+  const stillPointer = pointerStillStretches(
+    pointerSamples,
+    sessionDurationMs,
+    pointerStillPxPerMs,
+  )
   const boundaries = [...frameTimesMs, sessionDurationMs]
   for (let index = 1; index < boundaries.length; index += 1) {
     const endMs = boundaries[index]
@@ -90,8 +158,23 @@ export function buildTimeMapping(
       throw new Error('unreachable: frame time index out of bounds')
     }
     if (endMs - startMs < thresholdMs) continue
-    if (isProtected(startMs, endMs)) continue
-    trimmed.push({ startMs, endMs })
+    // The picture held still from `startMs` to `endMs`. Which parts of that did
+    // the pointer hold still for too?
+    for (const still of stillPointer) {
+      const from = Math.max(startMs, still.startMs)
+      const to = Math.min(endMs, still.endMs)
+      if (to - from < thresholdMs) continue
+      if (isProtected(from, to)) continue
+      // Long enough for the drift it does contain, and never shorter than the
+      // hold asked for.
+      const travelPx = pointerTravelPx(pointerSamples, from, to)
+      const heldMs = Math.min(
+        to - from,
+        Math.max(compressToMs, travelPx / maxPointerSpeedPxPerMs),
+      )
+      if (to - from - heldMs <= 0) continue
+      trimmed.push({ startMs: from, endMs: to, heldMs })
+    }
   }
 
   const knots: Array<{ outputMs: number; sourceMs: number }> = [
@@ -99,9 +182,8 @@ export function buildTimeMapping(
   ]
   let removedMs = 0
   for (const gap of trimmed) {
-    const held = Math.min(compressToMs, gap.endMs - gap.startMs)
     knots.push({ sourceMs: gap.startMs, outputMs: gap.startMs - removedMs })
-    removedMs += gap.endMs - gap.startMs - held
+    removedMs += gap.endMs - gap.startMs - gap.heldMs
     knots.push({ sourceMs: gap.endMs, outputMs: gap.endMs - removedMs })
   }
   knots.push({
@@ -142,4 +224,53 @@ export function mapTime(mapping: TimeMapping, sourceMs: number): number {
     return left.outputMs + (right.outputMs - left.outputMs) * t
   }
   return last.outputMs
+}
+
+/**
+ * The stretches in which the drawn pointer stands still.
+ *
+ * Walks the logged path and keeps every interval between two neighbouring
+ * samples whose speed is below the threshold, merging neighbours so a pause
+ * spanning several samples comes back as one stretch. The time before the first
+ * sample and after the last one counts as still: the pointer is parked at the
+ * ends of a recording, and a recording with no pointer at all is still
+ * throughout, which is the honest answer rather than a fallback — nothing is
+ * drawn, so nothing can jump.
+ */
+function pointerStillStretches(
+  samples: readonly PointerSample[],
+  sessionDurationMs: number,
+  stillPxPerMs: number,
+): Array<{ endMs: number; startMs: number }> {
+  const first = samples[0]
+  const last = samples[samples.length - 1]
+  if (first === undefined || last === undefined) {
+    return [{ startMs: 0, endMs: sessionDurationMs }]
+  }
+
+  const stretches: Array<{ endMs: number; startMs: number }> = []
+  const add = (startMs: number, endMs: number): void => {
+    if (endMs <= startMs) return
+    const previous = stretches[stretches.length - 1]
+    if (previous !== undefined && previous.endMs >= startMs) {
+      previous.endMs = Math.max(previous.endMs, endMs)
+      return
+    }
+    stretches.push({ startMs, endMs })
+  }
+
+  add(0, first.timeMs)
+  for (let index = 1; index < samples.length; index += 1) {
+    const current = samples[index]
+    const previous = samples[index - 1]
+    if (current === undefined || previous === undefined) {
+      throw new Error('unreachable: pointer sample index out of bounds')
+    }
+    const spanMs = current.timeMs - previous.timeMs
+    if (spanMs <= 0) continue
+    const distance = Math.hypot(current.x - previous.x, current.y - previous.y)
+    if (distance / spanMs < stillPxPerMs) add(previous.timeMs, current.timeMs)
+  }
+  add(last.timeMs, sessionDurationMs)
+  return stretches
 }
