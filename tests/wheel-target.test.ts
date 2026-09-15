@@ -10,8 +10,9 @@ import {
 } from '../src/wheel-target.js'
 
 /**
- * The real geometry from the #47 measurement: OnlyDash's page scroll
- * container at the 2560x1600 capture viewport, with the grid's own
+ * The real geometry from the ticket 47 measurement: the recorded
+ * application's page scroll container at the 2560x1600 capture viewport,
+ * with the grid's own
  * `MuiDataGrid-virtualScroller` (2px of range, enough to capture a wheel and
  * not enough to travel with it) covering everything but the container's
  * outer margin.

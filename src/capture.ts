@@ -21,7 +21,8 @@ export const CAPTURE_SIZE: CaptureSize = { height: 1600, width: 2560 }
  * JPEG quality Chromium encodes every screencast frame at. Chromium drops,
  * rather than queues, a frame whose encode does not finish inside the frame
  * budget, so this is a capture-completeness setting before it is an image
- * one. Measured on the AI box (RTX 3090, real OnlyDash Tasks view scrolled
+ * one. Measured on the AI box (RTX 3090, the recorded application's real
+ * dense-table view scrolled
  * at 60 content changes/s, 12s per run, frames written to a bind mount the
  * way this module does): quality 100 captured 91.2-91.5% of distinct content
  * changes (698KB mean frame), 95 captured 95.2-95.8% (439KB), 90 captured

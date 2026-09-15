@@ -67,8 +67,9 @@ function positions(start: number, end: number, count: number): number[] {
  * Deterministic candidate points inside the target's visible area, ordered
  * outermost ring first and the center *last*.
  *
- * The order is the whole point. A nested scroller (OnlyDash's
- * `MuiDataGrid-virtualScroller`, #47) sits in the middle of its container and
+ * The order is the whole point. A nested scroller (the recorded
+ * application's `MuiDataGrid-virtualScroller`, ticket 47) sits in the middle
+ * of its container and
  * leaves the container's own chrome and padding exposed around it, so the
  * border of the visible area is where a wheel most likely reaches the target
  * itself. The center is still a candidate — it is simply the last one tried,
