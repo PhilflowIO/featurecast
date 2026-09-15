@@ -14,4 +14,13 @@ export default tseslint.config(
       globals: globals.node,
     },
   },
+  {
+    // The bench corpus is the one thing in this repository that runs in a
+    // page rather than in Node: it is the application under the camera, not
+    // part of the package.
+    files: ['fixtures/**/*.js'],
+    languageOptions: {
+      globals: globals.browser,
+    },
+  },
 )

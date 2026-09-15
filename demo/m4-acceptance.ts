@@ -1,27 +1,27 @@
 import type { Frame } from 'playwright'
 
-import {
-  ONLYDASH_GUEST_BENCHMARK_URL,
-  warmUpOnlyDash,
-} from '../src/m1-benchmark.js'
+import { startFixtureServer } from '../src/fixture-server.js'
+import { warmUpBenchApp } from '../src/m1-benchmark.js'
 import type { Demo, RecordPage } from '../src/record.js'
 
 /**
- * The recording M4 is accepted on: a real, dense application, interacted with
- * the way a feature video interacts with one.
+ * The recording M4 is accepted on: a dense application, interacted with the
+ * way a feature video interacts with one.
  *
  * `demo/feature-xy.ts` cannot serve here. It is a `data:` URL with four
  * elements, which is exactly right for proving the command runs without an
  * account — and exactly wrong for judging whether the camera, the pointer and
  * the pacing look good. A zoom onto a lone button on a white page says nothing
- * about a zoom onto a row in a dense grid.
+ * about a zoom onto a row in a dense grid. The bench corpus is the dense grid,
+ * and unlike the application this script used to film, it ships with the
+ * repository (`fixtures/bench/`) and needs no account.
  *
- * **Everything that is not the demo happens in `prepare`.** Guest sign-in and
- * the navigation that actually reveals the grid run against the same page the
- * capture attaches to, but before it starts, so the video opens on the screen
- * the video is about. Without that split a recording of any real application
- * opens on its login form — and worse, records the pointer travelling across
- * it, because `demo`'s clicks are paced and drawn.
+ * **Everything that is not the demo happens in `prepare`.** The navigation
+ * that actually reveals the grid runs against the same page the capture
+ * attaches to, but before it starts, so the video opens on the screen the
+ * video is about. Without that split a recording opens on a loading state —
+ * and worse, records the pointer travelling across it, because `demo`'s
+ * clicks are paced and drawn.
  *
  * The interactions are deliberately few and deliberately slow. This is not the
  * M1 benchmark, which drives as much motion as it can to measure cadence; it
@@ -29,10 +29,11 @@ import type { Demo, RecordPage } from '../src/record.js'
  * result land, look further down the page.
  */
 /** The application this script films; see `LoadedScript.url`. */
-export const url = ONLYDASH_GUEST_BENCHMARK_URL
+const fixture = await startFixtureServer()
+export const url = fixture.origin
 
 export const prepare = async (app: Frame): Promise<void> => {
-  await warmUpOnlyDash(app, ONLYDASH_GUEST_BENCHMARK_URL)
+  await warmUpBenchApp(app, url)
 }
 
 const DARK_MODE_BUTTON = 'role=button[name="Switch to dark mode"]'

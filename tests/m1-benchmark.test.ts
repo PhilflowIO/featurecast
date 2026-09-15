@@ -3,19 +3,19 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Demo } from '../src/record.js'
 
 import {
-  runOnlyDashBenchmark,
-  runOnlyDashMotion,
-  warmUpOnlyDash,
+  runBenchmark,
+  runBenchMotion,
+  warmUpBenchApp,
 } from '../src/m1-benchmark.js'
 
 type RoleCall = { name?: string; role: string }
 
 /**
- * `gridRange` defaults to 20px, below the 200px meaningful-scroll floor —
- * matching what was actually measured live against OnlyDash's `expenses`
- * and `users` tables at the real 2560x1600 capture viewport (`users`:
- * 71px; `expenses`: 2px). Pass a larger value to simulate `tasks`
- * (528px) or `invoices` (369px).
+ * `gridRange` defaults to 20px, below the meaningful-scroll floor — the
+ * shape a container has when it holds a few pixels of slack rather than a
+ * real range. Pass a larger value for a container that really scrolls; the
+ * corpus measures 1,289px vertically and 1,882px horizontally at the
+ * 2560x1600 capture viewport.
  *
  * `gridStartY` is the vertical scroll offset the container already holds
  * when the first pass opens. It defaults to 0 (at the top edge, where
@@ -24,10 +24,9 @@ type RoleCall = { name?: string; role: string }
  * pass starts, so that pass travels less than the full range (#47).
  *
  * `wheelBlocked` scripts the wheel-point probe: `'none'` clears every
- * candidate, `'inner'` reproduces what OnlyDash's grid actually does — its
- * own virtual scroller covers everything but the container's outer 40px, so
- * only points in that margin reach the container — and `'all'` leaves no
- * usable point at all. `viewport` shrinks the window around the fixed
+ * candidate, `'inner'` reproduces what a nested scroller does — it covers
+ * everything but the container's outer 40px, so only points in that margin
+ * reach the container — and `'all'` leaves no usable point at all. `viewport` shrinks the window around the fixed
  * 2000x800 container box, which is how a container reaching past the fold
  * gets reproduced.
  */
@@ -35,8 +34,6 @@ function createHarness(
   options: {
     gridRange?: number
     gridStartY?: number
-    /** Whether the phone-width menu button is on screen. */
-    menuVisible?: boolean
     viewport?: { height: number; width: number }
     wheelBlocked?: 'all' | 'inner' | 'none'
   } = {},
@@ -46,8 +43,8 @@ function createHarness(
   const viewport = options.viewport ?? { height: 1600, width: 2560 }
   const roleCalls: RoleCall[] = []
   const waitForTimeoutCalls: number[] = []
-  let currentUrl =
-    'https://app.onlydash.io/#/datasources/x/collections/projects'
+  const ORIGIN = 'http://127.0.0.1:45671'
+  let currentUrl = `${ORIGIN}/`
   let gridCurrentX = 0
   let gridCurrentY = options.gridStartY ?? 0
   let recordsByPath: Record<string, number> = {
@@ -78,17 +75,10 @@ function createHarness(
     .fn()
     .mockImplementation((role: string, options_?: { name?: string }) => {
       roleCalls.push({ name: options_?.name, role })
-      // The menu button only exists at a phone's width, so waiting for it is
-      // what fails on a wide viewport — which is exactly the branch the
-      // warm-up reads.
-      const isMenu = /menu/i.test(String(options_?.name))
-      const present = !isMenu || (options.menuVisible ?? false)
       const roleLocator = {
         click: vi.fn().mockResolvedValue(undefined),
         first: () => roleLocator,
-        waitFor: vi.fn().mockImplementation(async () => {
-          if (!present) throw new Error('not visible')
-        }),
+        waitFor: vi.fn().mockResolvedValue(undefined),
       }
       return roleLocator
     })
@@ -97,22 +87,14 @@ function createHarness(
   // through `page.locator(selector).click()` now (see m1-benchmark.ts's
   // doc comments on why they avoid `demo.click`'s travel cost), so this
   // mock has to branch on the selector to know which behavior to return.
-  let drawerCloseClicks = 0
-  const drawerCloseLocator = {
-    click: vi.fn().mockImplementation(async () => {
-      drawerCloseClicks += 1
-    }),
-    first: () => drawerCloseLocator,
-  }
   const locator = vi.fn().mockImplementation((selector: string) => {
-    if (selector.includes('CloseIcon')) return drawerCloseLocator
     const tableLinkMatch = /title="([^"]+)"/.exec(selector)
     if (tableLinkMatch) {
       return {
         click: vi.fn().mockImplementation(async () => {
           tableLinkClick(selector)
           if (navigatesOnClick) {
-            currentUrl = `https://app.onlydash.io/#/datasources/x/collections/${tableLinkMatch[1]}`
+            currentUrl = `${ORIGIN}/#/collections/${tableLinkMatch[1]}`
           }
         }),
       }
@@ -202,7 +184,7 @@ function createHarness(
   const demoClick = vi.fn().mockImplementation(async (target: string) => {
     const match = /title="([^"]+)"/.exec(target)
     if (match) {
-      currentUrl = `https://app.onlydash.io/#/datasources/x/collections/${match[1]}`
+      currentUrl = `${ORIGIN}/#/collections/${match[1]}`
     }
   })
   const demoType = vi.fn().mockResolvedValue(undefined)
@@ -226,8 +208,6 @@ function createHarness(
     callOrder,
     demo,
     demoClick,
-    /** Whether the warm-up used the drawer's own close control. */
-    drawerClosed: () => drawerCloseClicks > 0,
     setGeometrySettles: (settles: boolean) => {
       geometrySettles = settles
     },
@@ -248,37 +228,39 @@ function createHarness(
   }
 }
 
-describe('warmUpOnlyDash', () => {
-  it('signs into the guest sandbox and reaches the Projects grid, unrecorded', async () => {
+describe('warmUpBenchApp', () => {
+  it('reaches the first collection and its grid, unrecorded', async () => {
     const { page, roleCalls } = createHarness()
 
-    await warmUpOnlyDash(page as never, 'https://app.onlydash.io/')
+    await warmUpBenchApp(page as never, 'http://127.0.0.1:45671/')
 
-    expect(page.goto).toHaveBeenCalledWith('https://app.onlydash.io/', {
+    expect(page.goto).toHaveBeenCalledWith('http://127.0.0.1:45671/', {
       waitUntil: 'domcontentloaded',
     })
-    expect(roleCalls).toContainEqual({
-      name: 'Continue as Guest',
-      role: 'button',
-    })
-    expect(roleCalls).toContainEqual({ name: 'Projects', role: 'link' })
-    // It looks for the menu button on every viewport — but on a wide one it
-    // is not there, and the warm-up carries on to the sidebar link instead of
-    // failing. That is the branch this asserts: asked for, not required.
-    const menuLookups = roleCalls.filter((call) =>
-      /menu/i.test(String(call.name)),
-    )
-    expect(menuLookups).toHaveLength(1)
     expect(roleCalls).toContainEqual({ name: 'Projects', role: 'heading' })
     expect(roleCalls).toContainEqual({ name: undefined, role: 'grid' })
   })
+
+  it('asks for no control that exists at one width only', async () => {
+    // The corpus shows the same controls at every viewport width, which is
+    // what lets one script serve four device classes (#77). A warm-up that
+    // reached for a menu button would put that promise back at risk.
+    const { page, roleCalls } = createHarness()
+
+    await warmUpBenchApp(page as never, 'http://127.0.0.1:45671/')
+
+    expect(
+      roleCalls.filter((call) => /menu|drawer/i.test(String(call.name))),
+    ).toHaveLength(0)
+    expect(page.locator).not.toHaveBeenCalled()
+  })
 })
 
-describe('runOnlyDashMotion', () => {
+describe('runBenchMotion', () => {
   it('drives typing and scroll pacing through the demo wrapper', async () => {
     const { demo, page } = createHarness({ gridRange: 600 })
 
-    await runOnlyDashMotion(page as never, demo)
+    await runBenchMotion(page as never, demo)
 
     // Clicks (table switches, dark mode, expand-owner) deliberately bypass
     // demo.click/demo.point — see their call sites' doc comments — because
@@ -297,7 +279,7 @@ describe('runOnlyDashMotion', () => {
       wheelBlocked: 'inner',
     })
 
-    await runOnlyDashMotion(page as never, demo)
+    await runBenchMotion(page as never, demo)
 
     const moves = page.mouse.move.mock.calls as [number, number][]
     expect(moves.length).toBeGreaterThan(0)
@@ -324,7 +306,7 @@ describe('runOnlyDashMotion', () => {
       viewport: { height: 600, width: 2560 },
     })
 
-    await runOnlyDashMotion(page as never, demo)
+    await runBenchMotion(page as never, demo)
 
     const probed = wheelProbeBatches.flatMap((batch) => batch.points)
     expect(probed.length).toBeGreaterThan(0)
@@ -343,7 +325,7 @@ describe('runOnlyDashMotion', () => {
       wheelBlocked: 'all',
     })
 
-    await expect(runOnlyDashMotion(page as never, demo)).rejects.toThrow(
+    await expect(runBenchMotion(page as never, demo)).rejects.toThrow(
       /covered by another scrollable element/,
     )
     expect(demo.scroll).not.toHaveBeenCalled()
@@ -353,7 +335,7 @@ describe('runOnlyDashMotion', () => {
   it('skips a scroll pass whose measured range is too small to move meaningfully', async () => {
     const { demo, page } = createHarness({ gridRange: 20 })
 
-    const windows = await runOnlyDashMotion(page as never, demo)
+    const windows = await runBenchMotion(page as never, demo)
 
     expect(demo.scroll).not.toHaveBeenCalled()
     expect(windows.some((window) => window.label.includes('scroll'))).toBe(
@@ -364,7 +346,7 @@ describe('runOnlyDashMotion', () => {
   it('scrolls and records a motion window when the range is actually meaningful', async () => {
     const { demo, page } = createHarness({ gridRange: 600 })
 
-    const windows = await runOnlyDashMotion(page as never, demo)
+    const windows = await runBenchMotion(page as never, demo)
 
     expect(demo.scroll).toHaveBeenCalled()
     expect(windows.some((window) => window.label.includes('scroll-down'))).toBe(
@@ -375,7 +357,7 @@ describe('runOnlyDashMotion', () => {
   it('waits for scroll geometry to settle before discovering any scroll target', async () => {
     const { callOrder, demo, page } = createHarness({ gridRange: 600 })
 
-    await runOnlyDashMotion(page as never, demo)
+    await runBenchMotion(page as never, demo)
 
     expect(callOrder[0]).toBe('settle')
     // Every table visit settles once, then discovers a target for each pass;
@@ -393,7 +375,7 @@ describe('runOnlyDashMotion', () => {
     const { demo, page, setGeometrySettles } = createHarness({ gridRange: 600 })
     setGeometrySettles(false)
 
-    await expect(runOnlyDashMotion(page as never, demo)).rejects.toThrow(
+    await expect(runBenchMotion(page as never, demo)).rejects.toThrow(
       'scroll ranges still changing',
     )
     expect(demo.scroll).not.toHaveBeenCalled()
@@ -412,7 +394,7 @@ describe('runOnlyDashMotion', () => {
         return discover(...arguments_)
       })
     try {
-      const windows = await runOnlyDashMotion(page as never, demo)
+      const windows = await runBenchMotion(page as never, demo)
 
       const scrollWindows = windows.filter((window) =>
         window.label.includes('scroll'),
@@ -438,7 +420,7 @@ describe('runOnlyDashMotion', () => {
     // as it was told to (#31).
     const { demo, page } = createHarness({ gridRange: 600, gridStartY: 85 })
 
-    const windows = await runOnlyDashMotion(page as never, demo)
+    const windows = await runBenchMotion(page as never, demo)
 
     const down = windows.find(
       (window) => window.label === 'tasks:scroll-down:1',
@@ -456,7 +438,7 @@ describe('runOnlyDashMotion', () => {
   it('keeps the before/after scroll offsets consistent with the travel it claims', async () => {
     const { demo, page } = createHarness({ gridRange: 600, gridStartY: 85 })
 
-    const windows = await runOnlyDashMotion(page as never, demo)
+    const windows = await runBenchMotion(page as never, demo)
 
     const scrollWindows = windows.filter((window) =>
       window.label.includes('scroll'),
@@ -478,7 +460,7 @@ describe('runOnlyDashMotion', () => {
     // number the smoothness tool would then check against.
     const { demo, page } = createHarness({ gridRange: 600 })
 
-    const windows = await runOnlyDashMotion(page as never, demo)
+    const windows = await runBenchMotion(page as never, demo)
 
     const others = windows.filter((window) => !window.label.includes('scroll'))
     expect(others.length).toBeGreaterThan(0)
@@ -492,7 +474,7 @@ describe('runOnlyDashMotion', () => {
   it('only visits tables measured to hold at least the density floor', async () => {
     const { demo, page } = createHarness()
 
-    const windows = await runOnlyDashMotion(page as never, demo)
+    const windows = await runBenchMotion(page as never, demo)
 
     const tableWindows = windows.filter((window) =>
       window.label.startsWith('table:'),
@@ -511,7 +493,7 @@ describe('runOnlyDashMotion', () => {
     const { demo, page, setRecordsByPath } = createHarness()
     setRecordsByPath({ expenses: 1, invoices: 1, tasks: 1, users: 1 })
 
-    await expect(runOnlyDashMotion(page as never, demo)).rejects.toThrow(
+    await expect(runBenchMotion(page as never, demo)).rejects.toThrow(
       'density floor',
     )
   })
@@ -520,7 +502,7 @@ describe('runOnlyDashMotion', () => {
     const { demo, disableTableNavigation, page } = createHarness()
     disableTableNavigation()
 
-    await expect(runOnlyDashMotion(page as never, demo)).rejects.toThrow(
+    await expect(runBenchMotion(page as never, demo)).rejects.toThrow(
       'did not navigate',
     )
   })
@@ -528,7 +510,7 @@ describe('runOnlyDashMotion', () => {
   it('does not assert a motion window for the search filter', async () => {
     const { demo, page } = createHarness()
 
-    const windows = await runOnlyDashMotion(page as never, demo)
+    const windows = await runBenchMotion(page as never, demo)
 
     expect(demo.type).toHaveBeenCalled()
     expect(windows.some((window) => window.label === 'search-filter')).toBe(
@@ -541,46 +523,24 @@ describe('runOnlyDashMotion', () => {
       gridRange: 600,
     })
 
-    await runOnlyDashMotion(page as never, demo)
+    await runBenchMotion(page as never, demo)
 
     const totalMs = waitForTimeoutCalls.reduce((total, ms) => total + ms, 0)
     expect(totalMs).toBeGreaterThan(0)
   })
-  it('opens the menu first when the sidebar is behind one, and closes it after', async () => {
-    // At a phone's width OnlyDash hides its sidebar behind a menu button, so
-    // the Projects link is present but not reachable — and following it does
-    // not close the drawer, which then covers the grid the warm-up waits for.
-    // Both facts are about the layout, not the device, which is why the
-    // warm-up reads the button rather than a profile.
-    const { drawerClosed, page, roleCalls } = createHarness({
-      menuVisible: true,
-    })
-
-    await warmUpOnlyDash(page as never, 'https://app.onlydash.io/')
-
-    const menuCall = roleCalls.findIndex((call) =>
-      /menu/i.test(String(call.name)),
-    )
-    const projectsCall = roleCalls.findIndex(
-      (call) => call.name === 'Projects' && call.role === 'link',
-    )
-    expect(menuCall).toBeGreaterThanOrEqual(0)
-    expect(menuCall).toBeLessThan(projectsCall)
-    expect(drawerClosed()).toBe(true)
-  })
 })
 
-describe('runOnlyDashBenchmark', () => {
+describe('runBenchmark', () => {
   it('warms up before starting the recorded motion', async () => {
     const { demo, page, roleCalls } = createHarness()
 
-    const windows = await runOnlyDashBenchmark(
+    const windows = await runBenchmark(
       page as never,
       demo,
-      'https://app.onlydash.io/',
+      'http://127.0.0.1:45671/',
     )
 
-    expect(page.goto).toHaveBeenCalledWith('https://app.onlydash.io/', {
+    expect(page.goto).toHaveBeenCalledWith('http://127.0.0.1:45671/', {
       waitUntil: 'domcontentloaded',
     })
     expect(roleCalls).toContainEqual({ name: 'Projects', role: 'heading' })

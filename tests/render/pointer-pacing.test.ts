@@ -28,7 +28,7 @@ import {
  * timeline the idle trimmer has already bent — and bending the timeline is
  * precisely what turns a smooth path into a series of jumps.
  *
- * Measured on the real recording (OnlyDash, 2026-09-15, 20.7s): the shipped
+ * Measured on the recording the owner watched (2026-09-15, 20.7s): the shipped
  * decisions moved the pointer up to **330px in one output frame**, against the
  * 20px the recorder guarantees between two samples. The owner's verdict on that
  * video was "krasse Diashow". No test in the suite objected, because no test
@@ -52,26 +52,35 @@ function fixture(name: string, originMs: number): TimedEvent[] {
 }
 
 /**
- * The capture of the first real recording, frame times and all.
+ * The capture of the first recording that showed the defect, frame times and
+ * all: 117 frames for 20.9 seconds, recorded on the RTX 3090 box on
+ * 2026-09-15.
  *
- * `tests/render/fixtures/capture-onlydash.json` is the frame manifest of
- * `demo/m4-acceptance.ts` run against the OnlyDash guest UI on the RTX 3090 box
- * on 2026-09-15, and `run-onlydash.jsonl` is the event log written beside it.
- * 117 frames for 20.9 seconds — which is not a broken capture but what every
- * recording of a real application looks like: between two interactions the page
- * does not change a pixel while the pointer crosses it, and the capture folds
- * bit-identical frames into their predecessor's dwell time.
+ * **What these three files contain is timing, and only timing.** A frame
+ * manifest (file name plus timestamp), a pointer path, and the clock the two
+ * share. No URL, no selector, no text, no pixel — nothing that says which
+ * application was on screen. That is why they could stay when everything else
+ * moved to the repository's own corpus, and it is worth knowing before anyone
+ * assumes a recorded artifact carries a recording.
  *
- * **A synthetic stand-in was tried first and could not reproduce the defect.**
- * Marking a frame at each interaction puts every gap's end on an interaction,
- * where `protectMs` shields it, so nothing was ever trimmed and the bound below
- * passed by having nothing to measure. The gap structure of a real recording is
- * the thing under test; inventing one invents the answer.
+ * **Why they were not re-recorded against the corpus.** They were, and the
+ * result was an instrument that no longer moves: on a 31s corpus recording the
+ * bound reads 18.8px and the counter-example below reads 19.3px, so a green
+ * result would have proven nothing. The corpus's own still stretches sit
+ * closer to its interactions, where `protectMs` shields them, and the
+ * mutation then trims *less* rather than more. The gap structure of this
+ * particular recording is the thing under test; swapping it for one that
+ * cannot fail would swap the test for a decoration.
+ *
+ * **A synthetic stand-in was tried before that and could not reproduce it
+ * either.** Marking a frame at each interaction puts every gap's end on an
+ * interaction, so nothing was ever trimmed and the bound passed by having
+ * nothing to measure.
  */
-function onlydashCapture(): CaptureInput {
+function benchCapture(): CaptureInput {
   const manifest = JSON.parse(
     readFileSync(
-      join(import.meta.dirname, 'fixtures', 'capture-onlydash.json'),
+      join(import.meta.dirname, 'fixtures', 'capture-bench.json'),
       'utf8',
     ),
   ) as CaptureInput
@@ -109,8 +118,8 @@ function worstPointerStep(plan: RenderPlan): {
 }
 
 describe('the drawn pointer never moves further in one output frame than the recording moved in one sample', () => {
-  const capture = onlydashCapture()
-  const events = fixture('run-onlydash', capture.sessionStartedAt)
+  const capture = benchCapture()
+  const events = fixture('run-bench', capture.sessionStartedAt)
 
   it('holds over the recording the owner watched', () => {
     const plan = planRender(capture, events)

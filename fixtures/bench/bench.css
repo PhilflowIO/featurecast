@@ -1,0 +1,271 @@
+/*
+  Light by default, dark on `body.dark`. Both themes are opaque and
+  high-contrast on purpose: a capture of a translucent surface measures the
+  compositor, not the application.
+*/
+:root {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --ink: #16191d;
+  --muted: #5b6472;
+  --line: #d6dae1;
+  --accent: #1f5fd0;
+  --stripe: #f8f9fb;
+  --sticky: #eef1f5;
+}
+
+body.dark {
+  --bg: #12151a;
+  --panel: #1b1f26;
+  --ink: #e7ebf1;
+  --muted: #9aa5b4;
+  --line: #2c333d;
+  --accent: #6ea8fe;
+  --stripe: #1f242c;
+  --sticky: #232932;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--ink);
+  font:
+    14px/1.4 system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    sans-serif;
+}
+
+/*
+  The controls sit in the bar at every width. No menu button, no drawer:
+  the recording script taps the same element on a phone as on a desktop,
+  which is the only way one script can serve four device classes.
+*/
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-left: auto;
+}
+
+.topbar button {
+  font: inherit;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.topbar input {
+  font: inherit;
+  padding: 6px 10px;
+  width: 160px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+/*
+  A scrollable strip rather than a sidebar: a sidebar either disappears
+  behind a menu on a phone or eats a third of a 393px layout. The strip
+  keeps every collection reachable at every width.
+*/
+nav {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+nav a {
+  padding: 6px 14px;
+  border-radius: 999px;
+  white-space: nowrap;
+  text-decoration: none;
+  color: var(--muted);
+  border: 1px solid transparent;
+}
+
+nav a.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/*
+  The outer scroll container. The grid below is the inner one, and it is
+  inset by this padding — which is what leaves a border of outer container
+  a wheel can actually be delivered to.
+*/
+main {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+  min-height: 0;
+}
+
+.titlerow {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+
+h1 {
+  font-size: 22px;
+  margin: 0;
+}
+
+.count {
+  color: var(--muted);
+}
+
+/* The inner scroll container: both axes, inside `main`, which also scrolls. */
+.gridscroller {
+  height: 56vh;
+  min-height: 260px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  width: max-content;
+  min-width: 100%;
+}
+
+th,
+td {
+  width: 200px;
+  min-width: 200px;
+  max-width: 200px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+/*
+  Both stickies are the point of this fixture, not decoration: a sticky row
+  and a sticky column force a re-composite on every scrolled pixel, which is
+  where a capture either keeps up or visibly does not.
+*/
+thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--sticky);
+  cursor: pointer;
+  user-select: none;
+}
+
+tbody td:first-child,
+thead th:first-child {
+  position: sticky;
+  left: 0;
+  background: var(--sticky);
+  z-index: 1;
+}
+
+thead th:first-child {
+  z-index: 3;
+}
+
+tbody tr:nth-child(even) td {
+  background: var(--stripe);
+}
+
+tbody tr:nth-child(even) td:first-child {
+  background: var(--sticky);
+}
+
+tbody tr.detail td {
+  white-space: normal;
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.owner {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.owner button {
+  font: inherit;
+  line-height: 1;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+/*
+  Body copy under the grid, so the outer container has a scroll range of its
+  own and the two containers are genuinely nested rather than nominally.
+*/
+.notes {
+  margin-top: 20px;
+  display: grid;
+  gap: 12px;
+}
+
+.notes article {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.notes h2 {
+  font-size: 15px;
+  margin: 0 0 6px;
+}
+
+.notes p {
+  margin: 0;
+  color: var(--muted);
+}

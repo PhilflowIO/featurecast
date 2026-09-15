@@ -24,10 +24,11 @@ import {
   validateCaptureEfficiencyReport,
   writeCaptureEfficiencyReport,
 } from '../src/efficiency.js'
+import { startFixtureServer } from '../src/fixture-server.js'
 import {
   resolveM1CaptureArguments,
-  runOnlyDashMotion,
-  warmUpOnlyDash,
+  runBenchMotion,
+  warmUpBenchApp,
 } from '../src/m1-benchmark.js'
 import { readPaintTimestamps, startPaintRateProbe } from '../src/paint-rate.js'
 import { startPresentedFrameTrace } from '../src/presented.js'
@@ -48,8 +49,14 @@ import {
   HARDWARE_GL_LAUNCH_ARGS,
 } from '../src/renderer.js'
 
+// The corpus is served from the repository, on a port this run is given.
+// Naming a URL on the command line still works — that is how the same
+// benchmark is pointed at a staging deployment — but the default needs no
+// account, no network and nobody else's application.
+const fixture = await startFixtureServer()
 const { outputDirectory, url } = resolveM1CaptureArguments(
   process.argv.slice(2),
+  fixture.origin,
 )
 
 /**
@@ -89,11 +96,10 @@ try {
   console.log(`renderer: ${rendererInfo.renderer}`)
   assertHardwareRenderer(rendererInfo)
 
-  // Signing in and reaching the data grid happens before capture starts:
-  // recording it produced ~0.9s of blank white frames at the head of the
-  // video, which is loading-screen time, not the 20s of dense UI M1 asks
-  // for.
-  await warmUpOnlyDash(page, url)
+  // Reaching the data grid happens before capture starts: recording it
+  // produced ~0.9s of blank white frames at the head of the video, which is
+  // loading-screen time, not the 20s of dense UI M1 asks for.
+  await warmUpBenchApp(page, url)
 
   const runInteractions = createRecorder(capturedPageRuntime(page))
   let motionWindows: MotionWindow[] = []
@@ -118,7 +124,7 @@ try {
       await runInteractions(
         { out: outputDirectory, seed: 1, settleTimeoutMs: 10_000 },
         async (_recordPage, demo) => {
-          motionWindows = await runOnlyDashMotion(page, demo)
+          motionWindows = await runBenchMotion(page, demo)
         },
       )
     },
@@ -245,4 +251,5 @@ try {
   await context.close()
 } finally {
   await browser.close()
+  await fixture.close()
 }
