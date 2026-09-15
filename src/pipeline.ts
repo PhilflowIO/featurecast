@@ -3,14 +3,17 @@ import { pathToFileURL } from 'node:url'
 
 import { assembleScreencast, type EncodeTarget } from './assemble.js'
 import {
-  requireCaptureSettings,
   resolveDevice,
   type CaptureSettings,
   type OutputSettings,
   type ResolvedDevice,
 } from './devices.js'
 import { defaultQualityFor, type Encoder } from './encoders.js'
-import { assertCaptureSupported, recordSession } from './session.js'
+import {
+  assertCaptureSupported,
+  recordSession,
+  requireAppUrl,
+} from './session.js'
 import type { PrepareStep, RecordingScript } from './session.js'
 import { uploadFile, resolveUploadConfig } from './upload.js'
 
@@ -39,6 +42,14 @@ export const SCRIPT_EXPORT_NAMES = ['default', 'recording'] as const
 export type LoadedScript = {
   prepare?: PrepareStep
   recording: RecordingScript
+  /**
+   * The application the script films, as a third optional export named
+   * `url`. A direct capture does not need it — the script navigates there
+   * itself — but a framed one does, because the shell it puts the
+   * application inside is served from the application's own origin and that
+   * origin has to be known before the first frame (src/framed.ts).
+   */
+  url?: string
 }
 
 export type ScriptLoader = (path: string) => Promise<LoadedScript>
@@ -111,6 +122,7 @@ export const importScript: ScriptLoader = async (path) => {
     unknown
   >
   const prepare = module_['prepare']
+  const url = module_['url']
   for (const name of SCRIPT_EXPORT_NAMES) {
     const candidate = module_[name]
     if (typeof candidate !== 'function') continue
@@ -119,6 +131,7 @@ export const importScript: ScriptLoader = async (path) => {
       ...(typeof prepare === 'function'
         ? { prepare: prepare as PrepareStep }
         : {}),
+      ...(typeof url === 'string' ? { url } : {}),
     }
   }
   throw new Error(
@@ -162,6 +175,7 @@ const DEFAULT_DEPENDENCIES: PipelineDependencies = {
   loadScript: importScript,
   record: async (device, outputDirectory, script, seed) => {
     const capture = prepareCapture(device)
+    requireAppUrl(device, script.url)
     const session = await recordSession({
       capture,
       device,
@@ -169,6 +183,7 @@ const DEFAULT_DEPENDENCIES: PipelineDependencies = {
       recording: script.recording,
       seed,
       ...(script.prepare === undefined ? {} : { prepare: script.prepare }),
+      ...(script.url === undefined ? {} : { appUrl: script.url }),
     })
     return { capture, captureDirectory: session.captureDirectory }
   },
@@ -179,14 +194,12 @@ const DEFAULT_DEPENDENCIES: PipelineDependencies = {
 }
 
 /**
- * The two gates a device has to pass before a browser is worth starting: the
- * milestone that owes its capture decision (`requireCaptureSettings`, M3 for
- * every mobile preset) and the geometry the capture stage can actually
- * record (`assertCaptureSupported`). Separate from `recordSession` so both
- * refusals are provable without a browser.
+ * The gate a device has to pass before a browser is worth starting: the
+ * geometry and cadence the capture stage can actually record. Separate from
+ * `recordSession` so the refusal is provable without a browser.
  */
 export function prepareCapture(device: ResolvedDevice): CaptureSettings {
-  const capture = requireCaptureSettings(device)
+  const capture = device.capture
   assertCaptureSupported(capture, describeDevice(device))
   return capture
 }

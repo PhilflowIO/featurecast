@@ -1,4 +1,4 @@
-import type { Page } from 'playwright'
+import type { Frame } from 'playwright'
 
 import {
   ONLYDASH_GUEST_BENCHMARK_URL,
@@ -28,8 +28,11 @@ import type { Demo, RecordPage } from '../src/record.js'
  * is what a person would film: arrive, point at the thing, press it, let the
  * result land, look further down the page.
  */
-export const prepare = async (page: Page): Promise<void> => {
-  await warmUpOnlyDash(page, ONLYDASH_GUEST_BENCHMARK_URL)
+/** The application this script films; see `LoadedScript.url`. */
+export const url = ONLYDASH_GUEST_BENCHMARK_URL
+
+export const prepare = async (app: Frame): Promise<void> => {
+  await warmUpOnlyDash(app, ONLYDASH_GUEST_BENCHMARK_URL)
 }
 
 const DARK_MODE_BUTTON = 'role=button[name="Switch to dark mode"]'

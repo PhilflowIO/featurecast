@@ -23,9 +23,10 @@ import {
  *    copied.
  * 2. Capture — the area actually recorded, plus fps, JPEG quality and the
  *    capture strategy. Separate from the device because the screencast
- *    delivers CSS pixels and ignores the pixel density (PLAN.md, "Der
- *    ungelöste Teil"), so the device profile alone does not determine the
- *    recorded resolution.
+ *    delivers CSS pixels and ignores the pixel density (measured, M3), so the
+ *    device profile alone does not determine the recorded resolution: a
+ *    desktop profile is over-captured and scaled down, and a touch profile is
+ *    filmed through the framed strategy in src/framed.ts.
  * 3. Output and pointer — encoded pixel size plus encoder quality, and how
  *    the pointer is drawn.
  *
@@ -43,7 +44,6 @@ import {
  * )
  * const context = await browser.newContext(resolved.device)
  * recordPage.hasTouch = resolved.device.hasTouch
- * const capture = requireCaptureSettings(resolved) // throws for M3-pending devices
  * ```
  *
  * `resolved.device` is deliberately shaped as a Playwright context option
@@ -70,16 +70,17 @@ export type DeviceDescriptor = {
 export type DeviceRegistry = Readonly<Record<string, DeviceDescriptor>>
 
 /**
- * Which mechanism produces frames.
+ * Which mechanism produces frames. Two, because M3 measured four and kept
+ * the two that work; docs/M3-VERDICT.md holds the numbers each was dropped on.
  *
- * `screencast` is the only proven one (M1, src/capture.ts). The other three
- * are M3's candidates for making mobile sharp (PLAN.md, "Mobile scharf
- * bekommen"): render the app in a CSS-scaled frame, capture single
- * density-aware screenshots, or upscale during render. They are named here so
- * an explicit capture override can express one, not because any is decided.
+ * - `screencast` films the page directly (M1, src/capture.ts). Right whenever
+ *   the layout width and the recorded width may be the same number, which is
+ *   every pointer device.
+ * - `framed-scale` films a shell the application is laid out inside, at the
+ *   device's own width, scaled up (src/framed.ts). The answer for touch
+ *   devices, where those two numbers differ by a factor of three.
  */
-export type CaptureStrategy =
-  'framed-scale' | 'render-upscale' | 'screencast' | 'screenshot'
+export type CaptureStrategy = 'framed-scale' | 'screencast'
 
 export type CaptureSettings = {
   /** Frames per second the capture aims for. */
@@ -91,23 +92,6 @@ export type CaptureSettings = {
   strategy: CaptureStrategy
   width: number
 }
-
-/**
- * "Not decided yet" as a value. docs/DEVICES.md leaves the capture area of
- * every mobile preset open ("offen (M3)"), and a silent default there would
- * be a guess dressed up as a setting — a 393px-wide recording that looks like
- * a decision. Using such a device fails loudly instead; see
- * `requireCaptureSettings`.
- */
-export type CapturePending = {
-  /** The milestone that owns the open question. */
-  milestone: 'M3'
-  /** Why it is open, in one sentence, for the error message. */
-  reason: string
-  status: 'pending'
-}
-
-export type CapturePlan = CapturePending | CaptureSettings
 
 /** Requestable output format. `output.width`/`height` stay the stored truth. */
 export type Aspect = '1:1' | '16:9' | '9:16'
@@ -137,7 +121,7 @@ export type PointerSettings = {
 }
 
 export type ResolvedDevice = {
-  capture: CapturePlan
+  capture: CaptureSettings
   /** Playwright's descriptor, unchanged, ready for `browser.newContext`. */
   device: DeviceDescriptor
   output: OutputSettings
@@ -195,12 +179,8 @@ export { DEFAULT_OUTPUT_QUALITY }
 export const DEFAULT_POINTER_SIZE_PX = 24
 export const DEFAULT_RIPPLE_COLOR = 'rgba(255, 255, 255, 0.72)'
 
-/** Why every mobile preset's capture area is open. One sentence, reused. */
-const MOBILE_CAPTURE_PENDING_REASON =
-  'the screencast delivers CSS pixels and ignores deviceScaleFactor, so a mobile viewport would record at its CSS width (393px for an iPhone 15 Pro) — M3 decides between framed-scale, screenshot and render-upscale'
-
 type Preset = {
-  capture: CapturePlan
+  capture: CaptureSettings
   output: { height: number; width: number }
   playwrightName: string
 }
@@ -248,10 +228,36 @@ function desktopCapture(): CaptureSettings {
   }
 }
 
-const MOBILE_CAPTURE_PENDING: CapturePending = {
-  milestone: 'M3',
-  reason: MOBILE_CAPTURE_PENDING_REASON,
-  status: 'pending',
+/**
+ * What every touch profile records, and why it is exactly the output size.
+ *
+ * M3's answer to "the screencast delivers CSS pixels" is `framed-scale`: the
+ * recorded page is the video's own size and the application is laid out at
+ * the device's width inside it, scaled up by a CSS transform that
+ * re-rasterises (src/framed.ts carries the argument and the evidence).
+ *
+ * The recorded area is therefore the output area, with none of the 1.33x
+ * reserve the desktop presets buy. That is measured, not conceded: the same
+ * recording of the same application delivered 30.6 frames per second at
+ * 1080x1920 and 14.8 at 1440x2560 on the AI box
+ * (artifacts/m3-frame/report.json). Halving the frame rate of a social video
+ * to buy zoom headroom is the wrong trade, and a phone-shaped picture has
+ * nowhere to pan to anyway — the frame already holds the whole device. What
+ * it costs is stated plainly: a zoom into a mobile recording crops into a
+ * 1:1-sampled image and goes soft, where the desktop presets have reserve.
+ */
+function mobileCapture(output: {
+  height: number
+  width: number
+}): CaptureSettings {
+  return {
+    fps: FRAME_RATE,
+    height: output.height,
+    quality: CAPTURE_QUALITY,
+    status: 'decided',
+    strategy: 'framed-scale',
+    width: output.width,
+  }
 }
 
 /**
@@ -266,12 +272,12 @@ const MOBILE_CAPTURE_PENDING: CapturePending = {
  */
 const PRESETS: Readonly<Record<string, Preset>> = {
   android: {
-    capture: MOBILE_CAPTURE_PENDING,
+    capture: mobileCapture({ height: 1920, width: 1080 }),
     output: { height: 1920, width: 1080 },
     playwrightName: 'Pixel 7',
   },
   'android-small': {
-    capture: MOBILE_CAPTURE_PENDING,
+    capture: mobileCapture({ height: 1920, width: 1080 }),
     output: { height: 1920, width: 1080 },
     playwrightName: 'Galaxy S24',
   },
@@ -286,22 +292,22 @@ const PRESETS: Readonly<Record<string, Preset>> = {
     playwrightName: 'Desktop Chrome',
   },
   iphone: {
-    capture: MOBILE_CAPTURE_PENDING,
+    capture: mobileCapture({ height: 1920, width: 1080 }),
     output: { height: 1920, width: 1080 },
     playwrightName: 'iPhone 15 Pro',
   },
   'iphone-max': {
-    capture: MOBILE_CAPTURE_PENDING,
+    capture: mobileCapture({ height: 1920, width: 1080 }),
     output: { height: 1920, width: 1080 },
     playwrightName: 'iPhone 15 Pro Max',
   },
   'iphone-quer': {
-    capture: MOBILE_CAPTURE_PENDING,
+    capture: mobileCapture({ height: 1080, width: 1920 }),
     output: { height: 1080, width: 1920 },
     playwrightName: 'iPhone 15 Pro landscape',
   },
   'iphone-small': {
-    capture: MOBILE_CAPTURE_PENDING,
+    capture: mobileCapture({ height: 1920, width: 1080 }),
     output: { height: 1920, width: 1080 },
     playwrightName: 'iPhone SE',
   },
@@ -311,12 +317,12 @@ const PRESETS: Readonly<Record<string, Preset>> = {
     playwrightName: 'Desktop Safari',
   },
   tablet: {
-    capture: MOBILE_CAPTURE_PENDING,
+    capture: mobileCapture({ height: 1600, width: 1200 }),
     output: { height: 1600, width: 1200 },
     playwrightName: 'iPad Pro 11',
   },
   'tablet-small': {
-    capture: MOBILE_CAPTURE_PENDING,
+    capture: mobileCapture({ height: 1600, width: 1200 }),
     output: { height: 1600, width: 1200 },
     playwrightName: 'iPad Mini',
   },
@@ -377,45 +383,25 @@ export function resolveDevice(
     throw new Error(unknownDeviceMessage(name, registry))
   }
 
+  // A bare Playwright name has no curated output size. 16:9 for a pointer
+  // device, 9:16 for a touch device mirrors what every curated preset does.
+  const bareOutput = descriptor.hasTouch
+    ? ASPECT_DIMENSIONS['9:16']
+    : ASPECT_DIMENSIONS['16:9']
   const base: Preset = preset ?? {
-    capture: descriptor.hasTouch ? MOBILE_CAPTURE_PENDING : desktopCapture(),
-    // A bare Playwright name has no curated output size. 16:9 for a pointer
-    // device, 9:16 for a touch device mirrors what every curated preset does.
-    output: descriptor.hasTouch
-      ? ASPECT_DIMENSIONS['9:16']
-      : ASPECT_DIMENSIONS['16:9'],
+    capture: descriptor.hasTouch ? mobileCapture(bareOutput) : desktopCapture(),
+    output: bareOutput,
     playwrightName,
   }
 
   return {
-    capture: applyCaptureOverrides(base.capture, overrides.capture, name),
+    capture: applyCaptureOverrides(base.capture, overrides.capture),
     device: copyDescriptor(descriptor),
     output: applyOutputOverrides(base.output, overrides),
     playwrightName,
     pointer: applyPointerOverrides(descriptor, overrides.pointer),
     preset: preset ? name : null,
   }
-}
-
-/**
- * The capture settings, or a hard failure naming the milestone that owes the
- * decision. This is the gate that keeps "open" from silently becoming a
- * 393px-wide video: call it at the point where a recording is about to start.
- */
-export function requireCaptureSettings(
-  resolved: ResolvedDevice,
-): CaptureSettings {
-  if (resolved.capture.status === 'decided') return resolved.capture
-  const label =
-    resolved.preset === null
-      ? `"${resolved.playwrightName}"`
-      : `"${resolved.preset}" (${resolved.playwrightName})`
-  throw new Error(
-    `Capture settings for ${label} are not decided yet (${resolved.capture.milestone}): ` +
-      `${resolved.capture.reason}. See MILESTONES.md ${resolved.capture.milestone} and PLAN.md. ` +
-      'Until it is decided, pass an explicit capture override, e.g. ' +
-      `{ extends: "${resolved.preset ?? resolved.playwrightName}", capture: { width: 1080, height: 1920, strategy: "framed-scale" } }.`,
-  )
 }
 
 /**
@@ -432,49 +418,20 @@ function copyDescriptor(descriptor: DeviceDescriptor): DeviceDescriptor {
 }
 
 function applyCaptureOverrides(
-  base: CapturePlan,
+  base: CaptureSettings,
   override: DeviceOverrides['capture'],
-  requestedName: string,
-): CapturePlan {
+): CaptureSettings {
   if (override === undefined) return base
-
-  if (base.status === 'decided') {
-    const merged: CaptureSettings = {
-      fps: override.fps ?? base.fps,
-      height: override.height ?? base.height,
-      quality: override.quality ?? base.quality,
-      status: 'decided',
-      strategy: override.strategy ?? base.strategy,
-      width: override.width ?? base.width,
-    }
-    validateCapture(merged)
-    return merged
-  }
-
-  // Completing an open capture needs the parts nobody has decided: the
-  // recorded area and how it is produced. fps and quality have project-wide
-  // answers and may be left out. A partial completion would re-introduce the
-  // guess this state exists to prevent.
-  const { height, strategy, width } = override
-  const missing = (['width', 'height', 'strategy'] as const).filter(
-    (field) => override[field] === undefined,
-  )
-  if (width === undefined || height === undefined || strategy === undefined) {
-    throw new Error(
-      `Capture for "${requestedName}" is still open (${base.milestone}); an override must supply ${missing.join(', ')} ` +
-        `— ${base.reason}.`,
-    )
-  }
-  const completed: CaptureSettings = {
-    fps: override.fps ?? FRAME_RATE,
-    height,
-    quality: override.quality ?? CAPTURE_QUALITY,
+  const merged: CaptureSettings = {
+    fps: override.fps ?? base.fps,
+    height: override.height ?? base.height,
+    quality: override.quality ?? base.quality,
     status: 'decided',
-    strategy,
-    width,
+    strategy: override.strategy ?? base.strategy,
+    width: override.width ?? base.width,
   }
-  validateCapture(completed)
-  return completed
+  validateCapture(merged)
+  return merged
 }
 
 function applyOutputOverrides(
