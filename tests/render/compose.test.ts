@@ -155,6 +155,8 @@ describe('one composed output frame', () => {
         cursor: {
           kind: 'arrow',
           ripplePhase: null,
+          sourceX: 0,
+          sourceY: 0,
           screenX: 32,
           screenY: 24,
         },
@@ -174,7 +176,14 @@ describe('one composed output frame', () => {
     const a = createRaster({ width: 64, height: 48 })
     const b = createRaster({ width: 64, height: 48 })
     const same = decision({
-      cursor: { kind: 'arrow', ripplePhase: 0.25, screenX: 20, screenY: 30 },
+      cursor: {
+        kind: 'arrow',
+        ripplePhase: 0.25,
+        screenX: 20,
+        screenY: 30,
+        sourceX: 40,
+        sourceY: 60,
+      },
     })
     composeFrame(source, same, cursor, a)
     composeFrame(source, same, cursor, b)
