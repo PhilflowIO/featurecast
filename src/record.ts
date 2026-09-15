@@ -9,6 +9,17 @@ import {
 import { generateMotionPoints, minimumJerk } from './motion.js'
 
 const EVENTS_FILE_NAME = 'events.jsonl'
+/**
+ * Where the wall-clock time of every event goes.
+ *
+ * Deliberately a second file rather than a column in `events.jsonl`: M2's
+ * acceptance is that two runs of the same script with the same seed produce a
+ * byte-identical log (`tests/record.browser.test.ts`), and a wall-clock reading
+ * is different on every run by definition. Put it in the log and that promise
+ * dies; put it beside the log and both promises hold — the path stays
+ * reproducible, the timing stays true.
+ */
+const EVENT_TIMES_FILE_NAME = 'event-times.jsonl'
 export const EVENT_LOG_FPS = 60
 /** Where the pointer rests before the script's first interaction. */
 const DEFAULT_VIEWPORT = { width: 1280, height: 720 }
@@ -82,6 +93,13 @@ export type RecordOptions = {
    * multi-second CSS transition, short enough to fail fast otherwise.
    */
   settleTimeoutMs?: number
+  /**
+   * The clock the event times are read from. Defaults to `Date.now`, the same
+   * source `src/capture.ts` stamps `session.startedAt` with — which is what
+   * makes the two artifacts comparable at all. Injected only so a test can
+   * assert on times it chose.
+   */
+  now?: () => number
 }
 
 export type ScrollOptions = {
@@ -196,7 +214,21 @@ export function createRecorder(
     const settleTimeoutMs = options.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS
     const random = createRandom(seed)
     const events: RecordEvent[] = []
+    const eventTimesMs: number[] = []
+    const now = options.now ?? Date.now
     let tick = 0
+    /**
+     * Appends one event and the moment it happened, in one step, so the two
+     * artifacts cannot come apart. Reading the clock here — after the action
+     * the event describes has been dispatched — is the whole point of #9: it
+     * is a moment on the same wall clock the capture stamps its frames with,
+     * whereas `tick` is a count of *planned* 60 Hz slots that stands still
+     * through every unplanned wait.
+     */
+    const log = (event: RecordEvent): void => {
+      events.push(event)
+      eventTimesMs.push(now())
+    }
 
     await runtime.run(options, async (page) => {
       // The real browser's own cursor starts at the origin; we track that same
@@ -278,7 +310,7 @@ export function createRecorder(
           await sleepUntil(page, start + ((index + 1) / EVENT_LOG_FPS) * 1000)
           await page.mouse.move(next.x, next.y, { steps: 1 })
           pointer = next
-          events.push({ type: 'pointer', tick, x: next.x, y: next.y })
+          log({ type: 'pointer', tick, x: next.x, y: next.y })
           tick += 1
         }
       }
@@ -388,7 +420,7 @@ export function createRecorder(
         click: async (target) => {
           const hit = await moveTo(target)
           await page.mouse.click(hit.x, hit.y)
-          events.push({
+          log({
             type: 'click',
             tick,
             x: hit.x,
@@ -399,7 +431,7 @@ export function createRecorder(
         tap: async (target) => {
           const hit = await moveTo(target)
           await page.touchscreen.tap(hit.x, hit.y)
-          events.push({ type: 'tap', tick, x: hit.x, y: hit.y, bbox: hit.bbox })
+          log({ type: 'tap', tick, x: hit.x, y: hit.y, bbox: hit.bbox })
         },
         type: async (target, text) => {
           const hit = await moveTo(target)
@@ -425,7 +457,7 @@ export function createRecorder(
               await page.waitForTimeout(delayMs)
             }
           }
-          events.push({ type: 'type', tick: startTick, text, bbox: hit.bbox })
+          log({ type: 'type', tick: startTick, text, bbox: hit.bbox })
           tick += consumedSlots
         },
         hold: async (milliseconds) => {
@@ -435,7 +467,7 @@ export function createRecorder(
             )
           }
           const roundedMilliseconds = Math.round(milliseconds)
-          events.push({ type: 'hold', tick, milliseconds: roundedMilliseconds })
+          log({ type: 'hold', tick, milliseconds: roundedMilliseconds })
           tick += Math.ceil((roundedMilliseconds / 1000) * EVENT_LOG_FPS)
           await page.waitForTimeout(roundedMilliseconds)
         },
@@ -454,7 +486,7 @@ export function createRecorder(
             speedPxPerSecond,
             EVENT_LOG_FPS,
           )
-          events.push({ type: 'scroll', tick, deltaX, deltaY })
+          log({ type: 'scroll', tick, deltaX, deltaY })
           await paceWheel(page, positions)
           // Dispatching the last wheel event is not the same as the page
           // having arrived: Chromium animates the scroll and keeps painting
@@ -488,7 +520,80 @@ export function createRecorder(
       join(options.out, EVENTS_FILE_NAME),
       `${[header, ...events].map(serializeEvent).join('\n')}\n`,
     )
+    await writeFile(
+      join(options.out, EVENT_TIMES_FILE_NAME),
+      serializeEventTimes(events, eventTimesMs),
+    )
   }
+}
+
+/** The head of `event-times.jsonl`: which clock, and where it started. */
+export type EventTimesHeader = {
+  /**
+   * Epoch milliseconds of the first reading. Every `ms` below is an offset
+   * from it, which keeps the file readable and keeps a log recorded without a
+   * capture usable on its own: its own start is the origin.
+   */
+  startedAt: number
+  type: 'times-header'
+  version: 1
+}
+
+/** One event's moment, paired with the tick of the log line it belongs to. */
+export type EventTime = {
+  /** Milliseconds since `startedAt`. */
+  ms: number
+  /**
+   * The `tick` of the corresponding line in `events.jsonl`. Carried so the
+   * reader can prove the two files describe the same run instead of trusting
+   * that they line up by position.
+   */
+  tick: number
+}
+
+/**
+ * Writes the times file for a finished recording.
+ *
+ * Empty recordings still get a file with a header: "no events" and "no times
+ * file" must not look the same to the renderer, because one is a recording
+ * with nothing in it and the other is a recording made by a version that did
+ * not know what time it was.
+ */
+export function serializeEventTimes(
+  events: readonly RecordEvent[],
+  timesMs: readonly number[],
+): string {
+  if (events.length !== timesMs.length) {
+    throw new Error(
+      `Event times out of step: ${String(events.length)} events, ` +
+        `${String(timesMs.length)} readings`,
+    )
+  }
+  const startedAt = timesMs[0] ?? 0
+  const header: EventTimesHeader = {
+    type: 'times-header',
+    version: 1,
+    startedAt,
+  }
+  const lines = [
+    JSON.stringify({
+      type: header.type,
+      version: header.version,
+      startedAt: header.startedAt,
+    }),
+  ]
+  for (const [index, event] of events.entries()) {
+    if (event.type === 'header') {
+      throw new Error('The log header carries no time of its own')
+    }
+    const readingMs = timesMs[index]
+    if (readingMs === undefined) {
+      throw new Error('unreachable: event time index out of bounds')
+    }
+    const entry: EventTime = { tick: event.tick, ms: readingMs - startedAt }
+    lines.push(JSON.stringify({ tick: entry.tick, ms: entry.ms }))
+  }
+  return `${lines.join('\n')}\n`
 }
 
 /** Serializes one validated v1 event with canonical, stable field ordering. */
