@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import { DEFAULT_FORMATS, type AspectName, type FormatSpec } from './format.js'
 import { renderRecording, type RenderOptions } from './render.js'
 
@@ -164,8 +165,12 @@ export async function main(argv: readonly string[]): Promise<void> {
   }
 }
 
-const entry = process.argv[1]
-if (entry !== undefined && entry.endsWith('cli.ts')) {
+// Compared against this module's own path, not against a file *name*. The
+// chain's entry point is `src/cli.ts`, so `endsWith('cli.ts')` matched it too:
+// the moment anything in the chain imported from here — sharing the look flags
+// is the obvious reason to — `tsx src/cli.ts` would also start the render CLI,
+// which would then die on the chain's own `--devices`.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).catch((error: unknown) => {
     process.stderr.write(
       `${error instanceof Error ? error.message : String(error)}\n`,
