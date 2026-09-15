@@ -1103,6 +1103,20 @@ async function observeFrames(
           top: number
         }[] = []
         const start = performance.now()
+        // Where this document sits in the picture. `getBoundingClientRect`
+        // is relative to the document it runs in, and under the framed
+        // capture strategy that document is the application inside a scaled
+        // frame, not the page being recorded — the same box the recorder
+        // reads as 16,7 is 44,19 in the video. `frameElement` is readable
+        // because the shell is served from the application's own origin
+        // (src/framed.ts), and its own box already carries the CSS
+        // transform, so the ratio is the conversion. Directly recorded,
+        // there is no frame element and the numbers are the identity.
+        const holder = window.frameElement
+        const seat = holder === null ? null : holder.getBoundingClientRect()
+        const scale = seat === null ? 1 : seat.width / window.innerWidth
+        const offsetX = seat === null ? 0 : seat.left
+        const offsetY = seat === null ? 0 : seat.top
         const loop = {} as { tick: () => void }
         loop.tick = () => {
           const rect = element.getBoundingClientRect()
@@ -1113,10 +1127,10 @@ async function observeFrames(
           const elapsed = performance.now() - start
           collected.push({
             t: elapsed,
-            left: rect.left,
-            top: rect.top,
-            right: rect.left + rect.width,
-            bottom: rect.top + rect.height,
+            left: offsetX + rect.left * scale,
+            top: offsetY + rect.top * scale,
+            right: offsetX + (rect.left + rect.width) * scale,
+            bottom: offsetY + (rect.top + rect.height) * scale,
           })
           if (elapsed < arg.windowMs || collected.length < arg.minFrames) {
             requestAnimationFrame(loop.tick)
@@ -1841,11 +1855,23 @@ async function hitTestPoints(
   points: { x: number; y: number }[],
 ): Promise<boolean[]> {
   const result = await locator.evaluate(
-    (element, arg) =>
-      arg.points.map((point) => {
-        const hit = document.elementFromPoint(point.x, point.y)
+    (element, arg) => {
+      // The mirror image of the conversion in `observeFrames`: the points
+      // arrive in the picture's coordinates and `elementFromPoint` answers
+      // in this document's. Identity when nothing frames this document.
+      const holder = window.frameElement
+      const seat = holder === null ? null : holder.getBoundingClientRect()
+      const scale = seat === null ? 1 : seat.width / window.innerWidth
+      const offsetX = seat === null ? 0 : seat.left
+      const offsetY = seat === null ? 0 : seat.top
+      return arg.points.map((point) => {
+        const hit = document.elementFromPoint(
+          (point.x - offsetX) / scale,
+          (point.y - offsetY) / scale,
+        )
         return hit !== null && (hit === element || element.contains(hit))
-      }),
+      })
+    },
     { points },
   )
   return result as boolean[]
