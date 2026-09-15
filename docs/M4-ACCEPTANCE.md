@@ -62,10 +62,43 @@ margin that buys three formats and sharp text is the margin the zoom would have
 had to spend. A visible push-in needs either a larger capture or a smaller
 output, and which of the two is a product decision, not a defect to fix.
 
+## The pacing verdict, and what it cost
+
+The owner watched the first video and rejected the pointer motion: "krasse
+Diashow". Measured on the decisions that video shipped, the drawn pointer moved
+up to **330px between two output frames**, against the 20px the recorder
+guarantees between two samples.
+
+Two causes, both fixed at the source:
+
+- **Idle trimming compressed stretches the pointer was crossing.** Its signal is
+  whether the captured picture changed, and a page at rest with a pointer moving
+  over it does not change a pixel. It now trims only where the picture *and* the
+  pointer are still.
+- **The recorder fired bursts to catch up.** Samples were paced on absolute
+  deadlines, so a slow `mouse.move` left every later deadline in the past: two
+  samples 20px apart went out 1ms apart. Two samples are never dispatched closer
+  than one slot now.
+
+Re-run on the same recording, all three formats:
+
+| | worst pointer step | trimmed | output |
+| --- | --- | --- | --- |
+| before | 329.8px | 6.25s | 14.42s |
+| after | **16.7px** | 1.06s | 19.61s |
+
+**The video is five seconds longer, and that is the trade.** Five of the six
+seconds the old trimmer removed were the pointer travelling, which is not idle
+time. Shortening a recording further is a question for the pointer's speed, not
+for the trimmer.
+
+Material: `artifacts/pointer-pacing/` on the workstation — the three formats, and
+a labelled side-by-side of before and after at one fifth speed.
+
 ## What is not proven here
 
-The video has not been watched by the owner. Sharpness, pacing and whether the
-drawn pointer reads as a pointer are all open until it has been.
+The new video has not been watched by the owner. Sharpness and whether the drawn
+pointer reads as a pointer are open until it has been; the pacing number above is
+measured, but a number is not a verdict.
 
-Material: `artifacts/m4-acceptance/` on the workstation — the three formats, and
-a labelled side-by-side of two looks at one fifth speed for judging motion.
+The earlier material is in `artifacts/m4-acceptance/`.

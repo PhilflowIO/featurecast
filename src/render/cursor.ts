@@ -142,6 +142,41 @@ export function pointerAt(
   }
 }
 
+/**
+ * How far the drawn pointer travels between two moments, in capture pixels.
+ *
+ * This is the question idle trimming has to ask before it calls a stretch
+ * still. Its own signal is whether the *picture* changed, and a page at rest
+ * with a pointer crossing it does not change a pixel — the capture folds those
+ * frames together, a long gap opens between two surviving frames, and the
+ * trimmer compresses the very stretch the pointer needed to cross. Measured on
+ * the first real recording, that turned a path the recorder walked at 20px per
+ * sample into one the renderer drew at 338px per output frame.
+ *
+ * The path is measured, not the displacement: a pointer that goes out and comes
+ * back has moved, even though it ends where it began. Samples outside the
+ * window are ignored except for the interpolated positions at its edges, which
+ * is what the renderer actually draws there.
+ */
+export function pointerTravelPx(
+  samples: readonly PointerSample[],
+  startMs: number,
+  endMs: number,
+): number {
+  const from = pointerAt(samples, startMs)
+  const to = pointerAt(samples, endMs)
+  if (from === undefined || to === undefined) return 0
+  let travel = 0
+  let previous = from
+  for (const sample of samples) {
+    if (sample.timeMs <= startMs) continue
+    if (sample.timeMs >= endMs) break
+    travel += Math.hypot(sample.x - previous.x, sample.y - previous.y)
+    previous = sample
+  }
+  return travel + Math.hypot(to.x - previous.x, to.y - previous.y)
+}
+
 /** Moments at which a ripple starts, taken from the clicks and taps. */
 export function rippleStarts(events: readonly TimedEvent[]): number[] {
   const starts: number[] = []

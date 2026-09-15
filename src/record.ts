@@ -225,9 +225,9 @@ export function createRecorder(
      * whereas `tick` is a count of *planned* 60 Hz slots that stands still
      * through every unplanned wait.
      */
-    const log = (event: RecordEvent): void => {
+    const log = (event: RecordEvent, atMs: number = now()): void => {
       events.push(event)
-      eventTimesMs.push(now())
+      eventTimesMs.push(atMs)
     }
 
     await runtime.run(options, async (page) => {
@@ -298,19 +298,46 @@ export function createRecorder(
           motionSeed,
           EVENT_LOG_FPS,
         )
+        const slotMs = 1000 / EVENT_LOG_FPS
         const start = Date.now()
+        let dispatchedAt = start - slotMs
         for (const [index, next] of points.entries()) {
-          // Real samples land on absolute deadlines (start + i/fps), not
-          // accumulated sleeps, so pacing error never compounds across a move.
-          // `tick` is the scheduled 60Hz slot index: every generated sample —
-          // including one that rounds to the same pixel as its predecessor
-          // (the pointer briefly "held") — consumes and logs its own slot, so
-          // tick stays a uniform timebase issue #9 can map onto the capture
-          // clock 1:1.
-          await sleepUntil(page, start + ((index + 1) / EVENT_LOG_FPS) * 1000)
+          // Two deadlines, and the later one wins.
+          //
+          // The first is absolute (start + i/fps), so pacing error does not
+          // compound across a move. On its own it has a failure mode that was
+          // invisible while the log carried a counter: when one `mouse.move`
+          // takes longer than a slot — 40ms, 100ms, whatever the host is busy
+          // with — every deadline after it is already in the past, and the
+          // loop fires a burst to catch up. Measured on the acceptance
+          // recording, two samples 20px apart went out 1ms apart, which is
+          // 15px/ms against the 1.2px/ms the 20px cap means at 60fps, and the
+          // drawn pointer jumped 26px in one output frame.
+          //
+          // The second deadline is the fix: never dispatch two samples closer
+          // together than one slot. A move on a busy host takes longer than
+          // planned and stays smooth, rather than finishing on time in jerks.
+          // The log is unchanged either way — same positions, same ticks, same
+          // bytes — so M2's reproducibility does not notice.
+          await sleepUntil(
+            page,
+            Math.max(
+              start + ((index + 1) / EVENT_LOG_FPS) * 1000,
+              dispatchedAt + slotMs,
+            ),
+          )
+          dispatchedAt = Date.now()
           await page.mouse.move(next.x, next.y, { steps: 1 })
           pointer = next
-          log({ type: 'pointer', tick, x: next.x, y: next.y })
+          // `tick` is the scheduled 60Hz slot index: every generated sample —
+          // including one that rounds to the same pixel as its predecessor
+          // (the pointer briefly "held") — consumes and logs its own slot.
+          // Timed at dispatch, not after the call returns. `mouse.move` costs
+          // between 1ms and 100ms depending on what the host is doing, and
+          // stamping the event with the moment the call *finished* would put
+          // that cost into the pointer's speed — enough, measured, to make two
+          // samples look 1ms apart when they were dispatched a full slot apart.
+          log({ type: 'pointer', tick, x: next.x, y: next.y }, dispatchedAt)
           tick += 1
         }
       }

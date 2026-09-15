@@ -57,6 +57,18 @@ export type FrameDecision = {
     /** Position inside the output frame, in output pixels. */
     screenX: number
     screenY: number
+    /**
+     * The same position in *capture* pixels, before the crop.
+     *
+     * It is kept because it is the only place the pointer's own pacing can be
+     * measured on the shipped artifact. `screenX` moves when the pointer moves
+     * *and* when the camera does, so a 66px step in it says nothing about
+     * which of the two did it — measured on the first real recording, the
+     * answer was neither obvious nor the one guessed. Two capture pixels are
+     * two capture pixels whatever the camera is doing.
+     */
+    sourceX: number
+    sourceY: number
     /** 0..1 while a click ripple blooms, null otherwise. */
     ripplePhase: number | null
   } | null
@@ -149,10 +161,16 @@ export function planRender(
   const frameTimes = capture.frames.map(
     (frame) => frame.timestamp - capture.sessionStartedAt,
   )
+  // The pointer path in *recording* time, before the mapping bends it. Idle
+  // trimming needs it to tell "the page is still" from "the page is still and
+  // the pointer is crossing it", and it has to ask on the timeline it is about
+  // to change, not on the one it produced.
+  const recordedSamples = pointerSamples(events)
   const mapping = buildTimeMapping(
     frameTimes,
     capture.sessionDurationMs,
     interactionTimes(events),
+    recordedSamples,
     options.idle,
   )
   // One clock for everybody: the same mapping bends the frames and the events,
@@ -210,6 +228,8 @@ export function planRender(
                 screenY: Math.round(
                   ((drawn.y - crop.y) / crop.height) * format.output.height,
                 ),
+                sourceX: drawn.x,
+                sourceY: drawn.y,
               },
         n,
         timeMs,
