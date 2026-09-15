@@ -1,12 +1,12 @@
 # Plan
 
-Alles hier Behauptete ist markiert als **gemessen** (ein Kommando lief, die Ausgabe steht im Recherche-Bericht) oder **angenommen** (aus Quelltext gelesen oder gefolgert, noch nicht ausgeführt). Der Bericht dazu liegt unter `~/Dokumente/coding/research/web-feature-recording-sota-2026-09.md`.
+Alles hier Behauptete ist markiert als **gemessen** (ein Kommando lief, seine Ausgabe wurde festgehalten) oder **angenommen** (aus Quelltext gelesen oder gefolgert, noch nicht ausgeführt). Die Ausgaben selbst standen in einem Recherche-Bericht vom September 2026, der außerhalb dieses Repositorys liegt und nicht mitgespiegelt wird — von hier aus ist er also nicht nachprüfbar. Nachprüfbar ist, was seither im Repository selbst gemessen wurde: die Meilenstein-Berichte unter [docs/](docs/).
 
 ---
 
 ## Die Entscheidung in einem Absatz
 
-Kein fertiges Open-Source-Werkzeug erfüllt Aufnahmequalität, weiche Maus und Mobile gleichzeitig — alle brennen Cursor und Zoom in die Pixel und nehmen zu niedrig auf (gemessen 215 kbit/s beim meistgelobten Kandidaten). Deshalb bauen wir keine neue Anwendung, sondern eine dünne Schicht um Playwright und übernehmen aus vier Fremdrepos genau die Teile, die dort belegt gut sind: die Bewegungsmathematik, die Zoom-Feder, das Ereignis-Format und die Idee der zwei getrennten Artefakte. Der Rest — Geräte-Auflösung, Render, Garage — ist eigener Code, weil er in keinem der Repos existiert.
+Kein fertiges Open-Source-Werkzeug erfüllt Aufnahmequalität, weiche Maus und Mobile gleichzeitig — alle brennen Cursor und Zoom in die Pixel und nehmen zu niedrig auf (gemessen: 215 kbit/s bei einem der geprüften Werkzeuge). Deshalb bauen wir keine neue Anwendung, sondern eine dünne Schicht um Playwright und übernehmen aus vier Fremdrepos genau die Teile, die dort belegt gut sind: die Bewegungsmathematik, die Zoom-Feder, das Ereignis-Format und die Idee der zwei getrennten Artefakte. Der Rest — Geräte-Auflösung, Render, Garage — ist eigener Code, weil er in keinem der Repos existiert.
 
 ---
 
@@ -87,7 +87,7 @@ Aus `45ck/demo-machine` übernehmen wir nur das Muster der sauberen Trennung von
 
 **Desktop wird übergroß aufgenommen** (2560×1600 CSS-Pixel) und im Render auf 1920 verkleinert — alle drei Desktop-Presets, ohne Ausnahme ([docs/DEVICES.md](docs/DEVICES.md)). Mobil gilt das ausdrücklich **nicht**: dort ist die Aufnahmefläche die Ausgabefläche, weil die doppelte Fläche die Bildrate halbiert (gemessen, [docs/M3-VERDICT.md](docs/M3-VERDICT.md)). Das ist der einzige Weg zu scharfem Text, weil die Aufnahme die Pixeldichte ignoriert. Der Rand darüber hinaus ist kein Nebeneffekt, sondern die Voraussetzung für M4: mehrere Ausgabeformate aus **demselben** Rohmaterial ohne zweiten Browser-Lauf, und eine Zoomfeder, die in der Aufnahme umherfährt statt hochzuskalieren. Aus 2560×1600 fallen 16:10, 16:9 und 1:1 scharf heraus; **9:16 nicht** — das gehört den mobilen Presets (M3).
 
-**Zoom ist ein Ausschnitt aus dem Original, nie eine Vergrößerung.** Jedes geprüfte Werkzeug macht hier denselben Fehler und skaliert hoch.
+**Zoom ist ein Ausschnitt aus dem Original, nie eine Vergrößerung.** Genau dafür existiert die 1,33-fache Aufnahmereserve auf dem Desktop.
 
 **Keine virtuelle Zeit.** Der `timecut`-Ansatz friert die Uhr ein und bricht dabei an CSS-Übergängen und Backend-Latenz (gemessen: eine Ein-Sekunden-Animation lief über 0,37 Sekunden ab). Für eine moderne App unbrauchbar.
 
