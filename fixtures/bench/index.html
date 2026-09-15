@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Featurecast bench corpus</title>
+    <link rel="stylesheet" href="./bench.css" />
+  </head>
+  <body>
+    <!--
+      The measuring corpus, deliberately plain and deliberately hard.
+
+      It is not a showcase. Its only job is to give the capture stage the
+      kind of work a real business application gives it: a wide, dense grid
+      with real text in every cell, a sticky header row and a sticky first
+      column (both re-composite on every scrolled pixel), a scroll container
+      inside another scroll container, and the same five controls at every
+      viewport width — a phone gets no reduced menu here, because a script
+      that has to tap a different control per width cannot be one script.
+    -->
+    <header class="topbar">
+      <div class="brand">Bench Corpus</div>
+      <div class="controls">
+        <button
+          id="theme"
+          type="button"
+          aria-label="Switch to dark mode"
+          title="Switch to dark mode"
+        >
+          Dark
+        </button>
+        <input
+          id="search"
+          type="search"
+          aria-label="Search records"
+          placeholder="Search records"
+          autocomplete="off"
+        />
+      </div>
+    </header>
+
+    <nav id="nav" aria-label="Collections"></nav>
+
+    <main id="page">
+      <div class="titlerow">
+        <h1 id="title">Projects</h1>
+        <span id="count" class="count">0 records</span>
+      </div>
+
+      <section
+        id="gridscroller"
+        class="gridscroller"
+        tabindex="-1"
+        aria-label="Records"
+      >
+        <table id="grid" role="grid">
+          <thead id="head"></thead>
+          <tbody id="body"></tbody>
+        </table>
+      </section>
+
+      <section id="notes" class="notes" aria-label="Notes"></section>
+    </main>
+
+    <script type="module" src="./bench.js"></script>
+  </body>
+</html>
