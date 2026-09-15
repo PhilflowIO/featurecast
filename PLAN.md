@@ -6,7 +6,7 @@ Alles hier Behauptete ist markiert als **gemessen** (ein Kommando lief, seine Au
 
 ## Die Entscheidung in einem Absatz
 
-Kein fertiges Open-Source-Werkzeug erfüllt Aufnahmequalität, weiche Maus und Mobile gleichzeitig — alle brennen Cursor und Zoom in die Pixel und nehmen zu niedrig auf (gemessen: 215 kbit/s bei einem der geprüften Werkzeuge). Deshalb bauen wir keine neue Anwendung, sondern eine dünne Schicht um Playwright und übernehmen aus vier Fremdrepos genau die Teile, die dort belegt gut sind: die Bewegungsmathematik, die Zoom-Feder, das Ereignis-Format und die Idee der zwei getrennten Artefakte. Der Rest — Geräte-Auflösung, Render, Garage — ist eigener Code, weil er in keinem der Repos existiert.
+Kein fertiges Open-Source-Werkzeug erfüllt Aufnahmequalität, weiche Maus und Mobile gleichzeitig — alle brennen Cursor und Zoom in die Pixel und nehmen zu niedrig auf (gemessen: 215 kbit/s bei `45ck/demo-machine`, VP8 1280×720 bei 25 Bildern/s; gemessen an statischem Inhalt, auf eine dichte, animierte Oberfläche also nicht unmittelbar übertragbar). Deshalb bauen wir keine neue Anwendung, sondern eine dünne Schicht um Playwright und übernehmen aus vier Fremdrepos genau die Teile, die dort belegt gut sind: die Bewegungsmathematik, die Zoom-Feder, das Ereignis-Format und die Idee der zwei getrennten Artefakte. Der Rest — Geräte-Auflösung, Render, Garage — ist eigener Code, weil er in keinem der Repos existiert.
 
 ---
 
@@ -77,7 +77,7 @@ Alle vier sind MIT-lizenziert, also übernehmbar. Übernommene Dateien behalten 
 | `connerkward/screenstudio-alt-skill`      | Ereignis-Schema inkl. `bbox`, Idle-Raffung, 9:16-Logik                 | Das `bbox`-Feld rahmt den Zoom auf das echte Element statt auf einen Punkt — und Playwright liefert diese Box gratis mit                                                                                                                                                     |
 | `smallstack/playwright-marketing-videos`  | Muster für den Einstieg in `page.screencast`                           | Einziges Repo, das die neue Aufnahme-Schnittstelle überhaupt nutzt                                                                                                                                                                                                           |
 
-Aus `45ck/demo-machine` übernehmen wir nur das Muster der sauberen Trennung von Rohvideo und Ereignisdatei, keinen Code — dessen Aufnahmequalität ist der Ausschlussgrund.
+Aus `45ck/demo-machine` übernehmen wir nur das Muster der sauberen Trennung von Rohvideo und Ereignisdatei, keinen Code — die oben gemessenen 215 kbit/s sind der Ausschlussgrund, und sie sind ohne Austausch des Recorders nicht zu heilen.
 
 ---
 
