@@ -575,6 +575,95 @@ instrument being right.
 
 ---
 
+## 2026-09-15 — M4 landed, and the first real video failed on pacing (#5, #60, #64)
+
+The post-processing work — zoom onto the element that was hit, the pointer
+drawn from the event log, idle trimming, three formats from one recording —
+had been sitting finished on a branch since 12 September with no pull
+request. Landing it took two rounds and three read-only verifiers, and the
+verifiers were the point.
+
+**All three returned `fail`, and the most expensive finding was about the
+fixtures, not the code.** Two of the twelve recordings the zoom tests ran
+against had been written by hand while a comment claimed they came from a
+real recording: they started the pointer at (640,360) instead of the origin
+the recorder always enforces, and padded stillness with bit-identical
+samples the motion generator would never emit. The assertion meant to catch
+exactly that existed only as a sentence in a comment — and would have been
+blind anyway, since padded samples have step size zero. Two more fixtures
+were byte-identical twins of each other. Seventeen numeric claims in the
+comments were recomputed and six were wrong, including a bound described as
+having 15 % headroom that actually holds by four hundredths of a percent.
+
+**A mutation round of 68 edits left 23 alive.** The pull-out guard the round
+before had been built to fix turned out to be unreachable: nothing in the
+suite ever pushed it past its limit, so all of that work was unproven.
+The drawn pointer was completely unmeasured — freezing its position,
+shrinking it from 46 px to 4 px, or pinning the device pixel ratio all left
+the suite green, because no test imported any of the cursor functions. One
+mutation did not fail but hung: removing the no-upscale floor sends the
+suite into an infinite loop, which this suite can only reveal as a CI
+timeout.
+
+Both rounds landed as #60, the chain work as #64. Then the chain produced a
+real video for the first time: 20.7 s of recording, 117 source frames, three
+formats in 16.6 s from one render call, deterministic to the byte, a look
+change costing 9.1 s instead of a second browser run. The portrait format
+came out 900×1600 instead of 1080×1920 — deliberately, because upscaling is
+not sharpness, and sharp portrait is M3.
+
+**What the real run revealed that no test could: the camera has no room.**
+A 2560×1600 capture delivered at 1920×1080 is already 1.33×, and that is the
+entire zoom budget. The 32×32 dark-mode button asked for 4.62× and got 1.33×.
+That is not a bug in the zoom; it is the arithmetic of over-capturing. The
+owner chose to capture larger (3840×2400) rather than deliver smaller (#67).
+
+---
+
+## 2026-09-15 — the pointer moved like a slideshow, and the camera was innocent (#9, #66)
+
+The owner watched the video and rejected it: the pointer motion reads as a
+slideshow. The diagnosis was run as an experiment, not as reading. Three
+renders of the same raw material, measuring the largest pointer step per
+output frame:
+
+| Variant                             | Largest step |
+| ----------------------------------- | ------------ |
+| as delivered                        | 66 px        |
+| camera held still (`--zoom 1.001`)  | 65 px        |
+| idle trimming off                   | **15 px**    |
+
+Holding the camera still changes nothing. The recorder guarantees at most
+20 px between two samples and proves it by construction, so the motion
+itself was never the problem. **Idle trimming was.** Its signal is whether
+the captured *picture* changed — and a page at rest with a pointer moving
+across it looks exactly like stillness. A 700 ms journey gets compressed to
+250 ms, the same distance lands on a third of the frames, and the pointer
+jumps.
+
+The first diagnosis was wrong and had to be withdrawn mid-run: measured in
+*output* coordinates the pointer moves 66 px, which blames the camera,
+because the camera moves too. In source pixels it moves at most 16 px. The
+instrument that followed therefore measures source pixels, and it carries
+two denominator guards — frame count and trimmed milliseconds — so it cannot
+go green by having nothing to measure. A synthetic reconstruction failed to
+reproduce the defect for exactly that reason: marking one frame per
+interaction puts every gap's end on an interaction, where the protection
+window shields it, so nothing was trimmed and the bound passed vacuously.
+The fixture is the real recording the owner watched (#66, deliberately red
+at 86.3 px against 20).
+
+**Underneath sits a second defect, and it dictates the order of the fix.**
+The trimmed stretches are wall-clock frame times; the events carry counted
+60 Hz slots. In this recording the log claims 14.7 s for a capture that took
+20.7 s. A protection window built from slot counts guards the wrong second —
+which `plan.ts` already said about itself, with the caveat that no harm had
+been reproduced. It has been reproduced now. So the order reverses: one
+clock first (#9), then teach trimming that a stretch is only still when the
+page *and* the pointer are still.
+
+---
+
 ## Where the truth lives
 
 | Question                                                          | Where                                        |
@@ -591,6 +680,10 @@ instrument being right.
 | Motion windows that end with the motion                           | #40                                          |
 | M1 acceptance                                                     | #2, [`M1-VERDICT.md`](./M1-VERDICT.md)       |
 | One clock for capture and event log                               | #9                                           |
+| M4 acceptance: what the chain produced, and what is unproven      | #5, [`M4-ACCEPTANCE.md`](./M4-ACCEPTANCE.md) |
+| Pointer pacing, the slideshow verdict, the instrument             | #66                                          |
+| Unreached bounds found by the mutation round                      | #62                                          |
+| Capturing larger, and what breaks below 2560x1600                 | #67, #63                                     |
 | Mechanisms, in detail and dated                                   | [`CAPTURE-CADENCE.md`](./CAPTURE-CADENCE.md) |
 
 **Reading the older ticket comments:** percentages predating 2026-09-12 are
