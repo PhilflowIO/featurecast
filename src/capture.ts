@@ -268,8 +268,7 @@ export async function captureScreencast(
       for await (const frame of queue.drain()) {
         // Delivery order and capture order are two different things, and the
         // timestamp is the one that carries capture order. Proven from the
-        // pinned Chromium tree
-        // (`~/featurecast-bench/chromium-patch/chromium/src`, 153.0.8010.12):
+        // pinned Chromium source tree (153.0.8010.12):
         // `BuildScreencastFrameMetadata` stamps
         // `.SetTimestamp(base::Time::Now().InSecondsFSinceUnixEpoch())`
         // (`content/browser/devtools/protocol/page_handler.cc:178`) inside

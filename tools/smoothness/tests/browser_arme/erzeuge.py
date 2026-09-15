@@ -2,8 +2,8 @@
 
 FIXTURE-HERKUNFT, woertlich: drei Laeufe desselben Aufnahmeskripts
 (demo/m1-capture.ts), gleicher Quellstand, auf der AI-Box aufgenommen am
-2026-09-12 unter `~/featurecast-bench/verify-r3/wt/artifacts/`. Nur der Browser
-variiert:
+2026-09-12 in der Messumgebung auf der AI-Box, ausserhalb dieses Repositorys.
+Nur der Browser variiert:
 
   cSTOCK  Playwright-Bundle (Standard-Chromium)
   cUNP    selbst gebaut 153.0.8010.12, ungepatcht
@@ -62,7 +62,7 @@ def main(lauf: str, arm: str, browser: str) -> None:
         "herkunft": {
             "arm": arm,
             "browser": browser,
-            "aufgenommen": "AI-Box, 2026-09-12, ~/featurecast-bench/verify-r3/wt/artifacts/",
+            "aufgenommen": "AI-Box, 2026-09-12, dritte Verifikationsrunde",
             "sha256": {n: _sha256(d / n) for n in
                        ("output.mp4", "motion-windows.json", "timestamps.json")},
             "vermessen_mit_commit": commit,

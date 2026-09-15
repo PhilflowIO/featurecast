@@ -14,8 +14,11 @@ dessen Herkunft nach zwei Monaten niemand mehr nachvollzieht, und .gitignore
 dieses Repos schliesst *.mp4 ohnehin aus. Erzeugt heisst: die Wahrheit steht
 im Code daneben.
 
-Uebernommen aus dem Prototyp /home/philflow/featurecast-bench/glaette-work/
-(synth.py, synth2.py, mutiere.py), Stand 2026-09-12.
+Uebernommen aus einem Prototyp ausserhalb dieses Repositorys (synth.py,
+synth2.py, mutiere.py), Stand 2026-09-12: dort wurden dieselben gerechneten
+Eichvideos zuerst gebaut, die dieses Modul jetzt erzeugt. Der Prototyp wird
+nicht mitgespiegelt; nachvollziehbar ist die Herkunft ueber den Code hier,
+nicht ueber ihn.
 """
 
 from __future__ import annotations

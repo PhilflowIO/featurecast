@@ -50,9 +50,9 @@ above), across:
 - **light**: the same single sliding `<div>` fixture.
 - both the default (software) and hardware-GL launch args.
 
-Raw numbers: `table.md` in
-`/tmp/claude-1000/-home-philflow-Dokumente-coding-featurecast/cce358a0-d205-4419-a07f-0f8a73bea496/scratchpad/m1-verify/matrix-v2/`
-(scratch). Comparison stills are committed at `docs/stills/` (see below).
+Raw numbers were written to a throwaway scratch directory outside this
+repository and are not preserved; the results table below is what survives
+of them. Comparison stills are committed at `docs/stills/` (see below).
 
 ## Results
 
@@ -390,12 +390,12 @@ CDP trace across the unchanged product pipeline (`captureScreencast` at
 counts the product's ticks, frames viz actually drew
 (`Display::DrawAndSwap`), frames the viz video capturer took
 (`gpu.capture` `Capture`), frames the capturer refused (`FpsRateLimited`),
-and frames delivered to the manifest. Box scripts:
-`~/featurecast-bench/bisect/presented.ts` (with a per-tick animation logger
-in `presented-t1`), `presented-quality-chain.sh`, `presented-gap.ts`,
-`presented-analyze.py`, `presented-aggregate.py`. Results
-(summary JSON + gzipped trace per run): `~/featurecast-bench/out/<run>.json`
-and `<run>.trace.json.gz`.
+and frames delivered to the manifest. The scripts live in the measurement
+workspace on the AI box — a scratch directory next to this checkout, not part
+of this repository: `presented.ts` (with a per-tick animation logger in
+`presented-t1`), `presented-quality-chain.sh`, `presented-gap.ts`,
+`presented-analyze.py`, `presented-aggregate.py`. Each run leaves a summary
+JSON and a gzipped trace, `<run>.json` and `<run>.trace.json.gz`.
 
 | run          | quality | idle after scroll-up | gate (delivered/tick) | delivered/presented | viz captured/presented | `tasks:scroll-right` tick/presented/captured/refused/delivered | `invoices:sort-asc` tick/presented/captured/refused/delivered | `dark-mode-toggle` tick/presented/captured/delivered |
 | ------------ | ------- | -------------------- | --------------------- | ------------------- | ---------------------- | -------------------------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------- |
@@ -450,9 +450,9 @@ not a counting artifact.
 **Mechanism 4 — DevTools' in-flight limit, not duplicate folding (resolved by
 an independent re-measurement).** Even with the lock released, viz captures
 97% of presented frames but only 84-86% reach the manifest. An adversarial
-verifier separated the two candidates on the box
-(`~/featurecast-bench/verify-lockin/`, own parser, a raw pre-fold counter in a
-throwaway copy of the capture code): for `dark-mode-toggle`, 26 frames were
+verifier separated the two candidates on the box — its own parser and a raw
+pre-fold counter in a throwaway copy of the capture code, run outside this
+repository: for `dark-mode-toggle`, 26 frames were
 captured by viz, 22 reached the `onFrame` callback, 1 was folded as a
 byte-identical redelivery, 21 landed on disk. Four of the five missing frames
 therefore die in DevTools, not in `src/capture.ts`. No delivered frame had
@@ -529,7 +529,7 @@ process when the DevTools handler builds the frame's metadata:
 `content/browser/devtools/protocol/page_handler.cc:178`,
 `.SetTimestamp(base::Time::Now().InSecondsFSinceUnixEpoch())`, called from
 `OnFrameFromVideoConsumer` (same file, 1814-1861). Pinned tree,
-Chromium 153.0.8010.12, under `~/featurecast-bench/chromium-patch/chromium/src`.
+Chromium 153.0.8010.12, built from source on the measurement box.
 
 A better timebase exists and is one field away. The capturer writes the
 oracle-smoothed presentation time onto the VideoFrame
@@ -601,7 +601,7 @@ binding in practice.
 
 It was written as `duration × 60`, with a further frame subtracted on top
 (`presentedFrameCount - 1 >`) that no comment explained. Measured over the
-three runs under `~/featurecast-bench/verify-r2/art/vr{1,2,3}`, no window came
+three runs `vr1`, `vr2` and `vr3` of the second verification round, no window came
 closer than **4.46 frames** to tripping it — and that closest window,
 `vr3`'s `tasks:scroll-left:1`, is the one that was called physically
 impossible at 61.9 presented frames per second. It is not impossible: 18
@@ -675,7 +675,7 @@ slot while its own comment claimed otherwise, and it type-checked.
 ### What the finished video actually shows, and what causes it
 
 Three product runs of this branch on the AI box against the patched Chromium
-build (`~/featurecast-bench/verify-r2/art/vr{1,2,3}`, 2026-09-12), measured on
+build (`vr1`, `vr2`, `vr3` of the second verification round, 2026-09-12), measured on
 `output.mp4` by frame comparison over all scroll windows: **30.6%, 34.1% and
 31.3%** of output frames show nothing new at the tightest threshold (0.05
 mean grey levels), rising to 37.6%, 41.8% and 40.8% at the loosest (1.0).
@@ -762,7 +762,7 @@ The model it was used to refute is also wrong in the other direction.
 images each carrying its index as a five-bit barcode, concat demuxer,
 `option framerate 1000`, `fps=60`, libx264, so it is known frame by frame
 which source image reaches which output slot
-(`~/featurecast-bench/verify-r2/verify-r2-fpsprobe2.sh`):
+(`verify-r2-fpsprobe2.sh` in the measurement workspace on the box):
 
 | case                   | result                                        |
 | ---------------------- | --------------------------------------------- |

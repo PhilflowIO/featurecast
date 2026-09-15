@@ -441,8 +441,8 @@ describe('validateCaptureEfficiencyReport', () => {
   })
 
   it('counts the refreshes a window spans, not its length times the rate', () => {
-    // `tasks:scroll-left:1` of the run under `~/featurecast-bench/verify-r2/
-    // art/vr3`: 18 distinct presentation instants in 0.291s, which reads as
+    // `tasks:scroll-left:1` of run `vr3` of the second verification round
+    // on the AI box: 18 distinct presentation instants in 0.291s, which reads as
     // 61.9 presented frames per second and was called physically impossible.
     // It is not. 18 instants need 17 gaps, and 17 x 16.655ms is 283ms inside
     // a 291ms window — the fencepost, not a defect. Round two's bound sat
