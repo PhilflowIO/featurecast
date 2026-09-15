@@ -1,8 +1,8 @@
 # M3 — Hochformat: was gemessen wurde und was gewonnen hat
 
-Date: 2026-09-15. Alle Läufe auf der AI-Box (RTX 3090, GPU1, Container `featurecast-box:1`, gepatchtes Chromium 153.0.8010.12), gegen die echte Anwendung `app.onlydash.io`.
+Date: 2026-09-15. Alle Läufe auf der AI-Box (RTX 3090, GPU1, Container `featurecast-box:1`, gepatchtes Chromium 153.0.8010.12), gegen die echte, dichte Oberfläche der gefilmten Anwendung.
 
-Die Frage von [Ticket #4](https://forgejo.philflow.me/Phil/featurecast/issues/4): ein 1080×1920-Video einer echten mobilen Oberfläche, Fließtext in normaler Größe lesbar, kein Mauszeiger im Bild.
+Die Frage von Ticket 4: ein 1080×1920-Video einer echten mobilen Oberfläche, Fließtext in normaler Größe lesbar, kein Mauszeiger im Bild.
 
 ## Die Ursache, in einem Satz
 
@@ -24,9 +24,9 @@ Die Zahl, die Weg 2 erledigt, verdient einen eigenen Satz: die erste Messung erg
 
 ## Der Fallstrick am Rahmen-Weg, und warum er keiner mehr ist
 
-Die naheliegende Schreibweise — Hülle per `setContent` bauen, Rahmen auf die Anwendung zeigen — **scheitert lautlos**. Die Hülle hat dann keinen echten Ursprung, die Anwendung ist darin Dritt-Inhalt, und Dritt-Inhalt hat keinen Speicher. OnlyDash warf `SecurityError: Failed to read the 'localStorage' property` und zeichnete eine leere Fläche: ein Video in korrekter Auflösung, das nichts zeigt. Mit abgeschalteter Web-Sicherheit verschwindet die Meldung und das Problem bleibt.
+Die naheliegende Schreibweise — Hülle per `setContent` bauen, Rahmen auf die Anwendung zeigen — **scheitert lautlos**. Die Hülle hat dann keinen echten Ursprung, die Anwendung ist darin Dritt-Inhalt, und Dritt-Inhalt hat keinen Speicher. Die gefilmte Anwendung warf `SecurityError: Failed to read the 'localStorage' property` und zeichnete eine leere Fläche: ein Video in korrekter Auflösung, das nichts zeigt. Mit abgeschalteter Web-Sicherheit verschwindet die Meldung und das Problem bleibt.
 
-Die Hülle wird deshalb **vom Ursprung der Anwendung selbst ausgeliefert** — eine abgefangene Adresse unter `<ursprung>/__featurecast_frame__`. Damit sind Hülle und Rahmen gleichen Ursprungs: der Speicher der Anwendung ist wieder Erst-Inhalt, `X-Frame-Options: SAMEORIGIN` (genau das schickt OnlyDash) ist erfüllt, `frame-ancestors 'self'` ebenfalls. Nichts muss entfernt und keine Sicherheitsstufe gesenkt werden.
+Die Hülle wird deshalb **vom Ursprung der Anwendung selbst ausgeliefert** — eine abgefangene Adresse unter `<ursprung>/__featurecast_frame__`. Damit sind Hülle und Rahmen gleichen Ursprungs: der Speicher der Anwendung ist wieder Erst-Inhalt, `X-Frame-Options: SAMEORIGIN` (genau das schickt die gefilmte Anwendung) ist erfüllt, `frame-ancestors 'self'` ebenfalls. Nichts muss entfernt und keine Sicherheitsstufe gesenkt werden.
 
 ## Die Aufnahmefläche ist die Ausgabefläche — anders als beim Desktop
 
@@ -36,9 +36,7 @@ Was das kostet, offen gesagt: ein Zoom in eine mobile Aufnahme schneidet in ein 
 
 ## Zum Ansehen
 
-![Ein Ausschnitt in Originalgröße aus dem fertigen Video: 16-Pixel-Fließtext der Anwendung, gezeichnet in 1080 Bildpunkten Breite](stills/m3-schaerfe-1zu1.png)
-
-![Das fertige Hochformat, dunkler Modus, nach drei Fingertipps](stills/m3-hochformat-dunkel.png)
+**Die beiden Standbilder dieses Abschnitts sind aus der Versionierung entfernt**, weil sie die Oberfläche der gefilmten Fremdanwendung zeigten. Das erste war ein Ausschnitt in Originalgröße aus dem fertigen Video: 16-Pixel-Fließtext der Anwendung, gezeichnet in 1080 Bildpunkten Breite — der Bildbeleg für die Schärfe-Aussage weiter oben. Das zweite zeigte das fertige Hochformat im dunklen Modus nach drei Fingertipps. Die gemessenen Aussagen stehen unverändert; ihr Bildbeleg wird aus dem eigenen Messkorpus nachgereicht.
 
 Das fertige Video und der direkte Vergleich mit dem abgelehnten Versuch (links der 9:16-Ausschnitt aus der Desktop-Aufnahme, rechts das echte Hochformat) liegen unter `artifacts/m3-acceptance/iphone/output.mp4` und `artifacts/m3-vergleich/vorher-nachher.mp4`.
 

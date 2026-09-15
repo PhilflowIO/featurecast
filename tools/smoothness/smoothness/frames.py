@@ -48,8 +48,8 @@ class Ausschnitt:
 
 def panel_ausschnitt(spec: str) -> Ausschnitt:
     """Feld k von M eines Dreiervergleichs (`compare3`): 960x540 unter der
-    96 px hohen Kopfzeile. Das ist die Geometrie der Vergleichsvideos aus
-    featurecast-bench, kein Format des Produkts."""
+    96 px hohen Kopfzeile. Das ist die Geometrie der Vergleichsvideos aus der
+    Messumgebung, kein Format des Produkts."""
     k, _m = (int(v) for v in spec.split("/"))
     return Ausschnitt(x=(k - 1) * 960, y=96, w=960, h=540)
 

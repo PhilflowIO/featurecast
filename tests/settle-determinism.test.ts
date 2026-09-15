@@ -43,7 +43,7 @@ afterEach(() => {
 })
 
 /**
- * Issue #12 acceptance, in three *separate OS processes* per case — not
+ * Issue 12 acceptance, in three *separate OS processes* per case — not
  * three in-process calls, and not two: the verifier's report used three
  * and got three different hashes. Each case is a target whose geometry
  * never stops changing, so every byte of the log downstream of the settled

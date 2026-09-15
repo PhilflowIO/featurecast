@@ -109,7 +109,7 @@ class Knobs:
     Sollstrecke, heisst das Urteil "Teleport": die Bewegung existiert
     zwischen den Spruengen nicht. Mehr als die Haelfte der Strecke in einem
     Bild ist die woertliche Fassung von "schluckt den groessten Teil der
-    Strecke" (#29). Offenlegung: eingefuehrt NACH dem Blick auf die drei
+    Strecke" (Ticket 29). Offenlegung: eingefuehrt NACH dem Blick auf die drei
     Browser-Arme (Standard und ungepatcht 82-95 %, gepatcht 20 %); der Wert
     liegt absichtlich weit zwischen beiden, statt an einen davon angelegt."""
 

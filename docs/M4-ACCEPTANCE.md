@@ -1,11 +1,11 @@
 # M4 acceptance: the chain produced a finished video, and here are its numbers
 
 Date: 2026-09-15. Run on the RTX 3090 box, patched Chromium, container
-`featurecast-box:1`, against the real OnlyDash guest UI.
+`featurecast-box:1`, against the real guest UI of the recorded application.
 
 Everything below is **measured** — a command ran and its output is quoted —
 except the one line marked otherwise. The owner's verdict on how it _looks_ is
-not here, because it has not been given yet; that line is what closes #5.
+not here, because it has not been given yet; that line is what closes ticket 5.
 
 ## What ran
 
@@ -20,7 +20,7 @@ between two interactions this application does not change a pixel. The pointer
 moves at 60Hz anyway, because the renderer draws it from the event log rather
 than reading it out of the picture.
 
-## The three criteria of #5
+## The three criteria of ticket 5
 
 **Three formats out of one raw material, without a second browser run.** One
 render call, 16.6s wall clock, three files. `ffprobe` on each: constant 60fps,
@@ -73,7 +73,7 @@ Two causes, both fixed at the source:
 
 - **Idle trimming compressed stretches the pointer was crossing.** Its signal is
   whether the captured picture changed, and a page at rest with a pointer moving
-  over it does not change a pixel. It now trims only where the picture *and* the
+  over it does not change a pixel. It now trims only where the picture _and_ the
   pointer are still.
 - **The recorder fired bursts to catch up.** Samples were paced on absolute
   deadlines, so a slow `mouse.move` left every later deadline in the past: two
@@ -82,10 +82,10 @@ Two causes, both fixed at the source:
 
 Re-run on the same recording, all three formats:
 
-| | worst pointer step | trimmed | output |
-| --- | --- | --- | --- |
-| before | 329.8px | 6.25s | 14.42s |
-| after | **16.7px** | 1.06s | 19.61s |
+|        | worst pointer step | trimmed | output |
+| ------ | ------------------ | ------- | ------ |
+| before | 329.8px            | 6.25s   | 14.42s |
+| after  | **16.7px**         | 1.06s   | 19.61s |
 
 **The video is five seconds longer, and that is the trade.** Five of the six
 seconds the old trimmer removed were the pointer travelling, which is not idle

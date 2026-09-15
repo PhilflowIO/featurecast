@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { waitForStableScrollGeometry } from '../src/m1-benchmark.js'
 
 /**
- * Reproduces the OnlyDash layout transient that made the M1 benchmark's
+ * Reproduces the layout transient of the recorded application that made the M1 benchmark's
  * scroll target depend on timing: a scroll container whose content keeps
  * growing by 1px every ~40ms, so its scroll range changes continuously for
  * a while and then stops. Real headless Chromium, real timers.

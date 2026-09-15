@@ -98,7 +98,7 @@ async function readEvents(captureDirectory: string): Promise<string> {
  * A missing file is an error rather than a fallback, and deliberately so: the
  * renderer used to estimate event times from the log's tick counter, and the
  * estimate was wrong by up to 42 s on a one-minute recording without ever
- * saying so. A recording made before #9 cannot be rendered correctly and must
+ * saying so. A recording made before ticket 9 cannot be rendered correctly and must
  * be made again; saying that out loud is cheaper than a silently mistimed
  * video. A recording with no events at all is not affected — there is nothing
  * to time.
@@ -134,7 +134,7 @@ export async function renderRecording(
   const events = parseEventLog(await readEvents(captureDirectory))
   // One origin for both artifacts: the capture's own start. The frames are
   // already relative to it, and the event times are epoch readings from the
-  // same machine's clock, so this subtraction is the whole of #9.
+  // same machine's clock, so this subtraction is the whole of ticket 9.
   const timedEvents =
     events.length === 0
       ? []

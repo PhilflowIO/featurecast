@@ -65,7 +65,7 @@ Entscheidung des Kodierers, keine Bewegungswahrheit.
 
 ## Schwere: wie schlimm, nicht nur wie oft
 
-Die Zahl der Haker allein ordnet falsch (#29). Am echten Material bekam der
+Die Zahl der Haker allein ordnet falsch (Ticket 29). Am echten Material bekam der
 Standard-Browser, der die ganze Seitwärts-Strecke in einem Bild überspringt,
 **einen** Haker, der gepatchte Bau mit zwei kleinen Nachholern **zwei**. Die
 Zahl sagt, dass etwas geschah, nie wie schlimm.
@@ -114,7 +114,7 @@ Beides sind Kriterien, die **nicht** aus der Rechnung stammen, die sie
 prüfen. Ein Fenster, das eine von beiden reißt **oder nicht prüfen kann**,
 bekommt **kein** Glätte-Urteil, sondern `NICHT MESSBAR` mit Grund.
 
-Der zweite Halbsatz kam am 2026-09-12 hinzu (#28): die erste Fassung hielt
+Der zweite Halbsatz kam am 2026-09-12 hinzu (Ticket 28): die erste Fassung hielt
 das Urteil nur bei einer _gerissenen_ Schranke zurück. Sortier-Fenster, in
 denen die Tabelle nur neu zeichnet, haben keine Sollstrecke — und bekamen
 trotzdem einen Haker samt einer Richtung, die aus einer Messung von exakt 0 px
@@ -194,7 +194,7 @@ Liste ist der ehrliche Teil der Messung und wird nicht gekürzt.
   nennt der Owner es hakelig" hat es in diesem Projekt nie gegeben. Die Werte
   sind aus 60-Hz-Physik und aus dem Material begründet. Gegen das Auge
   festgenagelt ist bisher nur die **Reihenfolge** der drei Browser-Arme
-  (`tests/test_browser_arme.py`), keine Schwelle. Die Eichreihe steht in #30
+  (`tests/test_browser_arme.py`), keine Schwelle. Die Eichreihe steht in Ticket 30
   aus und braucht einen erreichbaren Aufnahmerechner.
 - **Standard hinter ungepatcht hängt an einem Fenster.** Beide ungepatchten
   Arme teleportieren; dass der Standard-Browser als der schlimmere gilt, wie
@@ -216,11 +216,11 @@ Liste ist der ehrliche Teil der Messung und wird nicht gekürzt.
   `tests/browser_arme/`). Der Streckenabgleich hält dort auf den
   `tasks`-Scrolls und auf `invoices:scroll-down`; **`invoices:scroll-up`
   reißt ihn in allen sechs Fällen mit derselben Abweichung** von rund 20 %.
-  Das ist systematisch, nicht Rauschen, und nicht geklärt (#31).
+  Das ist systematisch, nicht Rauschen, und nicht geklärt (Ticket 31).
   Wiederholbarkeit über mehrere Läufe _desselben_ Browsers ist nicht gezeigt.
 - **Laufzeit.** Ein ganzer Lauf (rund 4300 Bilder zu 1920×1080) braucht 130
   bis 180 s und unter 300 MB Speicher. Für CI ist das nicht erprobt; die
-  Python-Tests laufen in der CI dieses Repos derzeit gar nicht (#32).
+  Python-Tests laufen in der CI dieses Repos derzeit gar nicht (Ticket 32).
 
 ## Was der Prototyp am echten Material gemessen hat
 

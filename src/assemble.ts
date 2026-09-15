@@ -58,10 +58,11 @@ export const DEFAULT_ENCODE_TARGET: EncodeTarget = {
  * The vertical crop is anchored to the top (`y = 0`), not centered: a
  * centered crop on a 2560x1600 capture removes 80px off both the top and the
  * bottom, and most web app chrome (nav bars, in-content toolbars) sits right
- * at the top of the viewport — a centered crop sliced straight through
- * OnlyDash's grid toolbar row. Trimming only the bottom keeps whatever sits
- * at y=0 fully intact. This assumes app chrome lives at the top, which holds
- * for OnlyDash and is a reasonable default for arbitrary target apps, but is
+ * at the top of the viewport — a centered crop sliced straight through the
+ * grid toolbar row of the recorded application. Trimming only the bottom
+ * keeps whatever sits at y=0 fully intact. This assumes app chrome lives at
+ * the top, which held for the application measured here and is a reasonable
+ * default for arbitrary target apps, but is
  * not universal. A horizontal crop is centered instead, because the
  * left-and-right case has no equivalent "the important thing is at the edge"
  * argument and cutting one side only would shift the whole frame.

@@ -54,7 +54,7 @@ uv run --project tools/smoothness smoothness --erklaere-schwelle
 | Option                | Bedeutung                                                                                                                  |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `--lauf DIR`          | Verzeichnis mit `motion-windows.json` + `timestamps.json`. Ohne das: eigene Zerlegung.                                     |
-| `--panel k/M`         | Feld `k` eines Dreiervergleichs (960×540 unter 96 px Kopfzeile). Geometrie der `compare3`-Videos aus featurecast-bench.    |
+| `--panel k/M`         | Feld `k` eines Dreiervergleichs (960×540 unter 96 px Kopfzeile). Geometrie der `compare3`-Videos aus der Messumgebung.     |
 | `--crop x,y,w,h`      | Beliebiger Ausschnitt.                                                                                                     |
 | `--fps`               | Bildrate des Ausgabevideos. Ohne Angabe `fps_nominal` aus `knobs.py`.                                                      |
 | `--aufnahme-breite`   | Breite des Aufnahmefensters in CSS-Pixeln (Vorgabe 2560, siehe `CAPTURE_SIZE` in `src/capture.ts`).                        |

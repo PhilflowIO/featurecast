@@ -145,7 +145,7 @@ export function parseEventLog(contents: string): RecordEvent[] {
 /**
  * The event log's own clock.
  *
- * Until issue #9 this module's companion, `src/render/clock.ts`, converted the
+ * Until issue 9 this module's companion, `src/render/clock.ts`, converted the
  * log's `tick` counter into milliseconds and handed the renderer a time that
  * was not the time: `tick` counts *planned* 60 Hz slots, so it stands still
  * through a page load, a settle wait or a click's network round trip. Measured

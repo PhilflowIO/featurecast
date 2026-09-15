@@ -2,10 +2,10 @@
 
 Zwei Defekte, beide beim ersten Kontakt mit echten Laufdaten gefunden:
 
-  #28  Sortier-Fenster -- die Tabelle zeichnet neu, nichts gleitet -- bekamen
+  Ticket 28  Sortier-Fenster -- die Tabelle zeichnet neu, nichts gleitet -- bekamen
        einen Haker. Ihre Streckenschranke war ungeprueft (kein Sollwert), und
        "ungeprueft" wurde wie "bestanden" behandelt.
-  #29  Die Haker-ZAHL sortierte einen Teleport ueber die ganze Strecke besser
+  Ticket 29  Die Haker-ZAHL sortierte einen Teleport ueber die ganze Strecke besser
        ein als einen leicht rauen Scroll: eine Stoerstelle gegen zwei.
 
 Bedingungen:
@@ -53,7 +53,7 @@ def _fenster(name: str, n: int, soll: float | None, richtung: str | None = "rech
                    richtung=richtung, bilder_extern=n + 1 if dauer else None)
 
 
-# ------------------------------------------------------------------ #28
+# ------------------------------------------------------------------ Ticket 28
 def test_neuzeichnen_ohne_translation_bekommt_kein_urteil():
     """Ein Sortier-Fenster: 26 Bildpaare, nichts gleitet, kein Sollwert."""
     pairs = _paare([0.0] * 26)
@@ -115,7 +115,7 @@ def test_zusammenfassung_nennt_beurteilte_und_zurueckgehaltene_fenster():
         "anzahl": 0, "von": 2, "nenner_bedeutung": "Fenster dieser Richtung", "quote": 0.0}
 
 
-# ------------------------------------------------------------------ #29
+# ------------------------------------------------------------------ Ticket 29
 # Nachgebaut aus den echten Fenstern `tasks:scroll-right:1`: 135 px Strecke.
 STRECKE = 135.0
 TELEPORT = [0.0] * 8 + [111.0] + [0.0] * 5 + [12.0, 6.0, 4.0, 2.0]          # 18 Paare

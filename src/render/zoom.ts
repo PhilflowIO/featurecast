@@ -453,7 +453,7 @@ export function pullOutStepFraction(look: ResolvedLook): number {
  * of each event's own box, bit for bit, and the acceptance criterion stays an
  * equality by construction.
  *
- * The merge is decided on the logged geometry, and only on that. Until issue #9
+ * The merge is decided on the logged geometry, and only on that. Until issue 9
  * it was also fenced by a gap of exactly zero, which was the size of the event
  * log's own artefact: the log counted planned 60 Hz slots, and a second click
  * on a target the pointer already sits on consumes none, so such a pair arrived
@@ -537,7 +537,7 @@ export function buildZoomSegments(
       // Two interactions on the same element, close enough to crowd, are one
       // shot. There is no move to make — the framing of the second box is the
       // framing of the first, bit for bit — so cutting here would show the
-      // camera leaving an element and coming straight back to it. Before #9
+      // camera leaving an element and coming straight back to it. Before ticket 9
       // this case arrived with a gap of exactly 0.0ms, because the log counted
       // planned slots and a second click on a target the pointer already sits
       // on consumes none; the real clock puts 217ms between the two clicks of

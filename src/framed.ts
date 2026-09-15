@@ -29,7 +29,7 @@ import type { CaptureSettings, DeviceDescriptor } from './devices.js'
  * The obvious spelling — build the wrapper with `page.setContent` and point
  * an iframe at the app — fails, and fails silently: the wrapper document has
  * an opaque origin, which makes the app third-party inside it, and a
- * third-party document has no storage. OnlyDash threw
+ * third-party document has no storage. The recorded application threw
  * `SecurityError: Failed to read the 'localStorage' property` and rendered
  * an empty page; the recording would have been a blank rectangle at the
  * correct resolution. Disabling web security hides that, at the price of a
@@ -38,7 +38,8 @@ import type { CaptureSettings, DeviceDescriptor } from './devices.js'
  * Serving the shell from the app's own origin removes the cause instead. The
  * shell is a route fulfilled at `<app-origin>/__featurecast_frame__`, so
  * parent and frame are same-origin: the app's storage is first-party again,
- * `X-Frame-Options: SAMEORIGIN` is satisfied (OnlyDash sends exactly that),
+ * `X-Frame-Options: SAMEORIGIN` is satisfied (the recorded application
+ * sends exactly that),
  * and `frame-ancestors 'self'` is satisfied too. Nothing has to be stripped
  * and no security flag has to be lowered.
  *

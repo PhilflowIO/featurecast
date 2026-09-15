@@ -2,14 +2,14 @@
 
 FIXTURE-HERKUNFT, woertlich: drei Laeufe desselben Aufnahmeskripts
 (demo/m1-capture.ts), gleicher Quellstand, auf der AI-Box aufgenommen am
-2026-09-12 unter `~/featurecast-bench/verify-r3/wt/artifacts/`. Nur der Browser
-variiert:
+2026-09-12 in der Messumgebung auf der AI-Box, ausserhalb dieses Repositorys.
+Nur der Browser variiert:
 
   cSTOCK  Playwright-Bundle (Standard-Chromium)
   cUNP    selbst gebaut 153.0.8010.12, ungepatcht
-  cPAT    selbst gebaut 153.0.8010.12, beide Patches (#17)
+  cPAT    selbst gebaut 153.0.8010.12, beide Patches (Ticket 17)
 
-Die Zuordnung Lauf -> Browser stammt aus dem Lauf selbst und ist in #23 und
+Die Zuordnung Lauf -> Browser stammt aus dem Lauf selbst und ist in Ticket 23 und
 docs/JOURNEY.md belegt (Aufnahme-Ausbeute 84,4 / 79,1 / 98,2 %).
 
 Was hier passiert: das fertige `output.mp4` wird mit DIESEM Werkzeug
@@ -62,7 +62,7 @@ def main(lauf: str, arm: str, browser: str) -> None:
         "herkunft": {
             "arm": arm,
             "browser": browser,
-            "aufgenommen": "AI-Box, 2026-09-12, ~/featurecast-bench/verify-r3/wt/artifacts/",
+            "aufgenommen": "AI-Box, 2026-09-12, dritte Verifikationsrunde",
             "sha256": {n: _sha256(d / n) for n in
                        ("output.mp4", "motion-windows.json", "timestamps.json")},
             "vermessen_mit_commit": commit,

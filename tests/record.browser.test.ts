@@ -129,7 +129,7 @@ const STICKY_OVERLAY_FIXTURE_URL =
 /**
  * A tall target with two fixed overlays leaving only a 30px band free in
  * its middle — away from its center and from every one of the nine fixed
- * edge/corner/center probes the point search used before issue #13.
+ * edge/corner/center probes the point search used before issue 13.
  */
 const PINCHED_BAND_FIXTURE_URL =
   'data:text/html,' +
@@ -297,7 +297,7 @@ describe('record against a real headless Chromium', () => {
   }, 30_000)
 
   /**
-   * P2 (issue #15) acceptance: proves the fix against a real headless
+   * P2 (issue 15) acceptance: proves the fix against a real headless
    * Chromium, not just the pure `computeScrollPositions` property test. The
    * old 40px wheel-packet splitter drove a 500px+ scroll in a handful of
    * evenly-spaced giant jumps, which a real recorder measured at 21.6-29.5
@@ -339,10 +339,10 @@ describe('record against a real headless Chromium', () => {
 
     const distinctPositions = new Set(samples.map((sample) => sample.y)).size
     // The denominator is how long the page was *moving*, read from the
-    // page's own scroll samples — not how long the call took. Since #40 the
+    // page's own scroll samples — not how long the call took. Since ticket 40 the
     // call also waits out the scroll's tail, and counting that idle tail as
     // motion time pushed this ratio into its own threshold: 47.3-50 against
-    // a floor of 50, red on every other run (#38).
+    // a floor of 50, red on every other run (ticket 38).
     const first = samples.at(0)
     const last = samples.at(-1)
     if (first === undefined || last === undefined) {
@@ -364,7 +364,7 @@ describe('record against a real headless Chromium', () => {
   }, 30_000)
 
   /**
-   * #40 acceptance in a real browser. Two things have to be true at once,
+   * ticket 40 acceptance in a real browser. Two things have to be true at once,
    * and the first is what makes the second mean anything:
    *
    * 1. The fixture really keeps moving after the last wheel event — it
@@ -397,7 +397,7 @@ describe('record against a real headless Chromium', () => {
           // input happened to be paced. Accumulating `deltaY` made it the
           // latter -- a minimum-jerk scroll ends in sub-pixel steps, so the
           // tail collapsed to a single frame as soon as input dispatch
-          // waited for Chromium's acknowledgement again (#45).
+          // waited for Chromium's acknowledgement again (ticket 45).
           'window.__velocity=event.deltaY>0?25:-25;' +
           'event.preventDefault()},{passive:false});' +
           'function glide(){' +

@@ -25,7 +25,7 @@ function maxConsecutiveScrollStep(
 }
 
 /**
- * P1 (issue #15) acceptance: a property test over many distances and
+ * P1 (issue 15) acceptance: a property test over many distances and
  * speeds proving `computeScrollPositions`'s hard per-step cap actually
  * holds on the rendered, rounded output — not just on the analytic
  * estimate — and that the total scrolled distance is always exact.
@@ -104,7 +104,7 @@ describe('computeScrollPositions', () => {
     }
   })
 
-  it('regresses issue #15: a 525px scroll no longer collapses into ~14 giant jumps', () => {
+  it('regresses issue 15: a 525px scroll no longer collapses into ~14 giant jumps', () => {
     const positions = computeScrollPositions(
       0,
       525,

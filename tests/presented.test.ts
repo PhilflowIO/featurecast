@@ -21,7 +21,7 @@ const COMPLETE = { dataLossOccurred: false }
 
 /**
  * Every fixture below is shaped after real events pulled out of
- * `~/featurecast-bench/out/arm-sbpat-r1.trace.json.gz` on the AI box — a
+ * the trace `arm-sbpat-r1.trace.json.gz`, recorded on the AI box — a
  * full 69.6s recording of the product path against the patched Chromium
  * build. A verbatim one, for the record:
  *
@@ -85,8 +85,8 @@ function reporter(options: {
 /**
  * A verbatim excerpt of a real trace, not a shaped fixture.
  *
- * Provenance: `~/featurecast-bench/out/arm-sbpat-r1.trace.json.gz` on the AI
- * box — the 69.6s product recording of the OnlyDash path against the patched
+ * Provenance: the trace `arm-sbpat-r1.trace.json.gz`, recorded on the AI
+ * box — the 69.6s product recording of the recorded application against the patched
  * Chromium build, the same run the numbers in `docs/CAPTURE-CADENCE.md` come
  * from. The excerpt is the first 400ms stretch of that trace containing both
  * a partial-only presentation instant and at least four twinned ones, taken

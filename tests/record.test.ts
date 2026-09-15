@@ -392,7 +392,7 @@ describe('record', () => {
     })
     expect(page.mouse.click).toHaveBeenCalledWith(130, 60)
     expect(page.touchscreen.tap).toHaveBeenCalledWith(130, 60)
-    // The eased, distance-over-time scroll (issue #15) may now split a
+    // The eased, distance-over-time scroll (issue 15) may now split a
     // small scroll across more than one 60Hz wheel increment — asserting
     // on the summed deltas rather than a single call keeps this test
     // agnostic to that internal step count while still proving the wrapper
@@ -1037,7 +1037,7 @@ describe('record', () => {
   })
 
   /**
-   * The discriminating test for issue #13's point search. It picks the free
+   * The discriminating test for issue 13's point search. It picks the free
    * band's position mathematically so that a probe grid with the *average*
    * spacing the previous attempt used on this target (`ceil(length/8)+1`
    * samples per axis, capped at 33 — 9.125px apart on a 300px target, with

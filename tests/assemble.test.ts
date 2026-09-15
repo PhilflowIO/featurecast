@@ -81,7 +81,7 @@ describe('buildCaptureTimeline', () => {
   })
 
   it('refuses to build a timeline in which a frame gets no time on screen', () => {
-    // The counter-example for #21's acceptance, at the place where the harm
+    // The counter-example for ticket 21's acceptance, at the place where the harm
     // is done. `capture.ts` used to clamp a delivery-order inversion by
     // moving the regressing timestamp onto its predecessor's; measured on a
     // real acceptance run that produced 42 clamps and 39 gaps of exactly

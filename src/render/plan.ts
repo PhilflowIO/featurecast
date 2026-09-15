@@ -114,7 +114,7 @@ export type RenderPlan = {
 /**
  * The moments idle trimming must not cut near.
  *
- * Until #9 these times came from the event log's `tick` counter while the
+ * Until ticket 9 these times came from the event log's `tick` counter while the
  * stretches being trimmed came from the capture's frame timestamps — two
  * clocks, with an offset that grew in steps, so a 250 ms protection window
  * routinely guarded the wrong second. Both sides now read the same wall clock,

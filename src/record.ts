@@ -232,7 +232,7 @@ export function createRecorder(
     /**
      * Appends one event and the moment it happened, in one step, so the two
      * artifacts cannot come apart. Reading the clock here — after the action
-     * the event describes has been dispatched — is the whole point of #9: it
+     * the event describes has been dispatched — is the whole point of ticket 9: it
      * is a moment on the same wall clock the capture stamps its frames with,
      * whereas `tick` is a count of *planned* 60 Hz slots that stands still
      * through every unplanned wait.
@@ -632,7 +632,7 @@ export function createRecorder(
           // having arrived: Chromium animates the scroll and keeps painting
           // after the input stops. Waiting for that tail here is what makes
           // the caller's motion window describe the motion instead of the
-          // typing (#40).
+          // typing (ticket 40).
           const restMs = await waitForScrollRest(page)
           // Same bookkeeping as hold(): the tick axis tracks wall clock, so
           // waited time has to advance it or every later event drifts.
@@ -856,7 +856,7 @@ function resolveDeviceDescriptor(
 export const DEFAULT_SCROLL_SPEED_PX_PER_SECOND = 700
 /**
  * Hard per-60Hz-step cap on scroll travel, mirroring `MAX_POINTER_STEP_PX`'s
- * "no big jumps between frames" guarantee for pointer motion. Issue #15's
+ * "no big jumps between frames" guarantee for pointer motion. Issue 15's
  * defect was exactly this missing for scroll: 40px-capped wheel *packets*
  * turned a 525px scroll into 14 giant, evenly-spaced jumps (~37px each,
  * ~2250px/s) that a screen recorder simply cannot resolve as motion — most
@@ -996,7 +996,7 @@ function maxConsecutiveScrollStep(
 /**
  * Turns a scroll into a distance-over-time motion, like pointer travel,
  * instead of dividing a fixed distance into as few large wheel packets as
- * possible (issue #15). The sample count starts from a video-appropriate
+ * possible (issue 15). The sample count starts from a video-appropriate
  * speed and is then deterministically grown — same inputs, same result —
  * until the actually rendered, rounded envelope satisfies the hard
  * `MAX_SCROLL_STEP_PX` per-step cap, mirroring `generateMotionPoints`'s
@@ -1043,11 +1043,11 @@ export function computeScrollPositions(
  * took in milliseconds.
  *
  * Why this exists: a scroll's motion window used to end when the last wheel
- * event was acknowledged. Since the input holds its 60 Hz tick (#25) the
+ * event was acknowledged. Since the input holds its 60 Hz tick (ticket 25) the
  * dispatch finishes before Chromium's scroll animation does, so the window
  * ended mid-motion — measured on the box, the horizontal scrolls travelled
  * 131-169 px of 172.5 px inside their own window while the finished video
- * showed the full 171.8 px just outside it (#40).
+ * showed the full 171.8 px just outside it (ticket 40).
  *
  * Observed by listening, not by polling: a poll would have to read every
  * scrollable element's offset on every sample, which is main-thread work
@@ -1074,7 +1074,7 @@ async function waitForScrollRest(page: RecordPage): Promise<number> {
           // Anonymous on purpose, here and below: `tsx` compiles with
           // esbuild's `keepNames`, which wraps every *named* function in
           // this payload in an `__name(...)` call that does not exist in
-          // page context (`tests/tsx-pipeline.test.ts`, #42).
+          // page context (`tests/tsx-pipeline.test.ts`, ticket 42).
           function () {
             lastScrollAt = performance.now()
           },
@@ -1874,7 +1874,7 @@ const EDGE_PROBE_INSET_PX = 4
  * Spacing between deterministic grid probe points, in px — a real, fixed
  * upper bound on the gap between two probes, not an average that degrades
  * as the target grows. Fine enough to guarantee finding a contiguous free
- * region as small as this many px wherever it sits (issue #13): with
+ * region as small as this many px wherever it sits (issue 13): with
  * probes spaced <= a region's own width apart, at least one probe must
  * land inside it, by the pigeonhole principle over the region's span.
  * The previous search was nine fixed points (center, edge midpoints,
@@ -2145,7 +2145,7 @@ function occlusionError(bbox: BoundingBox, stepPx?: number): Error {
  * center of the visible intersection first — the common, unoccluded case,
  * and cheap (one hit test). Only when that's covered does it fall back to a
  * deterministic grid search for the largest contiguous free region,
- * wherever it is (issue #13). Throws if the target is occluded at every
+ * wherever it is (issue 13). Throws if the target is occluded at every
  * probe — a script author needs to know their interaction was never sent,
  * not get a silent miss.
  */

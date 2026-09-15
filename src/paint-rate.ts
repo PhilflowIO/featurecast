@@ -7,7 +7,7 @@ import type { Page } from 'playwright'
  * gave evidence of an actual visual change**.
  *
  * **This is context, not a frame count, and it must never be a
- * denominator again.** It was one until #21, and it was wrong in the
+ * denominator again.** It was one until ticket 21, and it was wrong in the
  * direction that hides failure: the callback runs on the renderer's main
  * thread, while smooth scrolling is driven by the compositor thread and
  * keeps presenting frames whether or not the main thread gets a slice. So
@@ -43,12 +43,12 @@ import type { Page } from 'playwright'
  * as this milestone's own synthetic light/dense cadence fixtures).
  *
  * Must be called once, before the scripted interactions begin, on the same
- * `page` `captureScreencast` is attached to. Survives OnlyDash's
- * client-side table switches (a React Router route change keeps the same
- * JS realm); a full page navigation would reset the counter to empty, which
- * is the correct behaviour for a fresh realm, not a bug to guard against —
- * this milestone's benchmark only navigates once, in `warmUpOnlyDash`,
- * before this is called.
+ * `page` `captureScreencast` is attached to. Survives the recorded
+ * application's client-side table switches (a client-side route change keeps
+ * the same JS realm); a full page navigation would reset the counter to
+ * empty, which is the correct behaviour for a fresh realm, not a bug to
+ * guard against — this milestone's benchmark only navigates once, during
+ * warm-up, before this is called.
  */
 export async function startPaintRateProbe(page: Page): Promise<void> {
   // A raw source string, not a compiled closure: `tsx`/esbuild injects a

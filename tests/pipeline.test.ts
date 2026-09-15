@@ -343,7 +343,7 @@ describe('runPipeline', () => {
 
 describe('prepareCapture', () => {
   it('lets every desktop preset through, not just the one M1 measured', () => {
-    // The whole point of #55: the capture area is the device's answer, so a
+    // The whole point of ticket 55: the capture area is the device's answer, so a
     // preset is no longer gated on matching one constant in src/capture.ts.
     for (const preset of ['desktop', 'desktop-wide', 'safari']) {
       expect(prepareCapture(resolveDevice(preset))).toMatchObject({
