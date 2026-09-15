@@ -54,8 +54,8 @@ type ResolvedLook = Required<Omit<ZoomLook, 'triggers'>> & {
 /**
  * Upstream's screen spring (tension 200, friction 40, mass 2.25). Its damping
  * ratio is ~0.943, so it is underdamped and does creep past its target near
- * the end of the transition — measured at 1.00017 of the way, just before the
- * window closes (`tests/render/spring.test.ts`). That is far too little to
+ * the end of the transition — measured at 1.000138 of the way, at 99.965% of
+ * the window (`tests/render/spring.test.ts`). That is far too little to
  * see, but it is not zero, so `cropAt` clamps the curve to [0,1] rather than
  * relying on the shape. The clamp is the guarantee that the crop never
  * travels tighter than the framing computed to contain the element.
@@ -104,7 +104,7 @@ export function resolveLook(look: ZoomLook = {}): ResolvedLook {
         `${name} (${value}ms) is below the ${MIN_TRAVEL_MS.toFixed(1)}ms a ` +
           'camera move is never given less than. Thirteen frames at 60Hz is ' +
           'what the recorder itself can hold: no pointer journey it walks is ' +
-          'shorter than fourteen (`src/motion.ts:92,305-307`), one of which ' +
+          'shorter than fourteen (`src/motion.ts:92,305-306`), one of which ' +
           'the earlier shot keeps for its own event. Below it the camera ' +
           'arrives, or leaves, by cutting — a 50ms pull-out snaps back to the ' +
           'resting frame at the end of every shot. Ask for at least ' +
@@ -237,9 +237,11 @@ export function pointerSamples(events: readonly TimedEvent[]): PointerSample[] {
  * What the fixed grid owes in return is evidence that the promise survives a
  * coarser one, since a 30fps output frame covers two 60Hz steps. Measured over
  * the whole fixture corpus in three formats at 24, 25, 30, 50, 60 and 120fps:
- * 8610 frame-to-frame steps, worst 84.6% of the allowance for its own grid, no
- * cut anywhere (`tests/render/zoom.test.ts`, "never cuts at 24, 25, 30, 50, 60
- * or 120 fps").
+ * 8880 frame-to-frame steps, worst 99.96% of the allowance for its own grid,
+ * no cut anywhere (`tests/render/zoom.test.ts`, "never cuts at 24, 25, 30, 50,
+ * 60 or 120 fps"). That share was 84.6% while the floor stood at eight frames;
+ * raising the floor to thirteen tightened the allowance and the corpus now
+ * brushes it, which is the intended shape and not a warning.
  */
 const FRAME_MS = 1000 / 60
 
@@ -260,9 +262,9 @@ const ARRIVAL_FLOOR_MS = FRAME_MS
  * bound a renderer picks for itself can always be argued down; this one cannot,
  * because it is what the material can hold. Every pointer journey the recorder
  * walks is at least fourteen 60Hz slots long: `travelDuration` is floored at
- * 220ms (`src/motion.ts:305-307`) and the sample count starts at
+ * 220ms (`src/motion.ts:305-306`) and the sample count starts at
  * `ceil(220/1000 * 60)` = 14 (`src/motion.ts:92`), each sample consuming its
- * own tick (`src/record.ts:238-249`). So fourteen frames is the shortest gap
+ * own tick (`src/record.ts:270-282`). So fourteen frames is the shortest gap
  * two interactions on two different elements can have, one of those frames
  * belongs to the earlier shot keeping its own element (`ARRIVAL_FLOOR_MS`), and
  * thirteen is what is left. A floor above that would refuse recordable work; a
@@ -296,8 +298,12 @@ export const MIN_TRAVEL_MS = 13 * FRAME_MS
  * Sixteen source pixels is below the ±34px the aspect search in
  * `roundOutward` may already move a crop's width by (`geometry.ts:138-141`), so
  * a journey under it is inside the framing's own rounding noise. Measured over
- * `artifacts/m2-001` in all three formats: the journeys this skips are 5.7,
- * 7.1 and 9.2px, and the shortest journey it still guards is 100px.
+ * the shipped corpus in all three formats: **it skips nothing at all**, and the
+ * shortest journey it still guards is 66.3px. The 5.7, 7.1 and 9.2px journeys
+ * this line was written for belonged to `run-b` and the two hand-written logs,
+ * all three gone; the floor stays because the case it guards against is a
+ * property of the framing's rounding, not of which logs happen to be checked
+ * in this week.
  *
  * It is pinned from both sides in `tests/render/zoom.test.ts`: a 15.5px journey
  * covered in one frame passes and a 16.5px one fails, so lowering it to 8, 10
@@ -346,8 +352,10 @@ function boxesEqual(a: BoundingBox, b: BoundingBox): boolean {
  *
  * This is the pace of ordinary motion expressed as a number: it is computed
  * from the very curve `cropAt` interpolates along, so for an approach that is
- * given its full window it is not an allowance but an equality — measured
- * 0.1557 against 0.1557 for the 383ms approach in `run-close-taps`. It is a
+ * given its full window it is not an allowance but an equality: the number the
+ * bound permits and the number the motion produces are two evaluations of one
+ * expression. `tests/render/zoom.test.ts` pins that on the shipped corpus,
+ * whose worst step sits four parts in ten thousand under the bound. It is a
  * supremum over the phase of the frame grid, which the renderer does not
  * control: a segment may start anywhere between two output frames, so the
  * bound has to hold for every offset rather than for the one that happens to
@@ -439,9 +447,9 @@ export function pullOutStepFraction(look: ResolvedLook): number {
  *
  * **Two interactions at the same instant on the same element are one shot.**
  * The event log has no spacing to give there: `click()` logs at the current
- * tick without advancing it (`src/record.ts:334-346`), and when the pointer
+ * tick without advancing it (`src/record.ts:388-398`), and when the pointer
  * already sits on the target there is no travel to advance it either
- * (`src/motion.ts:82`), so a switch toggled twice or a counter pressed twice
+ * (`src/motion.ts:89`), so a switch toggled twice or a counter pressed twice
  * arrive 0.0ms apart. That is not a crowded pair of shots, it is one shot with
  * two events in it: the camera frames the element and holds through both. The
  * shot's `box` is unchanged by the merge, because the two boxes are equal — so
@@ -544,7 +552,7 @@ export function buildZoomSegments(
             `refuses rather than picking a way-point at one of the two. Put a ` +
             `beat between them in the script: \`await demo.hold(400)\` — the ` +
             `only call in the wrapper that advances the event log's clock on ` +
-            `its own (\`src/record.ts:377-386\`) — and the camera has a move ` +
+            `its own (\`src/record.ts:431-441\`) — and the camera has a move ` +
             `to make.`,
         )
       }
@@ -576,7 +584,7 @@ export function buildZoomSegments(
             `move. Put a beat between them in the script: ` +
             `\`await demo.hold(400)\` — the only call in the wrapper that ` +
             `advances the event log's clock on its own ` +
-            `(\`src/record.ts:377-386\`).`,
+            `(\`src/record.ts:431-441\`).`,
         )
       }
       const hold = crowdedHoldMs(gap, resolved)

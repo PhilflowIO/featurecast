@@ -3,6 +3,7 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+import { MAX_POINTER_STEP_PX } from '../../src/motion.js'
 import type { BoundingBox, RecordEvent } from '../../src/record.js'
 import { toTimedEvents } from '../../src/render/clock.js'
 import { parseEventLog } from '../../src/render/events.js'
@@ -55,79 +56,82 @@ const SQUARE: FormatSpec = {
 const CAPTURE = { width: 2560, height: 1600 }
 
 /**
- * Every fixture below except the last is a real event log from
- * `artifacts/m2-001`, and every one of them contains at least one click or tap
- * with a bounding box. That is the point: the milestone is judged on whether
- * the zoom frames the element that was hit, so the suite has to be run against
- * logs in which something was actually hit.
+ * The corpus, and where every log in it comes from.
  *
- * `run-a` and `run-b` are the two logs in the whole corpus whose interactions
- * are closer together than `zoomLeadMs` — 433ms apart. Rounds one and two both
- * shipped a suite in which the crowded-shot path was unreachable: four of the
- * five fixtures have a single interaction and the fifth has a 1917ms gap, so
- * the code that decides what happens when two shots collide was never once
- * executed by a test. These two make it reachable with real material.
+ * All eleven contain at least one click or tap with a bounding box. That is the
+ * point: the milestone is judged on whether the zoom frames the element that
+ * was hit, so the suite has to be run against logs in which something was
+ * actually hit.
  *
- * `run-crowded-taps` and `run-far-taps` are round six's, and they are
- * recordings — `demo/m4-fixtures.ts` is the script, run in the Playwright
- * container on the AI box, and the two files here are byte copies of what it
- * wrote. They replace two fixtures no recorder could produce. `run-interior-
- * taps` moved the pointer 193.1px between two consecutive samples against the
- * hard 20px cap in `src/motion.ts:57`; `run-close-taps` put 1116px between two
- * taps with no pointer path at all, while its comment claimed "the finger
- * lifts, so there is no pointer path between them" and `tap()` in fact travels
- * to its target like every other interaction (`src/record.ts:344-348`). This is
- * the sixth fixture in this project whose comment asserted a provenance the
- * code contradicts, and the check that catches them is one line: the largest
- * step between consecutive pointer samples, asserted below for every fixture.
+ * **Every one of them is now a recording, and the run that produces it is
+ * committed.** Seven come out of `tests/record.browser.test.ts` into
+ * `artifacts/m2-001/`; four out of `demo/m4-fixtures.ts`. Nothing here is
+ * hand-written, and `the corpus is what a recorder can produce` below is the
+ * check that keeps it that way — it is code now, not a sentence.
  *
- * What the recorder's own physics says about the pair is the interesting part.
+ * That check exists because this project has now shipped **six** fixtures whose
+ * comment asserted a provenance the code contradicts, in three separate rounds,
+ * and each round found the previous one's while adding its own:
+ *
+ * - `run-type-then-click` put a `type` and a `click` on one tick, while `type`
+ *   advances the counter by at least one slot per character.
+ * - `run-interior-taps` moved the pointer 193.1px between two consecutive
+ *   samples against the hard cap in `src/motion.ts`.
+ * - `run-close-taps` put 1116px between two taps with no pointer path at all,
+ *   while `tap()` travels to its target like every other interaction.
+ * - `run-interior-button` and `run-toggle-twice` began their pointer path at
+ *   the centre of the viewport and padded it with runs of forty and forty-seven
+ *   bit-identical samples. The recorder starts the pointer at (0,0) and walks
+ *   it to the centre before the script gets its first interaction, a walk of
+ *   some hundred samples, and `generateMotionPoints` does not repeat a sample
+ *   that many times. Both are recordings now.
+ * - `run-b` was a byte copy of `run-a`, same seed and all. It inflated every
+ *   denominator in this file by one while adding no material, so it is gone;
+ *   the crowded path it was supposed to help reach is reached by `run-a` and
+ *   `run-crowded-taps` on their own.
+ *
+ * What the individual logs are for:
+ *
+ * `run-a` has the only pair of interactions in the m2-001 set closer together
+ * than `zoomLeadMs` — 433ms apart. Rounds one and two both shipped a suite in
+ * which the crowded-shot path was unreachable: the other fixtures have a single
+ * interaction or a gap over a second, so the code that decides what happens
+ * when two shots collide was never once executed by a test.
+ *
+ * `run-crowded-taps` and `run-far-taps` are round six's, and what the
+ * recorder's own physics says about the pair is the interesting part.
  * `travelDuration` floors a journey at 220ms and `minimumJerkBoundSamples` adds
  * roughly 0.127 samples per pixel of path, so *how fast two taps can follow
  * each other is a function of how far apart they are*. `run-crowded-taps` is
  * 238 viewport pixels apart and lands 600ms apart, inside the 700ms lead: the
  * crowded branch. `run-far-taps` is 1051 apart and lands 2650ms apart — the
  * shape `run-close-taps` pretended to have, and the evidence that two distant
- * taps simply cannot crowd. Its journeys are 640, 1660 and 1480px in the three
- * formats, exactly the ones the deleted fixture carried, and its pull-out runs
- * to completion, which is what the new pull-out guard is measured on.
- *
- * The last three are round four's, and they exist for two reasons the first
- * eight could not serve.
+ * taps simply cannot crowd. Its pull-out runs to completion, which is what the
+ * pull-out guard is measured on.
  *
  * `run-toggle-twice` carries two interactions at *one* tick, which is what the
- * wrapper produces whenever a script touches the same element twice:
- * `click()` logs at the current tick without advancing it
- * (`src/record.ts:334-346`), and a move onto a target the pointer already sits
- * on yields no samples to advance it with (`src/motion.ts:82`). Its pointer
- * path comes from the same `generateMotionPoints` a recording uses, so the log
- * has a recording's shape; the two interactions are one tick apart because that
- * is what the wrapper writes, not because the fixture was bent to make it so.
- *
- * Round four shipped a second such fixture, `run-type-then-click`, whose
- * comment claimed the same provenance and was wrong: it puts a `type` and a
- * `click` on tick 57, while `type` advances the counter after logging by at
- * least one slot per character. No recorder can produce it, so it is not
- * evidence of anything, and it has been deleted along with the test that rested
- * on it. It was also the only fixture that reached round four's overlap-merge,
- * which framed the *union* of two different boxes — deleting the fixture and
- * narrowing the merge to equal boxes remove the same defect from both ends.
+ * wrapper produces whenever a script touches the same element twice: `click()`
+ * logs at the current tick without advancing it, and a move onto a target the
+ * pointer already sits on yields no samples to advance it with
+ * (`src/motion.ts:89`). The tick equality is what the wrapper writes, and now
+ * it is what the wrapper actually wrote.
  *
  * `run-inner-scroll` is round five's, and it is the recording round four could
  * not render: two clicks on *adjacent* elements, the most ordinary shape a demo
  * script has. The second shot opens while the first is still pulling out, one
- * frame in, so it starts 7.1px from where it is going — and round four's
+ * frame in, so it starts a few pixels from where it is going — and round four's
  * smoothness bound, which normalised the previous shot's pull-out against this
  * shot's journey, called that 100% of the path and refused the recording in all
  * three formats. It is the fixture that enters the guarded path; the assertion
  * that it does is further down.
  *
- * All three of round four's also place their elements in the *middle* of the raster. Every one
- * of the original eight frames an element near an edge, so its crop is pinned
- * against the raster and the centring assertion below is satisfied by the pin
- * rather than by the framing — measured, a 300px error in `frameBoundingBox`
- * failed exactly one of eight fixtures. A framing that is free to be wrong in
- * both directions is the only kind that can test centring.
+ * `run-interior-button`, `run-toggle-twice` and `run-crowded-taps` place their
+ * elements in the *middle* of the raster. Every m2-001 log frames an element
+ * near an edge, so its crop is pinned against the raster and the centring
+ * assertion below is satisfied by the pin rather than by the framing —
+ * measured, a 300px error in `frameBoundingBox` failed exactly one of eight
+ * fixtures. A framing that is free to be wrong in both directions is the only
+ * kind that can test centring.
  */
 const FIXTURES = [
   'run-inner-scroll',
@@ -137,7 +141,6 @@ const FIXTURES = [
   'run-edge',
   'run-hero',
   'run-a',
-  'run-b',
   'run-far-taps',
   'run-toggle-twice',
   'run-crowded-taps',
@@ -167,7 +170,6 @@ const SHOTS: Record<
   }
 > = {
   'run-a': { crowded: 1, holdMs: [216.7, 900], interactions: 2, segments: 2 },
-  'run-b': { crowded: 1, holdMs: [216.7, 900], interactions: 2, segments: 2 },
   'run-crowded-taps': {
     crowded: 1,
     holdMs: [348.4, 900],
@@ -214,6 +216,100 @@ const SHOTS: Record<
   },
   'run-touch': { crowded: 0, holdMs: [900], interactions: 1, segments: 1 },
 }
+
+describe('the corpus is what a recorder can produce', () => {
+  /**
+   * The check the comment above promised for three rounds without ever writing
+   * it. It is three facts, and each of the six bent fixtures broke at least one
+   * of them.
+   *
+   * **Where the pointer starts.** `record()` puts the pointer at (0,0) and
+   * walks it to the centre of the viewport before the script gets its first
+   * interaction, so every log opens with that walk. A log that begins already
+   * on its target skipped something no script can skip.
+   *
+   * **How far it may move in one sample.** `MAX_POINTER_STEP_PX` is M2's
+   * acceptance contract, asserted here against the constant rather than against
+   * a literal so that moving the contract moves the check with it.
+   *
+   * **How often a sample may repeat.** `generateMotionPoints` returns nothing
+   * at all for a journey under half a pixel, so a stretch of identical samples
+   * is not a resting pointer — it is padding. The recorder's longest genuine
+   * run is short; a fixture that was stretched to fill time shows runs an order
+   * of magnitude longer.
+   */
+  const pointers = (name: string) =>
+    fixture(name).flatMap((event) =>
+      event.type === 'pointer' ? [{ x: event.x, y: event.y }] : [],
+    )
+
+  for (const name of FIXTURES) {
+    it(`${name}: has a pointer path only the recorder could have written`, () => {
+      const path = pointers(name)
+      expect(path.length).toBeGreaterThan(0)
+      expect(path[0]).toEqual({ x: 0, y: 0 })
+
+      let worstStep = 0
+      let run = 1
+      let longestRun = 1
+      for (const [index, point] of path.entries()) {
+        const previous = path[index - 1]
+        if (previous === undefined) continue
+        worstStep = Math.max(
+          worstStep,
+          Math.abs(point.x - previous.x),
+          Math.abs(point.y - previous.y),
+        )
+        run = point.x === previous.x && point.y === previous.y ? run + 1 : 1
+        longestRun = Math.max(longestRun, run)
+      }
+      expect(worstStep).toBeLessThanOrEqual(MAX_POINTER_STEP_PX)
+      expect(longestRun).toBeLessThanOrEqual(8)
+    })
+  }
+
+  it('would fail the fixtures this project actually shipped', () => {
+    // The three shapes, applied by hand to a real log, so the check above is
+    // shown to be sharp rather than merely green on material that happens to
+    // be clean.
+    const real = pointers('run-a')
+    const step = (path: readonly { x: number; y: number }[]) =>
+      Math.max(
+        ...path.slice(1).map((point, index) => {
+          const previous = path[index]
+          return previous === undefined
+            ? 0
+            : Math.max(
+                Math.abs(point.x - previous.x),
+                Math.abs(point.y - previous.y),
+              )
+        }),
+      )
+    // `run-interior-button` and `run-toggle-twice`: the opening walk is gone.
+    const beheaded = real.slice(60)
+    expect(beheaded[0]).not.toEqual({ x: 0, y: 0 })
+    // `run-interior-taps`: one sample jumps the cap.
+    const jumped = [...real]
+    const landing = jumped[40]
+    if (landing !== undefined) jumped[40] = { x: landing.x + 200, y: landing.y }
+    expect(step(jumped)).toBeGreaterThan(MAX_POINTER_STEP_PX)
+    // The padding: forty repeats of one sample, which is what the two
+    // hand-written logs used to fill the time a real walk would have taken.
+    const padded = [
+      ...real.slice(0, 20),
+      ...Array.from({ length: 40 }, () => real[20] ?? { x: 0, y: 0 }),
+    ]
+    let run = 1
+    let longest = 1
+    for (const [index, point] of padded.entries()) {
+      const previous = padded[index - 1]
+      if (previous === undefined) continue
+      run = point.x === previous.x && point.y === previous.y ? run + 1 : 1
+      longest = Math.max(longest, run)
+    }
+    expect(longest).toBeGreaterThan(8)
+  })
+})
 
 function fixture(name: string): RecordEvent[] {
   return parseEventLog(
@@ -441,11 +537,11 @@ describe('the zoom frames the hit element at every click', () => {
    *
    * Both counts are named, because round four reported one number and asserted
    * a different one — "5 of 12" in prose against `checked = 17` in the code.
-   * **12 fixtures** produce **18 framings**, of which **4** are free of the
+   * **11 fixtures** produce **16 framings**, of which **4** are free of the
    * raster edge on both axes. Those four are what a small centring error has to
    * be caught by; a pinned crop cannot catch one.
    */
-  it('12 fixtures produce 18 framings, 4 of them free of the raster edge', () => {
+  it('11 fixtures produce 16 framings, 4 of them free of the raster edge', () => {
     const format = resolveFormat(LANDSCAPE, CAPTURE)
     const free: string[] = []
     let checked = 0
@@ -465,8 +561,8 @@ describe('the zoom frames the hit element at every click', () => {
       }
     }
     // Fixtures, framings and free framings, each named and each asserted.
-    expect(FIXTURES.length).toBe(12)
-    expect(checked).toBe(18)
+    expect(FIXTURES.length).toBe(11)
+    expect(checked).toBe(16)
     expect(free).toEqual([
       'run-toggle-twice',
       'run-crowded-taps',
@@ -596,8 +692,8 @@ describe('a shot never ends before its own event', () => {
     // must reach back past the first's event. Round five bought both at once
     // with `run-close-taps`, which put 1116px between two taps 400ms apart —
     // material no recorder can produce, because `tap()` walks its pointer there
-    // (`src/record.ts:344-348`) and that walk is floored at 220ms and grows with
-    // distance (`src/motion.ts:305-307`). Measured on the recordings that
+    // (`src/record.ts:399-402`) and that walk is floored at 220ms and grows with
+    // distance (`src/motion.ts:305-306`). Measured on the recordings that
     // replaced it, the truncated crop keeps the element framed in all three
     // formats at every crowding a log can reach — the strong claim is simply
     // not reachable by moving taps together. A 3000ms lead over
@@ -669,7 +765,7 @@ describe('a shot never ends before its own event', () => {
     )
     // The remedy has to be one the author can apply today: `hold` is the only
     // call in the wrapper that advances the log's clock without moving the
-    // pointer (`src/record.ts:377-386`).
+    // pointer (`src/record.ts:431-441`).
     expect(() => buildZoomSegments(toTimedEvents(events), format)).toThrow(
       /demo\.hold\(400\)/,
     )
@@ -680,9 +776,9 @@ describe('a shot never ends before its own event', () => {
  * Two interactions at one instant on one element.
  *
  * This is not an exotic log. `click()` writes its event at the tick the pointer
- * has reached and does not advance it (`src/record.ts:334-346`), and a move
+ * has reached and does not advance it (`src/record.ts:388-398`), and a move
  * onto a target the pointer already sits on generates no samples to advance it
- * with (`src/motion.ts:82`) — so a switch toggled twice, a counter pressed
+ * with (`src/motion.ts:89`) — so a switch toggled twice, a counter pressed
  * twice, and `type(el, 'x')` followed by `click(el)` all produce two
  * interactions 0.0ms apart. Round three refused to render any of them, with a
  * message advising an option the CLI did not have.
@@ -835,7 +931,7 @@ describe('two interactions at one instant are one shot', () => {
  * for the loud failure rather than for a one-frame jump.
  */
 /** Frame-to-frame steps measured across six output grids; see the test. */
-const GRID_STEPS = 9335
+const GRID_STEPS = 8880
 
 /**
  * What the corpus sweep below actually watched, in absolute numbers: shots with
@@ -844,10 +940,10 @@ const GRID_STEPS = 9335
  * than from the resting frame, and frame-to-frame steps in all.
  */
 const SHOT_COUNTS = {
-  frames: 1809,
-  handedOver: 12,
-  shots: 49,
-  tightShots: 10,
+  frames: 1720,
+  handedOver: 10,
+  shots: 44,
+  tightShots: 5,
 }
 
 describe('the camera never jumps', () => {
@@ -1433,7 +1529,7 @@ describe('the smoothness guard', () => {
     }
     // A guard that refuses valid work is as much a defect as one that stays
     // silent, so the denominator is named: 11 fixtures, 3 formats, 48 shots.
-    expect(checked).toBe(54)
+    expect(checked).toBe(48)
   })
 
   it('throws on a shot that arrives by cutting', () => {
@@ -1514,6 +1610,42 @@ describe('the smoothness guard', () => {
     ).toThrow(/is a cut, not a camera move/)
   })
 
+  it('throws when a shot leaves by cutting, on either of the two counts', () => {
+    // **Both of these survived a mutation sweep until round seven.** Switching
+    // off the pull-out's duration floor and switching off its per-frame bound
+    // each left the whole suite green, while a probe that made the same lines
+    // throw unconditionally killed 68 tests — so the guard ran on every
+    // recording and simply never had anything to catch. The file claimed the
+    // opposite in prose: "exercised from hand-built segment lists in
+    // `tests/render/zoom.test.ts`, which is precisely the shape a builder bug
+    // takes." It was true of the approach and false of the way home.
+    //
+    // A shot list the builder produces cannot violate either — that is the
+    // point of the floors. So the violation is built by hand, which is exactly
+    // the shape a builder bug would take.
+    const withPullOut = (zoomOutMs: number): ZoomSegment[] => {
+      const list = shots(640, 700, look.zoomInMs)
+      return list.map((segment) => ({ ...segment, zoomOutMs }))
+    }
+    // One: no time to travel home at all.
+    expect(() =>
+      assertSmoothApproach(withPullOut(4 * (1000 / 60)), format, look),
+    ).toThrow(/to travel home was given .* below the 216.7ms floor/)
+    // Two: enough time to clear the floor, but the motion is interpolated over
+    // a window far shorter than the one the look configured, so it covers more
+    // of the way home per frame than the relaxed spring ever would. This is the
+    // case that had no test at all: the allowance comes from the look and the
+    // motion from the segment, and nothing was comparing them.
+    expect(() =>
+      assertSmoothApproach(withPullOut(MIN_TRAVEL_MS), format, look),
+    ).toThrow(/journey back to the resting frame in one frame/)
+    // And the list the builder would really produce passes, so the two above
+    // are about the violation and not about the material.
+    expect(() =>
+      assertSmoothApproach(withPullOut(look.zoomOutMs), format, look),
+    ).not.toThrow()
+  })
+
   it('bounds the way home on the relaxed spring, with a floor under it', () => {
     // The pull-out had no pinned number at all until round six: its allowance
     // was formed from `segment.zoomOutMs`, the same field the motion is
@@ -1576,7 +1708,7 @@ describe('the smoothness guard', () => {
     // Fourteen ticks is 233.3ms, which pays for one frame of hold and the
     // thirteen-frame floor — the first gap the camera can honestly cross, and
     // also the shortest gap the recorder can put between two taps on two
-    // elements (`src/motion.ts:92,305-307`). The two numbers meeting is not a
+    // elements (`src/motion.ts:92,305-306`). The two numbers meeting is not a
     // coincidence: the floor is derived from that walk.
     const wide: RecordEvent[] = [
       ...events,
@@ -1655,11 +1787,11 @@ describe('the smoothness guard', () => {
       }
     }
     // The denominator, absolute: a sweep that silently built nothing would pass
-    // this test without looking at anything. 2304 combinations are tried and
-    // 2160 build; the 144 the builder turns away are looks whose lead is too
+    // this test without looking at anything. 2112 combinations are tried and
+    // 1980 build; the 132 the builder turns away are looks whose lead is too
     // short for the approach they ask for, which is a different refusal and has
     // its own test.
-    expect(built).toBe(2160)
+    expect(built).toBe(1980)
     // 2160 shot lists built and each one re-checked: seconds, not milliseconds,
     // and the default 5s budget is not enough when the rest of the suite is
     // running beside it.

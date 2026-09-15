@@ -39,7 +39,7 @@ describe('analytic spring', () => {
 
   it('creeps past the target only by a fraction of a thousandth', () => {
     // The default spring is underdamped, so it does go past its target before
-    // the window closes. Measured peak: 1.00017 at progress ~0.9986. That is
+    // the window closes. Measured peak: 1.000138 at progress 0.99965. That is
     // invisible, but it is not zero — which is why `cropAt` clamps the curve
     // rather than trusting its shape to keep the element inside the crop.
     let peak = 0

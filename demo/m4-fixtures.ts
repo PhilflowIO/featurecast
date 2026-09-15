@@ -3,20 +3,23 @@ import { fileURLToPath } from 'node:url'
 import { record } from '../src/record.js'
 
 /**
- * Records the two touch fixtures `tests/render/zoom.test.ts` frames against.
+ * Records the four fixtures `tests/render/zoom.test.ts` frames against that no
+ * other run produces.
  *
  * It exists so the answer to "which real run produces this input?" is a file
- * rather than a memory. Round four deleted `run-type-then-click` because its
+ * rather than a memory. The other seven come out of
+ * `tests/record.browser.test.ts` into `artifacts/m2-001/`, which is a committed
+ * run as well; these four had no run at all. Round four deleted `run-type-then-click` because its
  * comment claimed a provenance no recorder could deliver; round five shipped
  * two more of the same kind — `run-interior-taps`, whose pointer jumps 193.1px
  * between two consecutive samples against the hard 20px cap in
- * `src/motion.ts:57`, and `run-close-taps`, which puts 1116px between two taps
+ * `src/motion.ts:58`, and `run-close-taps`, which puts 1116px between two taps
  * with no pointer path at all while `tap()` unconditionally travels
- * (`src/record.ts:344-348`). Both are replaced by the logs this file writes.
+ * (`src/record.ts:399-402`). Both are replaced by the logs this file writes.
  *
  * The geometry is not arbitrary. `travelDuration` floors a pointer journey at
  * 220ms and `minimumJerkBoundSamples` needs about 0.127 samples per pixel
- * (`src/motion.ts:167-172`, `src/motion.ts:305-307`), so the gap two taps can
+ * (`src/motion.ts:167-171`, `src/motion.ts:305-306`), so the gap two taps can
  * have is a function of how far apart they are: about 250 viewport pixels is
  * the furthest two elements measured to still crowd each other inside the
  * default 700ms lead — the curved, overshooting path the recorder actually
@@ -29,6 +32,18 @@ import { record } from '../src/record.js'
  * framings are free of the raster edge on both axes — a crop pinned against
  * the raster is centred by the pin rather than by `frameBoundingBox`, and a
  * centring assertion that only ever sees pinned crops tests nothing.
+ *
+ * **Round seven added two more of the same kind, found the same way.**
+ * `run-interior-button` and `run-toggle-twice` shipped as hand-written logs
+ * whose comment claimed a recording's shape. Both begin their pointer path at
+ * the centre of the viewport, while the recorder starts it at (0,0) and walks
+ * it to the centre before the script gets its first interaction
+ * (`src/record.ts:205`, `src/record.ts:375-383`) — a walk worth some hundred
+ * samples that neither log has. Both also carry long runs of bit-identical
+ * pointer samples, which `generateMotionPoints` does not produce and a
+ * zero-length journey does not produce either (`src/motion.ts:89`). They are
+ * recorded here now, keeping the shape each was there for: one framing free of
+ * the raster edge, and two interactions on one tick.
  */
 function page(elements: string): string {
   return (
@@ -75,6 +90,23 @@ const FAR_URL = page(
   button('corner', 120, 100, 140, 52) + button('opposite', 1000, 640, 180, 60),
 )
 
+/**
+ * One click on a button in the middle of the viewport, far enough from every
+ * raster edge that its crop is free on both axes — the framing that can fail a
+ * centring error, rather than being pinned into correctness by the raster.
+ */
+const INTERIOR_URL = page(button('interior', 620, 352, 120, 36))
+
+/**
+ * The same element clicked twice. `click()` logs at the current tick without
+ * advancing it, and a move onto a target the pointer already sits on yields no
+ * samples to advance it with, so the two clicks land on one tick — the shape a
+ * script produces whenever it touches the same control twice, and the one the
+ * merge is judged on. The tick equality is what the wrapper writes, not
+ * something the fixture was bent into.
+ */
+const TOGGLE_URL = page(button('toggle', 530, 345, 60, 30))
+
 export async function recordM4Fixtures(outRoot: string): Promise<void> {
   await record(
     {
@@ -94,6 +126,29 @@ export async function recordM4Fixtures(outRoot: string): Promise<void> {
       await browserPage.goto(FAR_URL)
       await demo.tap('#corner')
       await demo.tap('#opposite')
+    },
+  )
+  await record(
+    {
+      device: 'Nexus 10 landscape',
+      out: `${outRoot}/run-interior-button`,
+      seed: 14,
+    },
+    async (browserPage, demo) => {
+      await browserPage.goto(INTERIOR_URL)
+      await demo.click('#interior')
+    },
+  )
+  await record(
+    {
+      device: 'Nexus 10 landscape',
+      out: `${outRoot}/run-toggle-twice`,
+      seed: 11,
+    },
+    async (browserPage, demo) => {
+      await browserPage.goto(TOGGLE_URL)
+      await demo.click('#toggle')
+      await demo.click('#toggle')
     },
   )
 }
