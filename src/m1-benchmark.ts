@@ -1,4 +1,4 @@
-import type { ElementHandle, Page } from 'playwright'
+import type { ElementHandle, Frame, Page } from 'playwright'
 
 import type { MotionWindow } from './cadence.js'
 import type { Demo } from './record.js'
@@ -409,7 +409,7 @@ async function withMotionWindow(
 }
 
 /** Waits (briefly, non-fatally) for a "Loading…" chart panel to clear before continuing. */
-async function waitForLoadingToClear(page: Page): Promise<void> {
+async function waitForLoadingToClear(page: Frame | Page): Promise<void> {
   await page
     .getByText(/Loading/i)
     .first()
@@ -514,18 +514,44 @@ async function switchToTable(
  * grid.
  */
 export async function warmUpOnlyDash(
-  page: Page,
+  app: Frame | Page,
   url = ONLYDASH_GUEST_BENCHMARK_URL,
 ): Promise<void> {
-  await page.goto(url, { waitUntil: 'domcontentloaded' })
-  await page.getByRole('button', { name: 'Continue as Guest' }).click()
-  await page.getByRole('link', { name: 'Projects' }).click()
-  await page.getByRole('heading', { name: 'Projects', level: 1 }).waitFor()
-  await page.getByRole('grid').waitFor()
-  await waitForLoadingToClear(page)
+  await app.goto(url, { waitUntil: 'domcontentloaded' })
+  await app.getByRole('button', { name: 'Continue as Guest' }).click()
+  // At a phone's width OnlyDash puts its sidebar behind a menu button, so
+  // the Projects link the desktop flow clicks is present but not reachable.
+  // Opening the menu first is the same journey a person on a phone makes.
+  //
+  // It is a question about the layout, not about the device — writing it as
+  // `if (device.isMobile)` would put a fact about a layout in a place that
+  // cannot see the layout. And it is a *wait*, not a bare visibility check,
+  // because a check asked the instant after sign-in races the mount and
+  // answers "no" on a phone too. The cost of the wait is up to five seconds
+  // on a wide viewport, spent outside the capture, where it buys the
+  // difference between a reliable warm-up and an occasional one.
+  const menu = app.getByRole('button', { name: /toggle menu/i })
+  const behindAMenu = await menu
+    .waitFor({ state: 'visible', timeout: 5_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (behindAMenu) await menu.click()
+  await app.getByRole('link', { exact: true, name: 'Projects' }).click()
+  // The drawer does not close itself when a link inside it is followed: the
+  // grid is behind it, present and hidden. Measured — without this the
+  // warm-up waits out its timeout on a `role="grid"` that resolves 59 times
+  // and is hidden every time. It is closed by its own close control rather
+  // than by the button that opened it, because the open drawer covers that
+  // button and intercepts the click.
+  if (behindAMenu) {
+    await app.locator('aside [data-testid="CloseIcon"]').first().click()
+  }
+  await app.getByRole('heading', { name: 'Projects', level: 1 }).waitFor()
+  await app.getByRole('grid').waitFor()
+  await waitForLoadingToClear(app)
   // Lets any remaining mount transition finish before the first frame is
   // captured. Not recorded, so a generous wait costs nothing.
-  await page.waitForTimeout(600)
+  await app.waitForTimeout(600)
 }
 
 /**
