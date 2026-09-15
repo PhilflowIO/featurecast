@@ -248,31 +248,32 @@ Bildzeilen sind voneinander unabhängig, deshalb hängt das Ergebnis nicht an de
 Kernzahl: derselbe Lauf mit einem und mit sechs Threads erzeugt dieselbe Datei,
 Byte für Byte. `--threads <n>` stellt es ein, ändert aber nur die Dauer.
 
-### Cursor- und Zoom-Zeitpunkte sind noch falsch — bis Issue #9
+### Eine Uhr für Bilder und Ereignisse
 
-Das Ereignis-Log trägt heute **keine Uhrzeit**, sondern einen Zähler: er läuft
+Das Ereignis-Log trug lange **keine Uhrzeit**, sondern einen Zähler: er lief
 weiter für alles, was das Skript selbst tut (Zeigerbewegung, Tippen, `hold`), und
-bleibt stehen für alles, was echte Zeit kostet, ohne geplant zu sein — Seiten
-laden, auf stabile Geometrie warten, der Umlauf eines Klicks. **Zeiger und Zoom
-sitzen deshalb nur bei Aufnahmen richtig, in denen nirgends gewartet wird.**
+blieb stehen für alles, was echte Zeit kostet, ohne geplant zu sein — Seiten
+laden, auf stabile Geometrie warten, der Umlauf eines Klicks. Der Fehler war
+keine gleichmäßige Abweichung, die ein Faktor hätte geradeziehen können, sondern
+eine Treppe: in der Aufnahme `m1-008` summierte sich der Versatz nach 62 Sekunden
+auf **42,6 Sekunden**, und der einzige Zoom dieser Aufnahme rahmte ein leeres
+Suchfeld 1,64 Sekunden bevor dort etwas passierte.
 
-Der Fehler ist keine gleichmäßige Abweichung, die man mit einem Faktor
-geradeziehen könnte, sondern eine Treppe: innerhalb eines Blocks geplanter
-Aktionen liegt er bei 11–15 %, zwischen zwei Blöcken springt er in Stufen. In der
-Aufnahme `m1-008` sind das nacheinander +25,8 s, +3,2 s, +8,6 s und +2,9 s — nach
-62 Sekunden Aufnahme summiert sich der Versatz auf **42,6 Sekunden**. Sichtbar
-wird das so: der einzige Zoom dieser Aufnahme rahmt ein leeres Suchfeld 1,64
-Sekunden bevor dort etwas passiert, und ist wieder herausgefahren, bevor der
-getippte Text erscheint.
+Der Aufnehmer liest jetzt beim Schreiben jedes Ereignisses die Wanduhr — dieselbe,
+mit der die Aufnahme ihre Einzelbilder stempelt. Die Zeiten stehen in einer
+**eigenen Datei neben dem Log** (`event-times.jsonl`), nicht darin: zwei Läufe
+desselben Skripts mit demselben Seed liefern weiterhin ein bitgleiches
+`events.jsonl`, und das ist die Zusage aus M2. Die Uhrzeit ist bei jedem Lauf eine
+andere, also gehört sie nicht in eine Datei, die gleich bleiben soll.
 
-Wer ein gerendertes Video sieht und den Zoom an der falschen Stelle findet: das
-ist kein Fehler im Zoom, sondern diese fehlende Uhr. [Issue
-#9](https://forgejo.philflow.me/Phil/featurecast/issues/9) legt das Log auf die
-Uhr der Einzelbilder und räumt es aus dem Weg; die Umrechnung steckt bis dahin in
-genau einem kleinen Modul am Rand (`src/render/clock.ts`), das dabei ersatzlos
-verschwindet. Die zwei Stellschrauben darin (`originMs`, `rateScale`) verschieben
-und kippen eine Gerade — gegen eine Treppe hilft keine von beiden, und eine
-dritte kommt nicht dazu.
+Zusammengeführt werden beide beim Rendern, über die Startzeit der Aufnahme. Weil
+Bild- und Ereigniszeiten Epochen-Millisekunden derselben Maschine sind, ist das
+eine Subtraktion und keine Schätzung. Die alte Umrechnung ist ersatzlos
+verschwunden, samt ihrer zwei Stellschrauben.
+
+**Eine Aufnahme ohne Zeitdatei lässt sich nicht mehr rendern.** Sie stammt aus
+einer Fassung, die nicht wusste, wie spät es war, und der Renderer sagt das,
+statt eine Zeit zu erfinden — sie muss neu aufgenommen werden.
 
 ## Ein Kommando für die ganze Kette
 

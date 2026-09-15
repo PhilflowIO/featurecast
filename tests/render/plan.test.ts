@@ -1,17 +1,13 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
 import type { BoundingBox } from '../../src/record.js'
-import { toTimedEvents } from '../../src/render/clock.js'
-import { parseEventLog } from '../../src/render/events.js'
 import { boxToRect, contains } from '../../src/render/geometry.js'
 import {
   planRender,
   serializePlan,
   type CaptureInput,
 } from '../../src/render/plan.js'
+import { recordedFixture as fixture } from './timed.js'
 
 const STARTED_AT = 1_700_000_000_000
 
@@ -26,15 +22,6 @@ function capture(frameCount = 90, spacingMs = 16.666): CaptureInput {
     sessionStartedAt: STARTED_AT,
     source: { width: 1280, height: 720 },
   }
-}
-
-function fixture(name: string) {
-  return parseEventLog(
-    readFileSync(
-      join(import.meta.dirname, 'fixtures', `${name}.jsonl`),
-      'utf8',
-    ),
-  )
 }
 
 describe('one raw recording, three formats', () => {
@@ -100,7 +87,7 @@ describe('one raw recording, three formats', () => {
     // Comparing a crop with the framing it was computed from is self-consistent
     // by construction and cannot fail, whatever the framing does.
     const boxes = new Map<number, BoundingBox>()
-    for (const { event, timeMs } of toTimedEvents(events)) {
+    for (const { event, timeMs } of events) {
       if ('bbox' in event) boxes.set(Math.round(timeMs), event.bbox)
     }
     expect(boxes.size).toBeGreaterThan(0)

@@ -26,7 +26,7 @@
  * THIRD-PARTY.md.
  */
 
-import type { TimedEvent } from './clock.js'
+import type { TimedEvent } from './events.js'
 import type { PointerSample } from './rest.js'
 
 /**

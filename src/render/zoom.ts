@@ -1,6 +1,6 @@
 import type { BoundingBox } from '../record.js'
 
-import type { TimedEvent } from './clock.js'
+import type { TimedEvent } from './events.js'
 import type { ResolvedFormat } from './format.js'
 import {
   boxToRect,
@@ -445,32 +445,32 @@ export function pullOutStepFraction(look: ResolvedLook): number {
  * literally true: at every event the crop is the framing computed for that
  * event's element.
  *
- * **Two interactions at the same instant on the same element are one shot.**
- * The event log has no spacing to give there: `click()` logs at the current
- * tick without advancing it (`src/record.ts:388-398`), and when the pointer
- * already sits on the target there is no travel to advance it either
- * (`src/motion.ts:89`), so a switch toggled twice or a counter pressed twice
- * arrive 0.0ms apart. That is not a crowded pair of shots, it is one shot with
- * two events in it: the camera frames the element and holds through both. The
- * shot's `box` is unchanged by the merge, because the two boxes are equal — so
- * `target` is `frameBoundingBox` of each event's own box, bit for bit, and the
- * acceptance criterion stays an equality by construction.
+ * **Two interactions on the same element, close together, are one shot.**
+ * A switch toggled twice or a counter pressed twice is not a crowded pair of
+ * shots; there is no camera move between an element and itself. The camera
+ * frames it and holds through both. The shot's `box` is unchanged by the
+ * merge, because the two boxes are equal — so `target` is `frameBoundingBox`
+ * of each event's own box, bit for bit, and the acceptance criterion stays an
+ * equality by construction.
  *
- * What stays loud is the pair that no camera can answer: two interactions at
- * one instant on *different* elements, overlapping or not. Round four merged
- * those too and framed the union, which for an icon inside a page-filling panel
- * is the whole page — a 2560x1440 crop at 1.000x, a zoom that does not move,
- * and an acceptance test that passed because it compared the crop against the
- * union it had generated itself. There is no move, no framing and no compromise
- * that has the camera on two different elements at once, so the run fails and
- * names the remedy the author can apply today.
+ * The merge is decided on the logged geometry, and only on that. Until issue #9
+ * it was also fenced by a gap of exactly zero, which was the size of the event
+ * log's own artefact: the log counted planned 60 Hz slots, and a second click
+ * on a target the pointer already sits on consumes none, so such a pair arrived
+ * 0.0ms apart. The log carries a reading of the capture clock now, the same
+ * pair is 217ms apart in `run-toggle-twice`, and a merge fenced by zero would
+ * simply never fire again — leaving the crowded split to hold the element for a
+ * single frame before re-approaching it. Geometry was always the real reason;
+ * the zero was scaffolding, and it came down with the clock.
  *
- * The zero-gap timing itself is a symptom of the event log's counted `tick`,
- * which issue #9 replaces with a reading of the capture clock. Nothing here
- * invents spacing to paper over that: the merge is decided on the logged
- * geometry — are the two boxes the same rectangle — and on a gap of exactly
- * zero, which is the artefact's own size rather than a tolerance this file
- * chose.
+ * What stays loud is the pair that no camera can answer: two interactions on
+ * *different* elements with no time to travel between them. Round four merged
+ * those and framed the union, which for an icon inside a page-filling panel is
+ * the whole page — a 2560x1440 crop at 1.000x, a zoom that does not move, and
+ * an acceptance test that passed because it compared the crop against the union
+ * it had generated itself. There is no move, no framing and no compromise that
+ * has the camera on two different elements at once, so the run fails and names
+ * the remedy the author can apply today.
  */
 export function buildZoomSegments(
   events: readonly TimedEvent[],
@@ -533,34 +533,22 @@ export function buildZoomSegments(
     }
 
     const gap = segment.eventMs - previous.lastEventMs
-    // Exactly the same instant, and nothing wider. The zero-gap case is an
-    // artefact of the event log's counted `tick`, which issue #9 replaces with
-    // a reading of the capture clock; the bound is therefore the artefact's own
-    // size and not a tolerance that might quietly swallow real spacing. Two
-    // interactions one tick apart are two shots, and the crowded branch below
-    // answers them.
-    if (gap === 0) {
-      if (!boxesEqual(previous.box, segment.box)) {
-        throw new Error(
-          `Two interactions at the same instant ` +
-            `(${segment.eventMs.toFixed(1)}ms) land on different elements: ` +
-            `${describeBox(previous.box)} and ${describeBox(segment.box)}. ` +
-            `One shot is framed on one box; framing the two together would ` +
-            `mean framing something neither of them is — for an icon inside a ` +
-            `page-filling panel that is the whole page, a "zoom" that does not ` +
-            `move. No camera is on both at the same instant, so the renderer ` +
-            `refuses rather than picking a way-point at one of the two. Put a ` +
-            `beat between them in the script: \`await demo.hold(400)\` — the ` +
-            `only call in the wrapper that advances the event log's clock on ` +
-            `its own (\`src/record.ts:431-441\`) — and the camera has a move ` +
-            `to make.`,
-        )
-      }
-      mergeShots(previous, segment)
-      continue
-    }
-
     if (previous.endMs > segment.startMs) {
+      // Two interactions on the same element, close enough to crowd, are one
+      // shot. There is no move to make — the framing of the second box is the
+      // framing of the first, bit for bit — so cutting here would show the
+      // camera leaving an element and coming straight back to it. Before #9
+      // this case arrived with a gap of exactly 0.0ms, because the log counted
+      // planned slots and a second click on a target the pointer already sits
+      // on consumes none; the real clock puts 217ms between the two clicks of
+      // `run-toggle-twice`, and the crowded split below then held the element
+      // for a single frame before re-approaching it. Merging on the geometry,
+      // as this always did, survives the clock change; merging on a zero gap
+      // did not.
+      if (boxesEqual(previous.box, segment.box)) {
+        mergeShots(previous, segment)
+        continue
+      }
       // Two shots that crowd each other share the gap between their events, and
       // both give way: the earlier shot's hold and the later shot's approach
       // are cut back in proportion to what each asked for, never below one

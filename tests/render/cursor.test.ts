@@ -1,11 +1,6 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
 import { MAX_POINTER_STEP_PX } from '../../src/motion.js'
-import type { RecordEvent } from '../../src/record.js'
-import { toTimedEvents } from '../../src/render/clock.js'
 import {
   cursorAt,
   DEFAULT_CURSOR_LOOK,
@@ -15,9 +10,9 @@ import {
   rippleStarts,
   screenToVideoUV,
 } from '../../src/render/cursor.js'
-import { parseEventLog } from '../../src/render/events.js'
 import { drawCursorSprite, spriteGeometry } from '../../src/render/sprite.js'
 import { pointerSamples } from '../../src/render/zoom.js'
+import { recordedFixture as fixture } from './timed.js'
 
 /**
  * The pointer the browser never drew, measured.
@@ -37,16 +32,7 @@ import { pointerSamples } from '../../src/render/zoom.js'
  */
 const FRAME_MS = 1000 / 60
 
-function fixture(name: string): RecordEvent[] {
-  return parseEventLog(
-    readFileSync(
-      join(import.meta.dirname, 'fixtures', `${name}.jsonl`),
-      'utf8',
-    ),
-  )
-}
-
-const events = toTimedEvents(fixture('run-a'))
+const events = fixture('run-a')
 const samples = pointerSamples(events)
 
 describe('the drawn pointer follows the recorded path', () => {
@@ -117,7 +103,7 @@ describe('the drawn pointer follows the recorded path', () => {
       checked += 1
       worst = Math.max(worst, Math.abs(b.x - a.x), Math.abs(b.y - a.y))
     }
-    expect(checked).toBe(292)
+    expect(checked).toBe(336)
     expect(worst).toBeLessThanOrEqual(MAX_POINTER_STEP_PX)
   })
 
@@ -261,10 +247,8 @@ describe('the look is a set of numbers that reach the drawing', () => {
 
   it('reads the pointer kind off the recording, not off a default', () => {
     expect(inferCursorKind(events)).toBe('arrow')
-    expect(inferCursorKind(toTimedEvents(fixture('run-touch')))).toBe('touch')
-    expect(inferCursorKind(toTimedEvents(fixture('run-crowded-taps')))).toBe(
-      'touch',
-    )
+    expect(inferCursorKind(fixture('run-touch'))).toBe('touch')
+    expect(inferCursorKind(fixture('run-crowded-taps'))).toBe('touch')
   })
 })
 

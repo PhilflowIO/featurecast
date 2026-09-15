@@ -1,12 +1,8 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
 import { MAX_POINTER_STEP_PX } from '../../src/motion.js'
 import type { BoundingBox, RecordEvent } from '../../src/record.js'
-import { toTimedEvents } from '../../src/render/clock.js'
-import { parseEventLog } from '../../src/render/events.js'
+import type { TimedEvent } from '../../src/render/events.js'
 import { resolveFormat, type FormatSpec } from '../../src/render/format.js'
 import { boxToRect, contains, type Rect } from '../../src/render/geometry.js'
 import {
@@ -23,6 +19,7 @@ import {
   resolveLook,
   type ZoomSegment,
 } from '../../src/render/zoom.js'
+import { atTicks, recordedFixture as fixture } from './timed.js'
 
 /**
  * The window a camera move is never squeezed below, and the fraction of its
@@ -109,12 +106,13 @@ const CAPTURE = { width: 2560, height: 1600 }
  * taps simply cannot crowd. Its pull-out runs to completion, which is what the
  * pull-out guard is measured on.
  *
- * `run-toggle-twice` carries two interactions at *one* tick, which is what the
- * wrapper produces whenever a script touches the same element twice: `click()`
- * logs at the current tick without advancing it, and a move onto a target the
- * pointer already sits on yields no samples to advance it with
- * (`src/motion.ts:89`). The tick equality is what the wrapper writes, and now
- * it is what the wrapper actually wrote.
+ * `run-toggle-twice` is a script touching the same element twice. On the log's
+ * old tick counter its two clicks sat on one tick — `click()` logs at the
+ * current tick without advancing it, and a move onto a target the pointer
+ * already sits on yields no samples to advance it with (`src/motion.ts:89`).
+ * The wall clock puts 217ms between them, which is what a person pressing a
+ * switch twice actually takes, and it is still one shot: the merge is keyed on
+ * the element, not on the gap.
  *
  * `run-inner-scroll` is round five's, and it is the recording round four could
  * not render: two clicks on *adjacent* elements, the most ordinary shape a demo
@@ -169,10 +167,10 @@ const SHOTS: Record<
     segments: number
   }
 > = {
-  'run-a': { crowded: 1, holdMs: [216.7, 900], interactions: 2, segments: 2 },
+  'run-a': { crowded: 1, holdMs: [855.3, 900], interactions: 2, segments: 2 },
   'run-crowded-taps': {
     crowded: 1,
-    holdMs: [348.4, 900],
+    holdMs: [486, 900],
     interactions: 2,
     segments: 2,
   },
@@ -180,7 +178,7 @@ const SHOTS: Record<
   'run-hero': { crowded: 0, holdMs: [900], interactions: 1, segments: 1 },
   'run-inner-scroll': {
     crowded: 0,
-    holdMs: [1316.7, 900],
+    holdMs: [2400, 900],
     interactions: 2,
     segments: 2,
   },
@@ -198,7 +196,7 @@ const SHOTS: Record<
   },
   'run-scroll-click': {
     crowded: 1,
-    holdMs: [1266.7, 900],
+    holdMs: [1560, 900],
     interactions: 2,
     segments: 2,
   },
@@ -216,6 +214,31 @@ const SHOTS: Record<
   },
   'run-touch': { crowded: 0, holdMs: [900], interactions: 1, segments: 1 },
 }
+
+/**
+ * **These numbers were re-measured when #9 put the corpus on the wall clock,
+ * and what moved is worth reading.**
+ *
+ * Every hold grew or stayed at `minHoldMs`, and none of it is a tolerance
+ * anyone loosened. A shot holds until the pointer's rest zone ends, capped at
+ * `maxHoldMs`; under the old counter a rest that lasted two and a half seconds
+ * of real time was logged as a fraction of that, so the camera left early. The
+ * two scroll recordings show it most: 1316.7 to 2400 and 1266.7 to 1560.
+ *
+ * `run-a`'s first shot went from 216.7ms to 855.3ms for the same reason. Its
+ * two interactions were logged 433ms apart and really happened 1473ms apart,
+ * which is most of the way out of the crowded band — the shot is still cut back
+ * by its successor, but by a fifth of what the counter claimed.
+ *
+ * `run-toggle-twice` is the one that changed shape rather than size: two shots
+ * became one, because its two clicks are 217ms apart rather than 0.0ms and the
+ * merge is now keyed on the element. See the describe block for it below.
+ *
+ * Three of the eleven still reach the crowded path. That is worth stating,
+ * because the real clock could have taken it away entirely: two interactions on
+ * different elements cannot happen much closer than half a second, since the
+ * pointer has to travel between them and travelling costs real time.
+ */
 
 describe('the corpus is what a recorder can produce', () => {
   /**
@@ -239,7 +262,7 @@ describe('the corpus is what a recorder can produce', () => {
    * of magnitude longer.
    */
   const pointers = (name: string) =>
-    fixture(name).flatMap((event) =>
+    fixture(name).flatMap(({ event }) =>
       event.type === 'pointer' ? [{ x: event.x, y: event.y }] : [],
     )
 
@@ -311,15 +334,6 @@ describe('the corpus is what a recorder can produce', () => {
   })
 })
 
-function fixture(name: string): RecordEvent[] {
-  return parseEventLog(
-    readFileSync(
-      join(import.meta.dirname, 'fixtures', `${name}.jsonl`),
-      'utf8',
-    ),
-  )
-}
-
 /**
  * The fixtures were recorded against a 1280x720 viewport; the capture raster
  * these tests frame against is 2560x1600. Doubling every coordinate is exactly
@@ -329,24 +343,26 @@ function fixture(name: string): RecordEvent[] {
  * and the "is the element in the middle of the shot" assertion would be skipped
  * for all of them.
  */
-function atCaptureScale(events: readonly RecordEvent[]): RecordEvent[] {
-  return events.map((event) => {
-    if (event.type === 'header') return event
+function atCaptureScale(events: readonly TimedEvent[]): TimedEvent[] {
+  return events.map(({ event, timeMs }) => {
     // A `type` event carries a bounding box but no pointer position, so a
     // scaling that keyed on `x` left its box at viewport scale while everything
     // around it doubled — half a fixture in one coordinate system and half in
     // another. Both are scaled here, independently.
     const scaled =
       'x' in event ? { ...event, x: event.x * 2, y: event.y * 2 } : event
-    if (!('bbox' in scaled)) return scaled
+    if (!('bbox' in scaled)) return { event: scaled, timeMs }
     return {
-      ...scaled,
-      bbox: {
-        x: scaled.bbox.x * 2,
-        y: scaled.bbox.y * 2,
-        width: scaled.bbox.width * 2,
-        height: scaled.bbox.height * 2,
+      event: {
+        ...scaled,
+        bbox: {
+          x: scaled.bbox.x * 2,
+          y: scaled.bbox.y * 2,
+          width: scaled.bbox.width * 2,
+          height: scaled.bbox.height * 2,
+        },
       },
+      timeMs,
     }
   })
 }
@@ -435,7 +451,7 @@ function visiblePart(box: Rect, format: { base: Rect }): Rect {
 describe('the zoom frames the hit element at every click', () => {
   for (const name of FIXTURES) {
     it(`${name}: the crop contains the logged bounding box`, () => {
-      const events = toTimedEvents(atCaptureScale(fixture(name)))
+      const events = atCaptureScale(fixture(name))
       const format = resolveFormat(LANDSCAPE, CAPTURE)
       expect(format.maxZoom).toBeGreaterThan(1.3)
       const segments = buildZoomSegments(events, format)
@@ -546,7 +562,7 @@ describe('the zoom frames the hit element at every click', () => {
     const free: string[] = []
     let checked = 0
     for (const name of FIXTURES) {
-      const events = toTimedEvents(atCaptureScale(fixture(name)))
+      const events = atCaptureScale(fixture(name))
       for (const segment of buildZoomSegments(events, format)) {
         checked += 1
         const insideX =
@@ -573,7 +589,7 @@ describe('the zoom frames the hit element at every click', () => {
   })
 
   it('fails when the framing is wrong, which is the point of it', () => {
-    const events = toTimedEvents(atCaptureScale(fixture('run-scroll-click')))
+    const events = atCaptureScale(fixture('run-scroll-click'))
     const format = resolveFormat(LANDSCAPE, CAPTURE)
     const segments = buildZoomSegments(events, format)
     const clicks = events.filter(({ event }) => 'bbox' in event)
@@ -596,7 +612,7 @@ describe('the zoom frames the hit element at every click', () => {
   })
 
   it('has arrived on the element before the click, not on the way to it', () => {
-    const events = toTimedEvents(fixture('run-scroll-click'))
+    const events = fixture('run-scroll-click')
     const format = resolveFormat(LANDSCAPE, CAPTURE)
     const segments = buildZoomSegments(events, format)
     expect(segments.length).toBeGreaterThan(0)
@@ -623,7 +639,7 @@ describe('a shot never ends before its own event', () => {
 
   for (const name of FIXTURES) {
     it(`${name}: every shot is on its element when its event lands`, () => {
-      const events = toTimedEvents(atCaptureScale(fixture(name)))
+      const events = atCaptureScale(fixture(name))
       const segments = buildZoomSegments(events, format)
       const expected = SHOTS[name]
       expect(expected).toBeDefined()
@@ -701,7 +717,7 @@ describe('a shot never ends before its own event', () => {
     // exposes instead of from a log it cannot record, and the element then
     // misses the truncated 16:9 crop by 386px.
     const look = { ...DEFAULT_ZOOM_LOOK, zoomLeadMs: 3000 }
-    const events = toTimedEvents(atCaptureScale(fixture('run-far-taps')))
+    const events = atCaptureScale(fixture('run-far-taps'))
     const segments = buildZoomSegments(events, format, look)
     const first = segments[0]
     const second = segments[1]
@@ -760,48 +776,59 @@ describe('a shot never ends before its own event', () => {
       y: 200,
       bbox: { x: 2200, y: 180, width: 200, height: 80 },
     })
-    expect(() => buildZoomSegments(toTimedEvents(events), format)).toThrow(
+    expect(() => buildZoomSegments(atTicks(events), format)).toThrow(
       /no time to travel between them/,
     )
     // The remedy has to be one the author can apply today: `hold` is the only
     // call in the wrapper that advances the log's clock without moving the
     // pointer (`src/record.ts:431-441`).
-    expect(() => buildZoomSegments(toTimedEvents(events), format)).toThrow(
+    expect(() => buildZoomSegments(atTicks(events), format)).toThrow(
       /demo\.hold\(400\)/,
     )
   })
 })
 
 /**
- * Two interactions at one instant on one element.
+ * Two interactions on one element, close together.
  *
- * This is not an exotic log. `click()` writes its event at the tick the pointer
- * has reached and does not advance it (`src/record.ts:388-398`), and a move
- * onto a target the pointer already sits on generates no samples to advance it
- * with (`src/motion.ts:89`) — so a switch toggled twice, a counter pressed
- * twice, and `type(el, 'x')` followed by `click(el)` all produce two
- * interactions 0.0ms apart. Round three refused to render any of them, with a
- * message advising an option the CLI did not have.
+ * This is not an exotic log: a switch toggled twice, a counter pressed twice,
+ * `type(el, 'x')` followed by `click(el)`. Round three refused to render any of
+ * them, with a message advising an option the CLI did not have.
  *
  * They are one shot: the camera frames the element and holds through both
  * events. The framing stays exactly what `frameBoundingBox` computes, from the
  * very same box — which is why the merge is restricted to boxes that are
  * *equal*. Round four merged anything that overlapped and framed the union,
  * and a union of two different boxes is a rectangle neither of them is.
+ *
+ * **What #9 changed here.** The pair used to arrive 0.0ms apart, because the
+ * log counted planned 60 Hz slots and a second click on a target the pointer
+ * already sits on consumes none — so the merge was keyed on a gap of exactly
+ * zero, "the artefact's own size". On the wall clock the same two clicks are
+ * 217ms apart, that key never matches again, and the crowded split held the
+ * element for a single frame before re-approaching it. The merge is keyed on
+ * the geometry now, which is what it should always have been: there is no
+ * camera move between an element and itself.
  */
-describe('two interactions at one instant are one shot', () => {
+describe('two interactions on one element are one shot', () => {
   const format = resolveFormat(LANDSCAPE, CAPTURE)
 
-  it('renders a switch toggled twice instead of refusing the recording', () => {
-    const events = toTimedEvents(atCaptureScale(fixture('run-toggle-twice')))
+  it('renders a switch toggled twice instead of cutting away and back', () => {
+    const events = atCaptureScale(fixture('run-toggle-twice'))
     const interactions = events.filter(({ event }) => 'bbox' in event)
     expect(interactions.length).toBe(2)
     const [first, second] = interactions
     expect(first).toBeDefined()
     expect(second).toBeDefined()
     if (first === undefined || second === undefined) return
-    // The premise: the wrapper really does log both at the same time.
-    expect(second.timeMs - first.timeMs).toBe(0)
+    // The premise, and it changed with #9. The old log counted planned 60 Hz
+    // slots, and a second click on a target the pointer already sits on
+    // consumes none, so this pair arrived 0.0ms apart and the merge keyed on
+    // that zero. On the wall clock the two clicks of this recording are 217ms
+    // apart: real spacing, well inside the lead, and still one shot.
+    const gap = second.timeMs - first.timeMs
+    expect(gap).toBeGreaterThan(0)
+    expect(gap).toBeLessThan(DEFAULT_ZOOM_LOOK.zoomLeadMs)
 
     const segments = buildZoomSegments(events, format)
     expect(segments.length).toBe(1)
@@ -815,14 +842,16 @@ describe('two interactions at one instant are one shot', () => {
     expect(cropAt(first.timeMs, segments, format)).toEqual(shot.target)
     expect(cropAt(second.timeMs, segments, format)).toEqual(shot.target)
     // And it is a hold, not a single frame: the shot keeps the element for the
-    // full `minHoldMs` past the last of the two.
+    // full `minHoldMs` past the last of the two. Without the merge the crowded
+    // split gives the first shot 16.7ms — one frame — and the camera leaves an
+    // element it is about to come straight back to.
     expect(shot.endMs - shot.lastEventMs).toBeCloseTo(
       DEFAULT_ZOOM_LOOK.minHoldMs,
       6,
     )
   })
 
-  it('refuses two interactions at one instant on different elements', () => {
+  it('refuses two interactions too close together on different elements', () => {
     // Round four merged these on *overlap* and framed the union. For an icon
     // inside a page-filling backdrop that union is the page: measured, a 120x48
     // icon and a 2560x1440 backdrop produced a crop of 2560x1440 at 1.000x —
@@ -839,8 +868,8 @@ describe('two interactions at one instant are one shot', () => {
     const backdrop = { x: 0, y: 0, width: 2560, height: 1440 }
     events.push({ type: 'click', tick: 120, x: 1240, y: 760, bbox: icon })
     events.push({ type: 'click', tick: 120, x: 1240, y: 760, bbox: backdrop })
-    expect(() => buildZoomSegments(toTimedEvents(events), format)).toThrow(
-      /different elements/,
+    expect(() => buildZoomSegments(atTicks(events), format)).toThrow(
+      /no time to travel/,
     )
 
     // And the shape of what round four shipped, by hand: framing the union is
@@ -851,48 +880,70 @@ describe('two interactions at one instant are one shot', () => {
     expect(union).not.toEqual(frameBoundingBox(icon, format).rect)
   })
 
-  it('keeps two interactions one tick apart as two shots', () => {
-    // The merge's time bound, pinned. It is exactly zero, because zero is the
-    // size of the artefact it exists for: `click()` logs at the current tick
-    // without advancing it. One tick of real spacing is real spacing, and a
-    // bound widened to swallow it — 33.3ms, 333ms — would turn two shots into
-    // one wherever a script clicks twice in quick succession.
-    const events: RecordEvent[] = [
-      { type: 'header', version: 1, fps: 60, seed: 1 },
-    ]
-    for (let tick = 0; tick <= 200; tick += 1) {
-      events.push({ type: 'pointer', tick, x: 1240, y: 760 })
+  it('merges on the element, not on the gap', () => {
+    // What the merge is keyed on, pinned from both sides. Until #9 it was keyed
+    // on a gap of exactly zero — the size of the log's own artefact — and the
+    // clock took that artefact away: nothing a recorder produces lands two
+    // interactions on the same millisecond any more. Keying on the geometry
+    // survives, and it is the honest rule anyway: there is no camera move
+    // between an element and itself, whatever the spacing.
+    const path = (): RecordEvent[] => {
+      const events: RecordEvent[] = [
+        { type: 'header', version: 1, fps: 60, seed: 1 },
+      ]
+      for (let tick = 0; tick <= 300; tick += 1) {
+        events.push({ type: 'pointer', tick, x: 1240, y: 760 })
+      }
+      return events
     }
     const box = { x: 1200, y: 700, width: 240, height: 96 }
-    events.push({ type: 'click', tick: 120, x: 1240, y: 760, bbox: box })
-    events.push({ type: 'click', tick: 121, x: 1240, y: 760, bbox: box })
-    const timed = toTimedEvents(events)
-    const segments = buildZoomSegments(timed, format)
-    expect(segments.length).toBe(2)
-    const [first, second] = segments
-    expect(first).toBeDefined()
-    expect(second).toBeDefined()
-    if (first === undefined || second === undefined) return
-    expect(second.eventMs - first.eventMs).toBeCloseTo(1000 / 60, 6)
-    // Same element, so there is no journey between the two shots and the
-    // camera stands still across the seam — two shots, one framing.
-    expect(first.target).toEqual(second.target)
-    expect(cropAt(first.eventMs, segments, format)).toEqual(first.target)
-    expect(cropAt(second.eventMs, segments, format)).toEqual(second.target)
-    // The same pair at zero spacing is one shot: the bound is what separates
-    // these two cases, and it separates them at exactly zero.
-    const merged = buildZoomSegments(
-      toTimedEvents([
-        ...events.slice(0, -1),
+    const other = { x: 200, y: 200, width: 240, height: 96 }
+
+    // One tick apart on one element: one shot.
+    const close = buildZoomSegments(
+      atTicks([
+        ...path(),
         { type: 'click', tick: 120, x: 1240, y: 760, bbox: box },
+        { type: 'click', tick: 121, x: 1240, y: 760, bbox: box },
       ]),
       format,
     )
-    expect(merged.length).toBe(1)
+    expect(close.length).toBe(1)
+
+    // Far enough apart that the second shot no longer reaches back into the
+    // first: two shots, on the same framing, with the camera standing still
+    // across the seam.
+    const apart = buildZoomSegments(
+      atTicks([
+        ...path(),
+        { type: 'click', tick: 60, x: 1240, y: 760, bbox: box },
+        { type: 'click', tick: 300, x: 1240, y: 760, bbox: box },
+      ]),
+      format,
+    )
+    expect(apart.length).toBe(2)
+    const [first, second] = apart
+    expect(first).toBeDefined()
+    expect(second).toBeDefined()
+    if (first === undefined || second === undefined) return
+    expect(first.target).toEqual(second.target)
+
+    // One tick apart on two different elements is not a merge and not a shot
+    // list: it is a recording the camera cannot answer, and it says so.
+    expect(() =>
+      buildZoomSegments(
+        atTicks([
+          ...path(),
+          { type: 'click', tick: 120, x: 1240, y: 760, bbox: box },
+          { type: 'click', tick: 121, x: 1240, y: 760, bbox: other },
+        ]),
+        format,
+      ),
+    ).toThrow(/no time to travel/)
   })
 
   it('holds one shot through both events instead of cutting between them', () => {
-    const events = toTimedEvents(atCaptureScale(fixture('run-toggle-twice')))
+    const events = atCaptureScale(fixture('run-toggle-twice'))
     const segments = buildZoomSegments(events, format)
     const shot = segments[0]
     expect(shot).toBeDefined()
@@ -930,8 +981,14 @@ describe('two interactions at one instant are one shot', () => {
  * A gap too short to pay for that window is refused outright, which is the case
  * for the loud failure rather than for a one-frame jump.
  */
-/** Frame-to-frame steps measured across six output grids; see the test. */
-const GRID_STEPS = 8880
+/**
+ * Frame-to-frame steps measured across six output grids; see the test.
+ *
+ * It grew from 8880 with #9 for the dullest of reasons: the corpus is longer
+ * than the log used to claim. The counter stood still through every page load
+ * and settle wait, so a recording of eleven seconds was measured as eight.
+ */
+const GRID_STEPS = 9231
 
 /**
  * What the corpus sweep below actually watched, in absolute numbers: shots with
@@ -940,7 +997,7 @@ const GRID_STEPS = 8880
  * than from the resting frame, and frame-to-frame steps in all.
  */
 const SHOT_COUNTS = {
-  frames: 1720,
+  frames: 1798,
   handedOver: 10,
   shots: 44,
   tightShots: 5,
@@ -966,7 +1023,7 @@ describe('the camera never jumps', () => {
       for (const spec of [LANDSCAPE, PORTRAIT, SQUARE]) {
         const format = resolveFormat(spec, CAPTURE)
         const segments = buildZoomSegments(
-          toTimedEvents(atCaptureScale(fixture(name))),
+          atCaptureScale(fixture(name)),
           format,
         )
         for (const segment of segments) {
@@ -1004,15 +1061,17 @@ describe('the camera never jumps', () => {
     // The worst step ordinary and crowded motion actually produces, written
     // down next to the bound it is measured against.
     //
-    // **There is almost no headroom left, and that is the intended shape.** The
-    // bound is the spring over `MIN_TRAVEL_MS`, and the corpus contains a shot
-    // the crowded branch squeezes to exactly that floor, so the worst step is
-    // that same spring's busiest frame — 0.27131 against a bound of 0.27141,
-    // four parts in ten thousand below it. Round five read 0.331 against 0.426
-    // and called the distance headroom; it was the floor being more generous
-    // than the material needed. A corpus that brushes the bound is a bound that
-    // describes the fastest move the renderer will actually make.
-    expect(worst).toBeCloseTo(0.2713, 4)
+    // **#9 opened a gap here that was not there before, and it is a loss of
+    // evidence rather than a gain of safety.** On the counter's timeline the
+    // corpus contained a shot the crowded branch squeezed to exactly
+    // `MIN_TRAVEL_MS`, so the worst step brushed the bound: 0.27131 against
+    // 0.27141, four parts in ten thousand below it. On the wall clock no
+    // recording crowds that hard — two interactions on different elements
+    // cannot happen much closer than half a second, because the pointer has to
+    // travel between them — and the worst step falls to 0.1692, 62% of the
+    // bound. The bound is unchanged and still correct; what is gone is the
+    // corpus's proof that it is *tight*. Tracked, not papered over.
+    expect(worst).toBeCloseTo(0.1692, 4)
     expect(worst).toBeLessThan(FLOOR_FRACTION)
   })
 
@@ -1035,7 +1094,7 @@ describe('the camera never jumps', () => {
     // travelling to it. Its own bound, unchanged, rejects it.
     const format = resolveFormat(LANDSCAPE, CAPTURE)
     const segments = buildZoomSegments(
-      toTimedEvents(atCaptureScale(fixture('run-crowded-taps'))),
+      atCaptureScale(fixture('run-crowded-taps')),
       format,
     )
     const crowded = segments[1]
@@ -1108,7 +1167,7 @@ describe('the camera never jumps', () => {
       y: 1200,
       bbox: { x: 2200, y: 1180, width: 200, height: 80 },
     })
-    const segments = buildZoomSegments(toTimedEvents(events), format)
+    const segments = buildZoomSegments(atTicks(events), format)
     expect(segments.length).toBe(2)
     const [first, second] = segments
     expect(first).toBeDefined()
@@ -1168,7 +1227,7 @@ describe('the camera never jumps', () => {
     // why this test asks for 250ms rather than 130ms: 130 is no longer a look
     // the renderer will build at all.
     const format = resolveFormat(LANDSCAPE, CAPTURE)
-    const events = toTimedEvents(atCaptureScale(fixture('run-interior-button')))
+    const events = atCaptureScale(fixture('run-interior-button'))
     const look = { zoomInMs: 250, zoomLeadMs: 300 }
     const segments = buildZoomSegments(events, format, look)
     const segment = segments[0]
@@ -1254,7 +1313,7 @@ describe('a format with no zoom reserve still has pan reserve', () => {
       y: 730,
       bbox: { x: 120, y: 700, width: 220, height: 60 },
     })
-    const timed = toTimedEvents(events)
+    const timed = atTicks(events)
     const segments = buildZoomSegments(timed, format)
     const segment = segments[0]
     expect(segment).toBeDefined()
@@ -1296,7 +1355,7 @@ describe('landscape is left exactly where it was', () => {
     const format = resolveFormat(LANDSCAPE, CAPTURE)
     let checked = 0
     for (const name of FIXTURES) {
-      const events = toTimedEvents(fixture(name))
+      const events = fixture(name)
       const segments = buildZoomSegments(events, format)
       for (const segment of segments) {
         for (const timeMs of [
@@ -1360,7 +1419,7 @@ describe('a bounded-animating target', () => {
   }
 
   it('does not breathe with the element while the camera holds', () => {
-    const events = toTimedEvents(pulsingLog())
+    const events = atTicks(pulsingLog())
     const segments = buildZoomSegments(events, format)
     const segment = segments[0]
     expect(segment).toBeDefined()
@@ -1410,7 +1469,7 @@ describe('a bounded-animating target', () => {
 
 describe('the shot list', () => {
   it('opens the shot early enough for the camera to arrive', () => {
-    const events = toTimedEvents(fixture('run-scroll-click'))
+    const events = fixture('run-scroll-click')
     const format = resolveFormat(LANDSCAPE, CAPTURE)
     for (const segment of buildZoomSegments(events, format)) {
       expect(segment.eventMs - segment.startMs).toBeGreaterThanOrEqual(
@@ -1436,7 +1495,7 @@ describe('the shot list', () => {
   })
 
   it('returns to the resting frame after the shot is over', () => {
-    const events = toTimedEvents(fixture('run-touch'))
+    const events = fixture('run-touch')
     const format = resolveFormat(LANDSCAPE, CAPTURE)
     const segments = buildZoomSegments(events, format)
     const last = segments.at(-1)
@@ -1519,10 +1578,7 @@ describe('the smoothness guard', () => {
     for (const name of FIXTURES) {
       for (const spec of [LANDSCAPE, PORTRAIT, SQUARE]) {
         const wide = resolveFormat(spec, CAPTURE)
-        const segments = buildZoomSegments(
-          toTimedEvents(atCaptureScale(fixture(name))),
-          wide,
-        )
+        const segments = buildZoomSegments(atCaptureScale(fixture(name)), wide)
         expect(() => assertSmoothApproach(segments, wide, look)).not.toThrow()
         checked += segments.length
       }
@@ -1689,7 +1745,7 @@ describe('the smoothness guard', () => {
         ...events,
         { type: 'click', tick: 120 + ticks, x: 2300, y: 1200, bbox: far },
       ]
-      expect(() => buildZoomSegments(toTimedEvents(crowded), format)).toThrow(
+      expect(() => buildZoomSegments(atTicks(crowded), format)).toThrow(
         /no time to travel between them/,
       )
     }
@@ -1698,7 +1754,7 @@ describe('the smoothness guard', () => {
     // own floor of one frame is what makes this the wrong side of the line.
     expect(() =>
       buildZoomSegments(
-        toTimedEvents([
+        atTicks([
           ...events,
           { type: 'click', tick: 133, x: 2300, y: 1200, bbox: far },
         ]),
@@ -1714,7 +1770,7 @@ describe('the smoothness guard', () => {
       ...events,
       { type: 'click', tick: 134, x: 2300, y: 1200, bbox: far },
     ]
-    const segments = buildZoomSegments(toTimedEvents(wide), format)
+    const segments = buildZoomSegments(atTicks(wide), format)
     expect(segments.length).toBe(2)
     const second = segments[1]
     expect(second).toBeDefined()
@@ -1734,7 +1790,7 @@ describe('the smoothness guard', () => {
     // first — turns a sub-floor `zoomInMs` away before any shot exists. That
     // is the earlier and better place for it: the caller is told what to ask
     // for instead of being shown a shot list that could not be built.
-    const events = toTimedEvents(atCaptureScale(fixture('run-interior-button')))
+    const events = atCaptureScale(fixture('run-interior-button'))
     expect(() =>
       buildZoomSegments(events, format, { zoomInMs: 0, zoomLeadMs: 700 }),
     ).toThrow(/is below the 216.7ms a camera move is never given less than/)
@@ -1770,7 +1826,7 @@ describe('the smoothness guard', () => {
               let segments
               try {
                 segments = buildZoomSegments(
-                  toTimedEvents(atCaptureScale(fixture(name))),
+                  atCaptureScale(fixture(name)),
                   wide,
                   asked,
                 )
@@ -1823,7 +1879,7 @@ describe('the smoothness guard', () => {
       y: 1200,
       bbox: { x: 2200, y: 1180, width: 200, height: 80 },
     })
-    const segments = buildZoomSegments(toTimedEvents(events), format)
+    const segments = buildZoomSegments(atTicks(events), format)
     expect(segments.length).toBe(2)
     const [first, second] = segments
     expect(first).toBeDefined()
@@ -1856,7 +1912,7 @@ describe('the smoothness guard', () => {
       y: 760,
       bbox: { x: 1200, y: 700, width: 240, height: 96 },
     })
-    const segments = buildZoomSegments(toTimedEvents(events), format)
+    const segments = buildZoomSegments(atTicks(events), format)
     const first = segments[0]
     expect(first).toBeDefined()
     if (first === undefined) return
@@ -1955,7 +2011,7 @@ describe('a coarser output grid is still a camera move', () => {
         for (const spec of [LANDSCAPE, PORTRAIT, SQUARE]) {
           const format = resolveFormat(spec, CAPTURE)
           const segments = buildZoomSegments(
-            toTimedEvents(atCaptureScale(fixture(name))),
+            atCaptureScale(fixture(name)),
             format,
           )
           for (const segment of segments) {
@@ -1991,18 +2047,15 @@ describe('a coarser output grid is still a camera move', () => {
   it('builds the same shot list whatever the output rate is', () => {
     const format = resolveFormat(LANDSCAPE, CAPTURE)
     const reference = buildZoomSegments(
-      toTimedEvents(atCaptureScale(fixture('run-a'))),
+      atCaptureScale(fixture('run-a')),
       format,
     )
     expect(reference.length).toBeGreaterThan(0)
     // There is no frame-rate input to give it, and that is the point: the shot
     // list is a function of the event log alone.
-    expect(
-      buildZoomSegments(
-        toTimedEvents(atCaptureScale(fixture('run-a'))),
-        format,
-      ),
-    ).toEqual(reference)
+    expect(buildZoomSegments(atCaptureScale(fixture('run-a')), format)).toEqual(
+      reference,
+    )
   })
 })
 
@@ -2015,19 +2068,24 @@ describe('a coarser output grid is still a camera move', () => {
  * refuses valid work is as much a defect as one that stays silent, and this is
  * the second such guard the project has shipped.
  *
- * It is checked at the scale it was logged at — the file here is a byte copy of
- * the artifact — because that is the scale at which the second shot opens 7.1px
- * from its target, which is the path this exists to cover. Asserting that it
- * *does* is the point: a corpus counts as evidence only once a fixture actually
- * enters the guarded path.
+ * The shape this covers is a shot that opens while its predecessor is still
+ * pulling out, so it inherits a camera already in motion instead of the resting
+ * frame. This recording still enters that path in all three formats — asserting
+ * that it *does* is the point, since a corpus counts as evidence only once a
+ * fixture actually gets there.
+ *
+ * **What #9 took away here:** the journey is no longer seven pixels. The two
+ * clicks were logged 900ms apart and really happened 3653ms apart, so the first
+ * shot holds through a much longer rest and hands over from a different point
+ * on its way home — 604px instead of 7.1px in 16:9. The near-zero journey that
+ * killed round four's renderer is therefore no longer produced by any recording
+ * in this corpus; what still pins it is the synthetic pair either side of
+ * `INVISIBLE_MOVE_PX` further up. Said out loud rather than quietly dropped.
  */
 describe('two clicks on adjacent elements', () => {
   it('opens the second shot a few pixels from where it is going', () => {
     const format = resolveFormat(LANDSCAPE, CAPTURE)
-    const segments = buildZoomSegments(
-      toTimedEvents(fixture('run-inner-scroll')),
-      format,
-    )
+    const segments = buildZoomSegments(fixture('run-inner-scroll'), format)
     expect(segments.length).toBe(2)
     const second = segments[1]
     const first = segments[0]
@@ -2046,17 +2104,17 @@ describe('two clicks on adjacent elements', () => {
       Math.abs(second.from.width - second.target.width),
       Math.abs(second.from.height - second.target.height),
     )
-    expect(path).toBeCloseTo(7.06, 2)
-    // Seven pixels of a 2560px raster. No viewer sees it; the renderer must not
-    // die on it.
-    expect(path).toBeLessThan(16)
+    // Measured, not chosen. It was 7.06 while the log carried a counter; the
+    // wall clock puts the two clicks 3653ms apart instead of 900ms, and the
+    // hand-over happens later on the pull-out.
+    expect(path).toBeCloseTo(604.42, 2)
   })
 
   it('renders in all three formats', () => {
     for (const spec of [LANDSCAPE, PORTRAIT, SQUARE]) {
       const format = resolveFormat(spec, CAPTURE)
       expect(() =>
-        buildZoomSegments(toTimedEvents(fixture('run-inner-scroll')), format),
+        buildZoomSegments(fixture('run-inner-scroll'), format),
       ).not.toThrow()
     }
   })

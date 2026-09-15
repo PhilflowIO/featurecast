@@ -103,4 +103,4 @@
 {"type":"pointer","tick":101,"x":640,"y":360}
 {"type":"pointer","tick":102,"x":640,"y":360}
 {"type":"scroll","tick":103,"deltaX":0,"deltaY":1600}
-{"type":"click","tick":241,"x":640,"y":360,"bbox":{"x":0,"y":0,"width":2000,"height":2000}}
+{"type":"click","tick":245,"x":640,"y":360,"bbox":{"x":0,"y":0,"width":2000,"height":2000}}

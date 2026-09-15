@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { DEFAULT_CURSOR_LOOK, type CursorLook } from './cursor.js'
-import { parseEventLog } from './events.js'
+import { parseEventLog, parseEventTimes, toTimedEvents } from './events.js'
 import {
   buildDecodePlan,
   buildEncodePlan,
@@ -94,6 +94,30 @@ async function readEvents(captureDirectory: string): Promise<string> {
 }
 
 /**
+ * Reads the log's clock.
+ *
+ * A missing file is an error rather than a fallback, and deliberately so: the
+ * renderer used to estimate event times from the log's tick counter, and the
+ * estimate was wrong by up to 42 s on a one-minute recording without ever
+ * saying so. A recording made before #9 cannot be rendered correctly and must
+ * be made again; saying that out loud is cheaper than a silently mistimed
+ * video. A recording with no events at all is not affected — there is nothing
+ * to time.
+ */
+async function readEventTimes(captureDirectory: string): Promise<string> {
+  try {
+    return await readFile(join(captureDirectory, 'event-times.jsonl'), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    throw new Error(
+      `${captureDirectory}/event-times.jsonl is missing. The event log carries ` +
+        'no time of its own, so this recording cannot be placed on the ' +
+        'capture clock — record it again with a current build.',
+    )
+  }
+}
+
+/**
  * Renders one raw recording into every requested format.
  *
  * No browser is involved and none can be: the inputs are the frames the
@@ -109,6 +133,17 @@ export async function renderRecording(
 ): Promise<RenderResult> {
   const manifest = await readManifest(captureDirectory)
   const events = parseEventLog(await readEvents(captureDirectory))
+  // One origin for both artifacts: the capture's own start. The frames are
+  // already relative to it, and the event times are epoch readings from the
+  // same machine's clock, so this subtraction is the whole of #9.
+  const timedEvents =
+    events.length === 0
+      ? []
+      : toTimedEvents(
+          events,
+          parseEventTimes(await readEventTimes(captureDirectory)),
+          manifest.session.startedAt,
+        )
   const plan = planRender(
     {
       frames: manifest.frames,
@@ -116,7 +151,7 @@ export async function renderRecording(
       sessionStartedAt: manifest.session.startedAt,
       source: manifest.captureSize,
     },
-    events,
+    timedEvents,
     options,
   )
 
