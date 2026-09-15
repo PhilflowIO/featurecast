@@ -48,6 +48,18 @@ const ZUSTAND = process.env.RAVEN_DEMO_STATE ?? 'auth/state.json'
 const SUCHWORT = 'Steinkauz'
 
 /**
+ * Die erste Zeile der Liste.
+ *
+ * Das `nth=0` ist nicht Kosmetik: `a[href^="/meetings/"]` trifft jede
+ * sichtbare Zeile, und Playwright verweigert einem mehrdeutigen Locator die
+ * Auskunft über Geometrie. Der Rekorder braucht aber genau die, um den
+ * Zeiger dorthin zu fahren — ohne die Einschränkung bricht die Aufnahme mit
+ * einer Zeitüberschreitung ab, die wie ein Ladeproblem aussieht und keines
+ * ist.
+ */
+const ERSTE_ZEILE = 'a[href^="/meetings/"] >> nth=0'
+
+/**
  * Wartet, bis ein Knoten wirklich Fläche hat.
  *
  * `RecordPage` ist absichtlich eine schmale Oberfläche und kennt kein
@@ -142,7 +154,11 @@ async function record(ausgabe: string): Promise<void> {
     },
     async (page, demo) => {
       await page.goto(`${BASIS}/meetings`)
-      await warteAuf(page, '[data-testid="meeting-count"]')
+      // Auf die erste Zeile warten, nicht auf die Kopfzeile: die Kopfzeile
+      // steht sofort im Dokument und sagt eine Sekunde lang "0 Meetings",
+      // weil die Liste ihre Zahl erst vom Server holt. Wer auf sie wartet,
+      // filmt die Null.
+      await warteAuf(page, ERSTE_ZEILE)
       await demo.point('[data-testid="meeting-count"]')
       await demo.hold(1400)
 
@@ -154,7 +170,7 @@ async function record(ausgabe: string): Promise<void> {
       await demo.point('[data-testid="meeting-count"]')
       await demo.hold(1200)
 
-      await demo.click('a[href^="/meetings/"]')
+      await demo.click(ERSTE_ZEILE)
       await warteAuf(page, 'h1')
       await demo.hold(1200)
       await demo.scroll(0, 900)
