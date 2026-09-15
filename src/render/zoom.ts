@@ -190,7 +190,7 @@ export function frameBoundingBox(
   if (width < reserveFloor) {
     const requested = format.base.width / width
     clamp =
-      `${format.aspect}: framing ${Math.round(box.width)}x${Math.round(box.height)} ` +
+      `${format.label}: framing ${Math.round(box.width)}x${Math.round(box.height)} ` +
       `at ${requested.toFixed(2)}x would need more than the ` +
       `${format.maxZoom.toFixed(2)}x the capture holds at full sharpness. ` +
       `Clamped to ${format.maxZoom.toFixed(2)}x — the picture is never blown up.`

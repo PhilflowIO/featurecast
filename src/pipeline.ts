@@ -1,14 +1,20 @@
 import { basename, extname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { assembleScreencast, type EncodeTarget } from './assemble.js'
 import {
+  aspectOf,
   resolveDevice,
   type CaptureSettings,
   type OutputSettings,
   type ResolvedDevice,
 } from './devices.js'
-import { defaultQualityFor, type Encoder } from './encoders.js'
+import {
+  defaultQualityFor,
+  type Encoder,
+  type OutputQuality,
+} from './encoders.js'
+import { DEFAULT_FORMATS, type FormatSpec } from './render/format.js'
+import { formatSlug, renderRecording } from './render/render.js'
 import {
   assertCaptureSupported,
   recordSession,
@@ -54,20 +60,34 @@ export type LoadedScript = {
 
 export type ScriptLoader = (path: string) => Promise<LoadedScript>
 
+/** One finished video: where it is, what it is called, and where it went. */
+export type Delivery = {
+  label: string
+  outputPath: string
+  /** Present only when `--upload` was asked for and succeeded. */
+  url?: string
+}
+
 export type DeviceOutcome =
   | {
       device: string
       kind: 'failed'
       /** The stage that refused, for a report a reader can act on. */
-      stage: 'assemble' | 'device' | 'record' | 'upload'
+      stage: 'device' | 'record' | 'render' | 'upload'
       reason: string
     }
   | {
       device: string
+      /**
+       * Everything the device promised, in the order it was asked for. Plural
+       * since the render stage joined the chain: one recording yields as many
+       * formats as were requested, and the whole point of the post-production
+       * stage is that a second one costs no second browser.
+       */
+      deliveries: readonly Delivery[]
+      /** Where the decisions the render took were written. */
+      decisionsPath: string
       kind: 'rendered'
-      outputPath: string
-      /** Present only when `--upload` was asked for and succeeded. */
-      url?: string
     }
 
 export type RunReport = {
@@ -77,6 +97,11 @@ export type RunReport = {
 }
 
 export type RunRequest = {
+  /**
+   * Deliver all three curated formats instead of the one the device promises.
+   * Off by default; see `formatsFor`.
+   */
+  allFormats?: boolean
   devices: readonly string[]
   /** Overrides the encoder every resolved device's output layer carries. */
   encoder?: Encoder
@@ -88,11 +113,6 @@ export type RunRequest = {
 }
 
 export type PipelineDependencies = {
-  assemble: (
-    captureDirectory: string,
-    outputPath: string,
-    target: EncodeTarget,
-  ) => Promise<unknown>
   loadScript: ScriptLoader
   /** Called once, before any recording, when `--upload` was asked for. */
   checkUploadConfigured: () => void
@@ -102,8 +122,27 @@ export type PipelineDependencies = {
     script: LoadedScript,
     seed: number,
   ) => Promise<{ capture: CaptureSettings; captureDirectory: string }>
+  /**
+   * Post-production. It **replaces** the assemble step rather than following
+   * it: both read the same capture directory and write an MP4, and encoding
+   * twice would feed the second pass from pixels the first one threw away.
+   */
+  render: (
+    captureDirectory: string,
+    outDirectory: string,
+    request: RenderRequest,
+  ) => Promise<{
+    decisionsPath: string
+    outputs: ReadonlyArray<{ label: string; outputPath: string }>
+  }>
   report: (line: string) => void
   upload: (localPath: string, key: string) => Promise<string>
+}
+
+/** What the chain asks the render stage for, per device. */
+export type RenderRequest = {
+  formats: readonly FormatSpec[]
+  quality: OutputQuality
 }
 
 /**
@@ -162,8 +201,6 @@ export function scriptStem(path: string): string {
 }
 
 const DEFAULT_DEPENDENCIES: PipelineDependencies = {
-  assemble: async (captureDirectory, outputPath, target) =>
-    assembleScreencast(captureDirectory, outputPath, undefined, target),
   checkUploadConfigured: () => {
     // Deliberately before the first browser starts. Discovering that the
     // store is unconfigured *after* a 30-second recording and a
@@ -187,10 +224,45 @@ const DEFAULT_DEPENDENCIES: PipelineDependencies = {
     })
     return { capture, captureDirectory: session.captureDirectory }
   },
+  render: async (captureDirectory, outDirectory, request) => {
+    const result = await renderRecording(captureDirectory, outDirectory, {
+      encoder: request.quality,
+      formats: request.formats,
+    })
+    return { decisionsPath: result.decisionsPath, outputs: result.outputs }
+  },
   report: (line) => {
     process.stdout.write(`${line}\n`)
   },
   upload: async (localPath, key) => uploadFile(localPath, { key }),
+}
+
+/**
+ * What a device is delivered in.
+ *
+ * The device layer names exactly one size — that is what a preset promises —
+ * so that is what the chain delivers unless the caller asks for more. Three
+ * formats are a switch and not a default: two of them would be crops nobody
+ * asked for, and for a mobile recording two of the three cannot be cut
+ * sharply at all.
+ *
+ * The label is derived rather than stored, the same rule `docs/DEVICES.md`
+ * states for the device layer: `desktop-wide` delivers 1920x1200, which is
+ * 16:10 and has no name in the curated three, and a stored name would have
+ * contradicted the pixels beside it.
+ */
+export function formatsFor(
+  output: OutputSettings,
+  all: boolean,
+): readonly FormatSpec[] {
+  if (all) return DEFAULT_FORMATS
+  const size = { height: output.height, width: output.width }
+  return [
+    {
+      desired: size,
+      label: aspectOf(size) ?? `${String(size.width)}x${String(size.height)}`,
+    },
+  ]
 }
 
 /**
@@ -269,8 +341,13 @@ async function runOneDevice(
   seed: number,
 ): Promise<DeviceOutcome> {
   const slug = deviceSlug(device)
+  // Two directories, not one. The capture owns `frames/`, `timestamps.json`
+  // and the event log; the render writes its decisions and its videos. Mixed
+  // together, a reader cannot tell which artifact is raw material and which
+  // is a result, and a second render would drop its files between the frames
+  // it read.
   const directory = join(request.out, slug)
-  const outputPath = join(directory, 'output.mp4')
+  const renderDirectory = join(request.out, `${slug}-video`)
 
   // Resolution and the capture gate are one stage on purpose: both are the
   // device layer answering "can this name be recorded", and both messages
@@ -291,49 +368,55 @@ async function runOneDevice(
     return { device, kind: 'failed', reason: messageOf(error), stage: 'record' }
   }
 
+  let rendered: Awaited<ReturnType<PipelineDependencies['render']>>
   try {
-    await deps.assemble(
-      recorded.captureDirectory,
-      outputPath,
-      encodeTargetFor(recorded.capture, resolved.output, request.encoder),
-    )
+    rendered = await deps.render(recorded.captureDirectory, renderDirectory, {
+      formats: formatsFor(resolved.output, request.allFormats === true),
+      quality:
+        request.encoder === undefined
+          ? resolved.output.quality
+          : defaultQualityFor(request.encoder),
+    })
   } catch (error) {
     return {
       device,
       kind: 'failed',
       reason: messageOf(error),
-      stage: 'assemble',
+      stage: 'render',
     }
   }
 
-  if (!request.upload) return { device, kind: 'rendered', outputPath }
+  const deliveries: Delivery[] = rendered.outputs.map((output) => ({
+    label: output.label,
+    outputPath: output.outputPath,
+  }))
+  if (!request.upload) {
+    return {
+      decisionsPath: rendered.decisionsPath,
+      deliveries,
+      device,
+      kind: 'rendered',
+    }
+  }
   try {
-    const url = await deps.upload(outputPath, `${stem}/${slug}.mp4`)
-    return { device, kind: 'rendered', outputPath, url }
+    const uploaded: Delivery[] = []
+    for (const delivery of deliveries) {
+      // One key per deliverable, named after the format: a device that ships
+      // three videos cannot have them all land on one object.
+      const key = `${stem}/${slug}-${formatSlug(delivery.label)}.mp4`
+      uploaded.push({
+        ...delivery,
+        url: await deps.upload(delivery.outputPath, key),
+      })
+    }
+    return {
+      decisionsPath: rendered.decisionsPath,
+      deliveries: uploaded,
+      device,
+      kind: 'rendered',
+    }
   } catch (error) {
     return { device, kind: 'failed', reason: messageOf(error), stage: 'upload' }
-  }
-}
-
-/**
- * The resolved device's own capture and output layers, with the encoder
- * replaced when the caller named one. `--encoder` overrides the preset
- * rather than being a second, parallel setting: there is one encoder per
- * render and the device layer is where it is stored.
- */
-export function encodeTargetFor(
-  capture: CaptureSettings,
-  output: OutputSettings,
-  encoder?: Encoder,
-): EncodeTarget {
-  return {
-    capture: { height: capture.height, width: capture.width },
-    output: {
-      height: output.height,
-      quality:
-        encoder === undefined ? output.quality : defaultQualityFor(encoder),
-      width: output.width,
-    },
   }
 }
 
@@ -341,7 +424,10 @@ function formatOutcome(outcome: DeviceOutcome): string {
   if (outcome.kind === 'failed') {
     return `${outcome.device}: ${outcome.stage} refused — ${outcome.reason}`
   }
-  return outcome.url === undefined
-    ? `${outcome.device}: ${outcome.outputPath}`
-    : `${outcome.device}: ${outcome.url}`
+  return outcome.deliveries
+    .map(
+      (delivery) =>
+        `${outcome.device} ${delivery.label}: ${delivery.url ?? delivery.outputPath}`,
+    )
+    .join('\n')
 }

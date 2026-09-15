@@ -6,7 +6,7 @@ import {
   resolveEncoder,
   type Encoder,
 } from '../encoders.js'
-import { DEFAULT_FORMATS, type AspectName, type FormatSpec } from './format.js'
+import { DEFAULT_FORMATS, type FormatSpec } from './format.js'
 import { renderRecording, type RenderOptions } from './render.js'
 
 const USAGE = `featurecast render — turn a raw recording into finished videos.
@@ -26,7 +26,7 @@ Options
   --no-cursor               Draw no pointer at all
   --idle-threshold <ms>     Stillness this long may be trimmed (600)
   --idle-hold <ms>          What a trimmed stretch is compressed to (250)
-  --fps <n>                 Output frame rate (60)
+  --fps <n>                 Output frame rate (the chain's 60)
   --threads <n>             Composition threads (what the machine can spare)
   --encoder <name>          x264, nvenc-h264 or nvenc-hevc (x264)
   --quality <n>             Constant quality, lower is better (23)
@@ -51,14 +51,14 @@ function readFormats(value: string | undefined): readonly FormatSpec[] {
   if (value === undefined) throw new Error('--formats needs a value')
   const wanted = value.split(',').map((entry) => entry.trim())
   return wanted.map((aspect) => {
-    const known = DEFAULT_FORMATS.find((spec) => spec.aspect === aspect)
+    const known = DEFAULT_FORMATS.find((spec) => spec.label === aspect)
     if (known === undefined) {
       throw new Error(
         `Unknown format "${aspect}". Available: ` +
-          DEFAULT_FORMATS.map((spec) => spec.aspect).join(', '),
+          DEFAULT_FORMATS.map((spec) => spec.label).join(', '),
       )
     }
-    return known satisfies FormatSpec & { aspect: AspectName }
+    return known satisfies FormatSpec
   })
 }
 
@@ -176,7 +176,7 @@ export async function main(argv: readonly string[]): Promise<void> {
   )
   for (const output of result.outputs) {
     process.stdout.write(
-      `  ${output.aspect.padEnd(5)} ${output.width}x${output.height}  ${output.outputPath}\n`,
+      `  ${output.label.padEnd(9)} ${output.width}x${output.height}  ${output.outputPath}\n`,
     )
     for (const clamp of output.clamps) {
       process.stdout.write(`    ! ${clamp}\n`)

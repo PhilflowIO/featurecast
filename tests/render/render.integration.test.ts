@@ -20,7 +20,7 @@ import {
 } from '../../src/render/ffmpeg.js'
 import type { Size } from '../../src/render/geometry.js'
 import { composeFrame } from '../../src/render/pipeline.js'
-import { aspectSlug, renderRecording } from '../../src/render/render.js'
+import { formatSlug, renderRecording } from '../../src/render/render.js'
 import { SpriteCache } from '../../src/render/sprite.js'
 
 const run = promisify(execFile)
@@ -376,7 +376,7 @@ describe('rendering a recording end to end', () => {
     const capture = await makeCapture()
     const out = await scratch('featurecast-idle-')
     const result = await renderRecording(capture, out, {
-      formats: [{ aspect: '16:9', desired: { width: 640, height: 360 } }],
+      formats: [{ label: '16:9', desired: { width: 640, height: 360 } }],
       encoder: { crf: 0, encoder: 'x264' },
     })
 
@@ -542,7 +542,7 @@ describe('rendering a recording end to end', () => {
           expectedRaster,
         )
         const actual = await encodedFrame(
-          join(out, `${aspectSlug(format.aspect)}.mp4`),
+          join(out, `${formatSlug(format.label)}.mp4`),
           n,
           format.output,
         )
@@ -563,12 +563,12 @@ describe('rendering a recording end to end', () => {
     const out = await scratch('featurecast-look-')
     const before = await renderRecording(capture, out, {
       dryRun: true,
-      formats: [{ aspect: '16:9', desired: { width: 640, height: 360 } }],
+      formats: [{ label: '16:9', desired: { width: 640, height: 360 } }],
       zoom: { paddingPx: 8 },
     })
     const after = await renderRecording(capture, out, {
       dryRun: true,
-      formats: [{ aspect: '16:9', desired: { width: 640, height: 360 } }],
+      formats: [{ label: '16:9', desired: { width: 640, height: 360 } }],
       zoom: { paddingPx: 240 },
     })
     const beforeCrops = before.plan.formats[0]?.frames.map(

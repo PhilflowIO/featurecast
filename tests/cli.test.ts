@@ -14,7 +14,7 @@ const RECORDED_CAPTURE = {
 } as const
 
 type Harness = {
-  assemble: ReturnType<typeof vi.fn>
+  render: ReturnType<typeof vi.fn>
   pipeline: Partial<PipelineDependencies>
   record: ReturnType<typeof vi.fn>
   text: { err: string; out: string }
@@ -22,7 +22,19 @@ type Harness = {
 }
 
 function harness(overrides: Partial<PipelineDependencies> = {}): Harness {
-  const assemble = vi.fn(async () => undefined)
+  const render = vi.fn(
+    async (
+      _captureDirectory: string,
+      outDirectory: string,
+      request: { formats: readonly { label: string }[] },
+    ) => ({
+      decisionsPath: `${outDirectory}/decisions.json`,
+      outputs: request.formats.map((format) => ({
+        label: format.label,
+        outputPath: `${outDirectory}/${format.label.replace(':', '-')}.mp4`,
+      })),
+    }),
+  )
   const record = vi.fn(async (_device: unknown, outputDirectory: string) => ({
     capture: RECORDED_CAPTURE,
     captureDirectory: outputDirectory,
@@ -31,12 +43,12 @@ function harness(overrides: Partial<PipelineDependencies> = {}): Harness {
     async (_path: string, key: string) => `https://store.example/${key}`,
   )
   return {
-    assemble,
+    render,
     pipeline: {
-      assemble,
       checkUploadConfigured: vi.fn(),
       loadScript: vi.fn(async () => async () => undefined),
       record,
+      render,
       upload,
       ...overrides,
     } as Partial<PipelineDependencies>,
@@ -76,10 +88,10 @@ describe('featurecast run', () => {
     expect(code).toBe(0)
     expect(context.record).toHaveBeenCalledTimes(2)
     expect(context.text.out).toContain(
-      'https://store.example/feature-xy/desktop-wide.mp4',
+      'https://store.example/feature-xy/desktop-wide-1920x1200.mp4',
     )
     expect(context.text.out).toContain(
-      'https://store.example/feature-xy/desktop-chrome.mp4',
+      'https://store.example/feature-xy/desktop-chrome-16-9.mp4',
     )
   })
 
@@ -149,9 +161,29 @@ describe('featurecast run', () => {
       'nvenc-h264',
     ])
     expect(code).toBe(0)
-    expect(context.assemble.mock.calls[0]?.[2]).toMatchObject({
-      output: { quality: { cq: 23, encoder: 'nvenc-h264' } },
+    expect(context.render.mock.calls[0]?.[2]).toMatchObject({
+      quality: { cq: 23, encoder: 'nvenc-h264' },
     })
+  })
+
+  it('delivers all three formats only when asked for them', async () => {
+    const { code, harness: context } = await run([
+      'run',
+      'demo/feature-xy.ts',
+      '--devices',
+      'desktop-wide',
+      '--all-formats',
+    ])
+    expect(code).toBe(0)
+    expect(context.record).toHaveBeenCalledTimes(1)
+    const request = context.render.mock.calls[0]?.[2] as {
+      formats: readonly { label: string }[]
+    }
+    expect(request.formats.map((format) => format.label)).toEqual([
+      '16:9',
+      '9:16',
+      '1:1',
+    ])
   })
 })
 

@@ -240,7 +240,9 @@ export type PipelineOptions = {
  * Runs one decode, composes every output frame for every format, and feeds the
  * encoders. Returns when all of them have exited cleanly.
  */
-export async function runPipeline(options: PipelineOptions): Promise<void> {
+export async function runComposePipeline(
+  options: PipelineOptions,
+): Promise<void> {
   const spawnProcess = options.spawn ?? defaultSpawn
   const decoder = spawnProcess(options.decode.command, options.decode.arguments)
   const failures: Error[] = []
@@ -253,7 +255,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
     const child = spawnProcess(entry.command, entry.arguments)
     return {
       child,
-      exit: exited(child, `ffmpeg (${entry.format.aspect})`),
+      exit: exited(child, `ffmpeg (${entry.format.label})`),
       format: entry.format,
       target: createRaster(entry.format.output),
     }
@@ -329,7 +331,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
         const decision = encoder.format.frames[n]
         if (decision === undefined) {
           throw new Error(
-            `Format ${encoder.format.aspect} has no decision for output ` +
+            `Format ${encoder.format.label} has no decision for output ` +
               `frame ${String(n)}`,
           )
         }

@@ -1,3 +1,4 @@
+import { FRAME_RATE } from '../assemble.js'
 import {
   cursorAt,
   cursorLookFor,
@@ -10,7 +11,6 @@ import type { TimedEvent } from './events.js'
 import {
   DEFAULT_FORMATS,
   resolveFormat,
-  type AspectName,
   type FormatSpec,
   type ResolvedFormat,
 } from './format.js'
@@ -79,7 +79,7 @@ export type FrameDecision = {
 }
 
 export type FormatPlan = {
-  aspect: AspectName
+  label: string
   base: Rect
   /** Every framing request that hit the sharpness ceiling, in plain words. */
   clamps: readonly string[]
@@ -160,7 +160,11 @@ export function planRender(
   events: readonly TimedEvent[],
   options: PlanOptions = {},
 ): RenderPlan {
-  const fps = options.fps ?? 60
+  // The one frame rate. It used to be a bare 60 here, a second bare 60 in the
+  // render command's help text, and `FRAME_RATE` in the capture and assemble
+  // stages — three unconnected places for one number, so `--fps 30` produced
+  // a video the chain's own checks had never seen.
+  const fps = options.fps ?? FRAME_RATE
   if (!Number.isFinite(fps) || fps <= 0) {
     throw new Error(`Render fps must be positive, got ${fps}`)
   }
@@ -242,7 +246,7 @@ export function planRender(
     }
 
     formats.push({
-      aspect: format.aspect,
+      label: format.label,
       base: format.base,
       clamps: [...clamps],
       frames: decisions,
@@ -306,7 +310,7 @@ export function serializePlan(plan: RenderPlan): string {
         outputMs: number(frame.outputMs),
       })),
       formats: plan.formats.map((format) => ({
-        aspect: format.aspect,
+        label: format.label,
         output: { width: format.output.width, height: format.output.height },
         base: rect(format.base),
         panBounds: rect(format.panBounds),
