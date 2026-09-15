@@ -36,9 +36,7 @@ Was das kostet, offen gesagt: ein Zoom in eine mobile Aufnahme schneidet in ein 
 
 ## Zum Ansehen
 
-![Ein Ausschnitt in Originalgröße aus dem fertigen Video: 16-Pixel-Fließtext der Anwendung, gezeichnet in 1080 Bildpunkten Breite](stills/m3-schaerfe-1zu1.png)
-
-![Das fertige Hochformat, dunkler Modus, nach drei Fingertipps](stills/m3-hochformat-dunkel.png)
+**Die beiden Standbilder dieses Abschnitts sind aus der Versionierung entfernt**, weil sie die Oberfläche der gefilmten Fremdanwendung zeigten. Das erste war ein Ausschnitt in Originalgröße aus dem fertigen Video: 16-Pixel-Fließtext der Anwendung, gezeichnet in 1080 Bildpunkten Breite — der Bildbeleg für die Schärfe-Aussage weiter oben. Das zweite zeigte das fertige Hochformat im dunklen Modus nach drei Fingertipps. Die gemessenen Aussagen stehen unverändert; ihr Bildbeleg wird aus dem eigenen Messkorpus nachgereicht.
 
 Das fertige Video und der direkte Vergleich mit dem abgelehnten Versuch (links der 9:16-Ausschnitt aus der Desktop-Aufnahme, rechts das echte Hochformat) liegen unter `artifacts/m3-acceptance/iphone/output.mp4` und `artifacts/m3-vergleich/vorher-nachher.mp4`.
 
