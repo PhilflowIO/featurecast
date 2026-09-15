@@ -627,22 +627,22 @@ slideshow. The diagnosis was run as an experiment, not as reading. Three
 renders of the same raw material, measuring the largest pointer step per
 output frame:
 
-| Variant                             | Largest step |
-| ----------------------------------- | ------------ |
-| as delivered                        | 66 px        |
-| camera held still (`--zoom 1.001`)  | 65 px        |
-| idle trimming off                   | **15 px**    |
+| Variant                            | Largest step |
+| ---------------------------------- | ------------ |
+| as delivered                       | 66 px        |
+| camera held still (`--zoom 1.001`) | 65 px        |
+| idle trimming off                  | **15 px**    |
 
 Holding the camera still changes nothing. The recorder guarantees at most
 20 px between two samples and proves it by construction, so the motion
 itself was never the problem. **Idle trimming was.** Its signal is whether
-the captured *picture* changed — and a page at rest with a pointer moving
+the captured _picture_ changed — and a page at rest with a pointer moving
 across it looks exactly like stillness. A 700 ms journey gets compressed to
 250 ms, the same distance lands on a third of the frames, and the pointer
 jumps.
 
 The first diagnosis was wrong and had to be withdrawn mid-run: measured in
-*output* coordinates the pointer moves 66 px, which blames the camera,
+_output_ coordinates the pointer moves 66 px, which blames the camera,
 because the camera moves too. In source pixels it moves at most 16 px. The
 instrument that followed therefore measures source pixels, and it carries
 two denominator guards — frame count and trimmed milliseconds — so it cannot
@@ -660,7 +660,7 @@ The trimmed stretches are wall-clock frame times; the events carry counted
 which `plan.ts` already said about itself, with the caveat that no harm had
 been reproduced. It has been reproduced now. So the order reverses: one
 clock first (#9), then teach trimming that a stretch is only still when the
-page *and* the pointer are still.
+page _and_ the pointer are still.
 
 ---
 

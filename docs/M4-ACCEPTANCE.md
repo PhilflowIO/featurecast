@@ -73,7 +73,7 @@ Two causes, both fixed at the source:
 
 - **Idle trimming compressed stretches the pointer was crossing.** Its signal is
   whether the captured picture changed, and a page at rest with a pointer moving
-  over it does not change a pixel. It now trims only where the picture *and* the
+  over it does not change a pixel. It now trims only where the picture _and_ the
   pointer are still.
 - **The recorder fired bursts to catch up.** Samples were paced on absolute
   deadlines, so a slow `mouse.move` left every later deadline in the past: two
@@ -82,10 +82,10 @@ Two causes, both fixed at the source:
 
 Re-run on the same recording, all three formats:
 
-| | worst pointer step | trimmed | output |
-| --- | --- | --- | --- |
-| before | 329.8px | 6.25s | 14.42s |
-| after | **16.7px** | 1.06s | 19.61s |
+|        | worst pointer step | trimmed | output |
+| ------ | ------------------ | ------- | ------ |
+| before | 329.8px            | 6.25s   | 14.42s |
+| after  | **16.7px**         | 1.06s   | 19.61s |
 
 **The video is five seconds longer, and that is the trade.** Five of the six
 seconds the old trimmer removed were the pointer travelling, which is not idle
