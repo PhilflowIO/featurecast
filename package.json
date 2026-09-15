@@ -1,6 +1,28 @@
 {
   "name": "featurecast",
   "version": "0.0.0",
+  "description": "Turn a Playwright script into a polished product demo video: smooth cursor, automatic zoom, 16:9 / 9:16 / 1:1 from one recording.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PhilflowIO/featurecast.git"
+  },
+  "homepage": "https://github.com/PhilflowIO/featurecast#readme",
+  "bugs": {
+    "url": "https://github.com/PhilflowIO/featurecast/issues"
+  },
+  "keywords": [
+    "playwright",
+    "product-demo",
+    "screen-recording",
+    "screencast",
+    "demo-video",
+    "video-generation",
+    "ffmpeg",
+    "automation",
+    "devtools-protocol",
+    "chromium"
+  ],
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.34.1",
