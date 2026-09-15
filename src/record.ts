@@ -327,7 +327,15 @@ export function createRecorder(
             ),
           )
           dispatchedAt = Date.now()
-          await page.mouse.move(next.x, next.y, { steps: 1 })
+          // A touch device has no cursor to move, and moving one anyway is
+          // not free: it fires `:hover` on everything the path crosses, so
+          // the video shows highlight states a phone can never produce. The
+          // travel itself is kept — it is written to the log and the render
+          // draws the finger along it — because what is being recorded is a
+          // journey across the screen, not a teleport between two taps.
+          if (!page.hasTouch) {
+            await page.mouse.move(next.x, next.y, { steps: 1 })
+          }
           pointer = next
           // `tick` is the scheduled 60Hz slot index: every generated sample —
           // including one that rounds to the same pixel as its predecessor
@@ -444,8 +452,23 @@ export function createRecorder(
         point: async (target) => {
           await moveTo(target)
         },
+        // The one press a shared script writes. On a pointer device it is a
+        // mouse click; on a touch device it is a tap, and the log says so —
+        // which is what makes the render draw a blooming ripple instead of
+        // an arrow (`src/render/cursor.ts` reads the event types, not the
+        // device). PLAN.md's promise that the same script runs desktop and
+        // mobile without a branch in the script lives or dies here.
+        //
+        // It used to click with the mouse on every device. Measured against
+        // a real application at a phone's width: the drawer that opens from
+        // the menu button never opened, because it listens for a tap.
         click: async (target) => {
           const hit = await moveTo(target)
+          if (page.hasTouch) {
+            await page.touchscreen.tap(hit.x, hit.y)
+            log({ type: 'tap', tick, x: hit.x, y: hit.y, bbox: hit.bbox })
+            return
+          }
           await page.mouse.click(hit.x, hit.y)
           log({
             type: 'click',
