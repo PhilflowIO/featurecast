@@ -9,26 +9,36 @@ import { parseEventLog } from '../../src/render/events.js'
 import { resolveFormat, type FormatSpec } from '../../src/render/format.js'
 import { boxToRect, contains, type Rect } from '../../src/render/geometry.js'
 import {
+  approachStepFraction,
   assertSmoothApproach,
   buildZoomSegments,
   cropAt,
   DEFAULT_ZOOM_LOOK,
   frameBoundingBox,
+  INVISIBLE_MOVE_PX,
+  MIN_TRAVEL_MS,
   peakStepFraction,
+  pullOutStepFraction,
   resolveLook,
   type ZoomSegment,
 } from '../../src/render/zoom.js'
 
 /**
- * The window an approach is never squeezed below, and the fraction of its path
- * the spring covers in its busiest frame over exactly that window. Eight frames
- * at 60Hz; the bound the shipped guard uses.
+ * The window a camera move is never squeezed below, and the fraction of its
+ * path the spring covers in its busiest frame over exactly that window — the
+ * bound the shipped guard uses, imported from the code that ships it rather
+ * than recomputed here.
+ *
+ * Round five recomputed it: `FLOOR_FRACTION` was `peakStepFraction(8/60 * 1000,
+ * spring)` evaluated in this file, so the line that claimed to pin the
+ * production bound pinned a number the production bound could not reach.
+ * Multiplying `zoom.ts`'s own expression by 1.05 or 1.10 killed nothing. Both
+ * numbers below are now literals measured once and written down, and the values
+ * they are compared against come out of `src/render/zoom.js`.
  */
-const APPROACH_FLOOR_MS = (8 * 1000) / 60
-const FLOOR_FRACTION = peakStepFraction(
-  APPROACH_FLOOR_MS,
-  DEFAULT_ZOOM_LOOK.spring,
-)
+const APPROACH_FLOOR_MS = MIN_TRAVEL_MS
+const FLOOR_FRACTION = approachStepFraction(DEFAULT_ZOOM_LOOK)
+const PULL_OUT_FRACTION = pullOutStepFraction(DEFAULT_ZOOM_LOOK)
 
 const LANDSCAPE: FormatSpec = {
   aspect: '16:9',
@@ -58,11 +68,29 @@ const CAPTURE = { width: 2560, height: 1600 }
  * the code that decides what happens when two shots collide was never once
  * executed by a test. These two make it reachable with real material.
  *
- * `run-close-taps` is synthetic and deliberately extreme: two taps 400ms apart
- * on opposite sides of the viewport, which is the case where a truncated shot
- * puts the clicked element *entirely outside* the picture rather than merely
- * off-centre. Two taps that far apart that fast are ordinary on a touch screen
- * — the finger lifts, so there is no pointer path between them.
+ * `run-crowded-taps` and `run-far-taps` are round six's, and they are
+ * recordings — `demo/m4-fixtures.ts` is the script, run in the Playwright
+ * container on the AI box, and the two files here are byte copies of what it
+ * wrote. They replace two fixtures no recorder could produce. `run-interior-
+ * taps` moved the pointer 193.1px between two consecutive samples against the
+ * hard 20px cap in `src/motion.ts:57`; `run-close-taps` put 1116px between two
+ * taps with no pointer path at all, while its comment claimed "the finger
+ * lifts, so there is no pointer path between them" and `tap()` in fact travels
+ * to its target like every other interaction (`src/record.ts:344-348`). This is
+ * the sixth fixture in this project whose comment asserted a provenance the
+ * code contradicts, and the check that catches them is one line: the largest
+ * step between consecutive pointer samples, asserted below for every fixture.
+ *
+ * What the recorder's own physics says about the pair is the interesting part.
+ * `travelDuration` floors a journey at 220ms and `minimumJerkBoundSamples` adds
+ * roughly 0.127 samples per pixel of path, so *how fast two taps can follow
+ * each other is a function of how far apart they are*. `run-crowded-taps` is
+ * 238 viewport pixels apart and lands 600ms apart, inside the 700ms lead: the
+ * crowded branch. `run-far-taps` is 1051 apart and lands 2650ms apart — the
+ * shape `run-close-taps` pretended to have, and the evidence that two distant
+ * taps simply cannot crowd. Its journeys are 640, 1660 and 1480px in the three
+ * formats, exactly the ones the deleted fixture carried, and its pull-out runs
+ * to completion, which is what the new pull-out guard is measured on.
  *
  * The last three are round four's, and they exist for two reasons the first
  * eight could not serve.
@@ -110,9 +138,9 @@ const FIXTURES = [
   'run-hero',
   'run-a',
   'run-b',
-  'run-close-taps',
+  'run-far-taps',
   'run-toggle-twice',
-  'run-interior-taps',
+  'run-crowded-taps',
   'run-interior-button',
 ]
 
@@ -138,11 +166,11 @@ const SHOTS: Record<
     segments: number
   }
 > = {
-  'run-a': { crowded: 1, holdMs: [251.6, 900], interactions: 2, segments: 2 },
-  'run-b': { crowded: 1, holdMs: [251.6, 900], interactions: 2, segments: 2 },
-  'run-close-taps': {
+  'run-a': { crowded: 1, holdMs: [216.7, 900], interactions: 2, segments: 2 },
+  'run-b': { crowded: 1, holdMs: [216.7, 900], interactions: 2, segments: 2 },
+  'run-crowded-taps': {
     crowded: 1,
-    holdMs: [232.3, 1000],
+    holdMs: [348.4, 900],
     interactions: 2,
     segments: 2,
   },
@@ -160,9 +188,9 @@ const SHOTS: Record<
     interactions: 1,
     segments: 1,
   },
-  'run-interior-taps': {
-    crowded: 1,
-    holdMs: [232.3, 900],
+  'run-far-taps': {
+    crowded: 0,
+    holdMs: [900, 900],
     interactions: 2,
     segments: 2,
   },
@@ -441,8 +469,8 @@ describe('the zoom frames the hit element at every click', () => {
     expect(checked).toBe(18)
     expect(free).toEqual([
       'run-toggle-twice',
-      'run-interior-taps',
-      'run-interior-taps',
+      'run-crowded-taps',
+      'run-crowded-taps',
       'run-interior-button',
     ])
     expect(free.length).toBe(4)
@@ -558,32 +586,41 @@ describe('a shot never ends before its own event', () => {
 
   it('would frame a way-point if the shot were truncated, which is why it is not', () => {
     // The old rule, applied by hand to the shots the new one produced, so the
-    // assertion above is shown to be sharp rather than merely green. Two taps
-    // 400ms apart on opposite sides: truncating the first shot at the second's
-    // ideal start leaves the tapped element completely out of frame at the
-    // moment it is tapped.
-    const events = toTimedEvents(atCaptureScale(fixture('run-close-taps')))
-    const segments = buildZoomSegments(events, format)
+    // assertion above is shown to be sharp rather than merely green: truncating
+    // the first shot at the second's ideal start leaves the tapped element
+    // completely out of frame at the moment it is tapped.
+    //
+    // **The lead is lengthened rather than the taps moved closer, and that is
+    // the honest way round.** For the truncated crop to lose the element the
+    // two must be far apart; for them to collide at all the second's approach
+    // must reach back past the first's event. Round five bought both at once
+    // with `run-close-taps`, which put 1116px between two taps 400ms apart —
+    // material no recorder can produce, because `tap()` walks its pointer there
+    // (`src/record.ts:344-348`) and that walk is floored at 220ms and grows with
+    // distance (`src/motion.ts:305-307`). Measured on the recordings that
+    // replaced it, the truncated crop keeps the element framed in all three
+    // formats at every crowding a log can reach — the strong claim is simply
+    // not reachable by moving taps together. A 3000ms lead over
+    // `run-far-taps` buys the collision from a look parameter the product
+    // exposes instead of from a log it cannot record, and the element then
+    // misses the truncated 16:9 crop by 386px.
+    const look = { ...DEFAULT_ZOOM_LOOK, zoomLeadMs: 3000 }
+    const events = toTimedEvents(atCaptureScale(fixture('run-far-taps')))
+    const segments = buildZoomSegments(events, format, look)
     const first = segments[0]
     const second = segments[1]
     expect(first).toBeDefined()
     expect(second).toBeDefined()
     if (first === undefined || second === undefined) return
 
-    const truncatedStart = Math.max(
-      0,
-      second.eventMs - DEFAULT_ZOOM_LOOK.zoomLeadMs,
-    )
+    const truncatedStart = Math.max(0, second.eventMs - look.zoomLeadMs)
     expect(truncatedStart).toBeLessThan(first.eventMs)
     const truncated = [
       { ...first, endMs: truncatedStart },
       {
         ...second,
         startMs: truncatedStart,
-        zoomInMs: Math.min(
-          DEFAULT_ZOOM_LOOK.zoomInMs,
-          second.eventMs - truncatedStart,
-        ),
+        zoomInMs: Math.min(look.zoomInMs, second.eventMs - truncatedStart),
       },
     ]
     const wayPoint = cropAt(first.eventMs, truncated, format)
@@ -798,7 +835,7 @@ describe('two interactions at one instant are one shot', () => {
  * for the loud failure rather than for a one-frame jump.
  */
 /** Frame-to-frame steps measured across six output grids; see the test. */
-const GRID_STEPS = 8610
+const GRID_STEPS = 9335
 
 /**
  * What the corpus sweep below actually watched, in absolute numbers: shots with
@@ -807,10 +844,10 @@ const GRID_STEPS = 8610
  * than from the resting frame, and frame-to-frame steps in all.
  */
 const SHOT_COUNTS = {
-  frames: 1666,
-  handedOver: 15,
+  frames: 1809,
+  handedOver: 12,
   shots: 49,
-  tightShots: 16,
+  tightShots: 10,
 }
 
 describe('the camera never jumps', () => {
@@ -869,10 +906,17 @@ describe('the camera never jumps', () => {
     expect(handedOver).toBe(SHOT_COUNTS.handedOver)
     expect(frames).toBe(SHOT_COUNTS.frames)
     // The worst step ordinary and crowded motion actually produces, written
-    // down next to the bound it is measured against. The gap between them is
-    // the guard's headroom; it is not slack, it is the distance between a
-    // camera move and a cut.
-    expect(worst).toBeCloseTo(0.331, 3)
+    // down next to the bound it is measured against.
+    //
+    // **There is almost no headroom left, and that is the intended shape.** The
+    // bound is the spring over `MIN_TRAVEL_MS`, and the corpus contains a shot
+    // the crowded branch squeezes to exactly that floor, so the worst step is
+    // that same spring's busiest frame — 0.27131 against a bound of 0.27141,
+    // four parts in ten thousand below it. Round five read 0.331 against 0.426
+    // and called the distance headroom; it was the floor being more generous
+    // than the material needed. A corpus that brushes the bound is a bound that
+    // describes the fastest move the renderer will actually make.
+    expect(worst).toBeCloseTo(0.2713, 4)
     expect(worst).toBeLessThan(FLOOR_FRACTION)
   })
 
@@ -891,11 +935,11 @@ describe('the camera never jumps', () => {
 
   it('would fail a shot that arrived by cutting, which is why it passes the ones that do not', () => {
     // The mutation applied by hand to the shots the shipped rule produces: the
-    // crowded shot in `run-interior-taps` jumps to its framing instead of
+    // crowded shot in `run-crowded-taps` jumps to its framing instead of
     // travelling to it. Its own bound, unchanged, rejects it.
     const format = resolveFormat(LANDSCAPE, CAPTURE)
     const segments = buildZoomSegments(
-      toTimedEvents(atCaptureScale(fixture('run-interior-taps'))),
+      toTimedEvents(atCaptureScale(fixture('run-crowded-taps'))),
       format,
     )
     const crowded = segments[1]
@@ -1014,23 +1058,31 @@ describe('the camera never jumps', () => {
     expect(jumped).toBeGreaterThan(300)
   })
 
-  it('keeps its pace when the look asks for a much shorter approach', () => {
-    // The bound is the look's, not a constant: a 130ms approach is allowed its
-    // own, larger, per-frame share and is still a move rather than a cut. The
-    // shot list builds — the guard inside `buildZoomSegments` measures the same
-    // thing this file does and would refuse it otherwise.
+  it('moves faster per frame for a shorter approach, under the same one bound', () => {
+    // A look may ask for a brisker camera, and the shot then really does cover
+    // more of its path per frame — but it is measured against the same absolute
+    // bound as everything else, not against a bound derived from its own
+    // request.
+    //
+    // **That is the round-six correction.** Round five read the limit off the
+    // look (`peakStepFraction(look.zoomInMs)`), so asking for a faster camera
+    // also bought permission to be faster, and a 130ms request was judged
+    // against a 130ms standard — an identity dressed as a guard. The floor is
+    // absolute now and a look below it is refused in `resolveLook`, which is
+    // why this test asks for 250ms rather than 130ms: 130 is no longer a look
+    // the renderer will build at all.
     const format = resolveFormat(LANDSCAPE, CAPTURE)
     const events = toTimedEvents(atCaptureScale(fixture('run-interior-button')))
-    const look = { zoomInMs: 130, zoomLeadMs: 200 }
+    const look = { zoomInMs: 250, zoomLeadMs: 300 }
     const segments = buildZoomSegments(events, format, look)
     const segment = segments[0]
     expect(segment).toBeDefined()
     if (segment === undefined) return
     const path = span(segment.from, segment.target)
-    // The floor never exceeds what the look asked for: a deliberate 130ms
-    // `zoomInMs` gets a 130ms floor, not a contradiction with the 133.3ms one.
-    const limit = peakStepFraction(130, DEFAULT_ZOOM_LOOK.spring)
-    expect(limit).toBeGreaterThan(FLOOR_FRACTION)
+    // The bound does not move with the request: it is the spring over the
+    // floor, whatever the look asked for.
+    const limit = FLOOR_FRACTION
+    expect(limit).toBe(approachStepFraction({ ...DEFAULT_ZOOM_LOOK, ...look }))
     let worst = 0
     for (
       let timeMs = segment.startMs;
@@ -1393,31 +1445,43 @@ describe('the smoothness guard', () => {
 
   it('throws on an approach squeezed below the floor, however smooth', () => {
     // Interpolated perfectly along the spring — but over four frames instead of
-    // eight. The motion looks like a curve and is still a cut, and the window
-    // is judged on its own rather than inferred from the curve.
+    // thirteen. The motion looks like a curve and is still a cut, and the
+    // window is judged on its own rather than inferred from the curve.
     const windowMs = 4 * (1000 / 60)
     expect(() =>
       assertSmoothApproach(shots(640, windowMs, windowMs), format, look),
-    ).toThrow(/below the 133.3ms floor/)
+    ).toThrow(/below the 216.7ms floor/)
   })
 
   it('pins the bound from both sides, so moving it either way fails', () => {
-    // Eight frames is the floor and rides the spring at 36.7% of its path in
-    // its busiest frame; six frames takes 48.2% and is over the bound. In
-    // between sits the headroom between `peakStepFraction`'s supremum over all
-    // frame phases and the one phase a shot list actually has — measured, seven
-    // frames realises 40.2% against the 42.6% allowance.
+    // Thirteen frames is the floor and rides the spring at 27.14% of its path
+    // in its busiest frame. One frame less takes 29.29%, one frame more 25.28%
+    // — the bound is not a plateau, so a floor moved either way moves it.
     expect(() =>
       assertSmoothApproach(shots(640, 700, APPROACH_FLOOR_MS), format, look),
     ).not.toThrow()
     expect(() =>
       assertSmoothApproach(shots(640, 700, 6 * (1000 / 60)), format, look),
     ).toThrow(/is a cut, not a camera move/)
-    // And the number itself, to three places. Every multiplier a mutation could
-    // apply to the bound — a thousand, a tenth, a fifth — fails this line, and
-    // the corpus sweep above fails any tightening, because ordinary motion
-    // measures 0.156 against it.
-    expect(FLOOR_FRACTION).toBeCloseTo(0.426, 3)
+    // The number itself, to four places, which is what fails a loosened bound.
+    // A *tightened* one is caught by the corpus sweep above rather than here:
+    // the worst step real material produces is 0.2713, four parts in ten
+    // thousand under this, so the two assertions close on the bound from
+    // opposite sides with nothing between them.
+    //
+    // Round five pinned 0.426 to three places and called the distance to the
+    // corpus's 0.331 headroom. It was not headroom — it was a floor set at
+    // eight frames where the recorder can only deliver thirteen.
+    expect(FLOOR_FRACTION).toBeCloseTo(0.2714, 4)
+    expect(FLOOR_FRACTION).toBe(peakStepFraction(MIN_TRAVEL_MS, look.spring))
+    expect(peakStepFraction(12 * (1000 / 60), look.spring)).toBeCloseTo(
+      0.2929,
+      4,
+    )
+    expect(peakStepFraction(14 * (1000 / 60), look.spring)).toBeCloseTo(
+      0.2528,
+      4,
+    )
   })
 
   it('does not fail a journey too small to see', () => {
@@ -1429,11 +1493,45 @@ describe('the smoothness guard', () => {
     expect(() =>
       assertSmoothApproach(shots(7.1, 700, 0), format, look),
     ).not.toThrow()
-    // Sixteen pixels is the line, and it is far below any real journey: the
-    // shortest the corpus produces is 280px.
-    expect(() => assertSmoothApproach(shots(17, 700, 0), format, look)).toThrow(
-      /is a cut, not a camera move/,
+    // The line itself, pinned from both sides through the constant rather than
+    // through two literals that happen to straddle it: half a pixel under
+    // passes, half a pixel over fails. Round five wrote 7.1 and 17 in, which
+    // left 8, 10 and 15 as free choices no test objected to.
+    expect(INVISIBLE_MOVE_PX).toBe(16)
+    expect(() =>
+      assertSmoothApproach(
+        shots(INVISIBLE_MOVE_PX - 0.5, 700, 0),
+        format,
+        look,
+      ),
+    ).not.toThrow()
+    expect(() =>
+      assertSmoothApproach(
+        shots(INVISIBLE_MOVE_PX + 0.5, 700, 0),
+        format,
+        look,
+      ),
+    ).toThrow(/is a cut, not a camera move/)
+  })
+
+  it('bounds the way home on the relaxed spring, with a floor under it', () => {
+    // The pull-out had no pinned number at all until round six: its allowance
+    // was formed from `segment.zoomOutMs`, the same field the motion is
+    // interpolated along, so a shorter pull-out bought its own permission and a
+    // `zoomOutMs: 0` was granted the whole journey in one frame.
+    //
+    // Two facts hold it down now. The bound is read off the look, and it is the
+    // tighter of the two because the pull-out is never squeezed: 900ms of
+    // relaxed spring covers 5.47% of its path in its busiest frame, against the
+    // 27.14% the approach is allowed over its floor.
+    expect(PULL_OUT_FRACTION).toBeCloseTo(0.0547, 4)
+    expect(PULL_OUT_FRACTION).toBeLessThan(FLOOR_FRACTION)
+    // And a look that asks for a cut on the way home is refused, exactly as one
+    // that asks for a cut on the way in — the floor is the same number.
+    expect(() => resolveLook({ zoomOutMs: 0 })).toThrow(
+      /zoomOutMs \(0ms\) is below the 216.7ms/,
     )
+    expect(() => resolveLook({ zoomOutMs: MIN_TRAVEL_MS })).not.toThrow()
   })
 
   it('refuses a gap too short for the camera to cross, instead of jumping', () => {
@@ -1463,23 +1561,26 @@ describe('the smoothness guard', () => {
         /no time to travel between them/,
       )
     }
-    // Eight ticks is 133.3ms: exactly the approach floor, and therefore nothing
-    // left for the first shot to keep its own element with. The hold's own
-    // floor of one frame is what makes this the wrong side of the line.
+    // Thirteen ticks is 216.7ms: exactly the approach floor, and therefore
+    // nothing left for the first shot to keep its own element with. The hold's
+    // own floor of one frame is what makes this the wrong side of the line.
     expect(() =>
       buildZoomSegments(
         toTimedEvents([
           ...events,
-          { type: 'click', tick: 128, x: 2300, y: 1200, bbox: far },
+          { type: 'click', tick: 133, x: 2300, y: 1200, bbox: far },
         ]),
         format,
       ),
     ).toThrow(/no time to travel between them/)
-    // Nine ticks is 150ms, which pays for one frame of hold and the eight-frame
-    // floor — the first gap the camera can honestly cross.
+    // Fourteen ticks is 233.3ms, which pays for one frame of hold and the
+    // thirteen-frame floor — the first gap the camera can honestly cross, and
+    // also the shortest gap the recorder can put between two taps on two
+    // elements (`src/motion.ts:92,305-307`). The two numbers meeting is not a
+    // coincidence: the floor is derived from that walk.
     const wide: RecordEvent[] = [
       ...events,
-      { type: 'click', tick: 129, x: 2300, y: 1200, bbox: far },
+      { type: 'click', tick: 134, x: 2300, y: 1200, bbox: far },
     ]
     const segments = buildZoomSegments(toTimedEvents(wide), format)
     expect(segments.length).toBe(2)
@@ -1489,21 +1590,76 @@ describe('the smoothness guard', () => {
     expect(second.eventMs - second.startMs).toBeCloseTo(APPROACH_FLOOR_MS, 6)
   })
 
-  it('is run by the builder, not merely available to it', () => {
+  it('refuses a look that asks for a cut, from inside the builder', () => {
     // A look that asks for no approach at all asks for a cut, and the promise
     // in the README is that a segment list violating the invariant does not
     // leave `buildZoomSegments`. So the refusal has to come out of the builder
     // itself — a guard that is exported, tested and never called would satisfy
     // every other test in this block.
+    //
+    // **Round six moved where the refusal happens, and this test with it.**
+    // The floor is now absolute, so `resolveLook` — which the builder calls
+    // first — turns a sub-floor `zoomInMs` away before any shot exists. That
+    // is the earlier and better place for it: the caller is told what to ask
+    // for instead of being shown a shot list that could not be built.
     const events = toTimedEvents(atCaptureScale(fixture('run-interior-button')))
     expect(() =>
       buildZoomSegments(events, format, { zoomInMs: 0, zoomLeadMs: 700 }),
-    ).toThrow(/arrives by cutting/)
+    ).toThrow(/is below the 216.7ms a camera move is never given less than/)
     // The same log with an approach builds, so the refusal is about the look
     // and not about the material.
     expect(() =>
       buildZoomSegments(events, format, { zoomInMs: 650, zoomLeadMs: 700 }),
     ).not.toThrow()
+  })
+
+  it('has no reachable violation left for its own post-condition to catch', () => {
+    // Said plainly rather than left to be discovered: with the floors round six
+    // put in place, **no legal look over any fixture produces a shot list that
+    // `assertSmoothApproach` rejects.** Swept here over every fixture, all
+    // three formats and a grid of looks — every combination the builder accepts
+    // is then accepted by the guard as well.
+    //
+    // The consequence is uncomfortable and belongs in the open: commenting out
+    // the `assertSmoothApproach(kept, …)` call at the end of `buildZoomSegments`
+    // kills no test in this file. The call is a post-condition against a
+    // construction bug that does not exist yet, not a check that catches one
+    // today. It is kept because the README makes the promise, and this test is
+    // what stops the next reader from believing the promise is enforced by
+    // something they can see fail.
+    let built = 0
+    for (const name of FIXTURES) {
+      for (const spec of [LANDSCAPE, PORTRAIT, SQUARE]) {
+        const wide = resolveFormat(spec, CAPTURE)
+        for (const zoomInMs of [MIN_TRAVEL_MS, 400, 650, 1200]) {
+          for (const zoomLeadMs of [zoomInMs, 700, 1500, 3000]) {
+            for (const minHoldMs of [17, 200, 900, 3000]) {
+              const asked = { minHoldMs, zoomInMs, zoomLeadMs }
+              let segments
+              try {
+                segments = buildZoomSegments(
+                  toTimedEvents(atCaptureScale(fixture(name))),
+                  wide,
+                  asked,
+                )
+              } catch {
+                continue
+              }
+              built += 1
+              expect(() =>
+                assertSmoothApproach(segments, wide, resolveLook(asked)),
+              ).not.toThrow()
+            }
+          }
+        }
+      }
+    }
+    // The denominator, absolute: a sweep that silently built nothing would pass
+    // this test without looking at anything. 2304 combinations are tried and
+    // 2160 build; the 144 the builder turns away are looks whose lead is too
+    // short for the approach they ask for, which is a different refusal and has
+    // its own test.
+    expect(built).toBe(2160)
   })
 
   it('throws when a shot starts from the resting frame it has already left', () => {

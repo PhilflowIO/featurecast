@@ -89,6 +89,29 @@ export function resolveLook(look: ZoomLook = {}): ResolvedLook {
         'the time the interaction happens.',
     )
   }
+  // Refused, not clamped, and the choice is deliberate. A clamp would deliver a
+  // camera that moves at a pace the caller did not ask for and would have to be
+  // discovered in the rendered video; this is a look, not recorded material, so
+  // there is no work to rescue and nothing is lost by saying no. The clamps this
+  // renderer does apply — `frameBoundingBox`'s upscale clamp, the crowded hold —
+  // all arise from material that already exists and cannot be re-recorded.
+  for (const [name, value] of [
+    ['zoomInMs', merged.zoomInMs],
+    ['zoomOutMs', merged.zoomOutMs],
+  ] as const) {
+    if (value < MIN_TRAVEL_MS) {
+      throw new Error(
+        `${name} (${value}ms) is below the ${MIN_TRAVEL_MS.toFixed(1)}ms a ` +
+          'camera move is never given less than. Thirteen frames at 60Hz is ' +
+          'what the recorder itself can hold: no pointer journey it walks is ' +
+          'shorter than fourteen (`src/motion.ts:92,305-307`), one of which ' +
+          'the earlier shot keeps for its own event. Below it the camera ' +
+          'arrives, or leaves, by cutting — a 50ms pull-out snaps back to the ' +
+          'resting frame at the end of every shot. Ask for at least ' +
+          `${MIN_TRAVEL_MS.toFixed(1)}ms.`,
+      )
+    }
+  }
   return merged
 }
 
@@ -230,21 +253,35 @@ const FRAME_MS = 1000 / 60
 const ARRIVAL_FLOOR_MS = FRAME_MS
 
 /**
- * The shortest stretch the camera may be given to travel a visible distance:
- * eight frames at 60Hz.
+ * The shortest stretch the camera may be given to travel a visible distance,
+ * in either direction: thirteen frames at 60Hz.
  *
- * Without it the crowded branch could shorten an approach to a single frame and
- * call the resulting teleport a camera move — measured, two taps 50ms apart at
- * opposite corners crossed 639.5px of a 640px journey in one frame and passed,
- * because the bound that was supposed to forbid it was computed from the very
- * window that had been shortened. A floor in time fixes the pace: a fixed path
- * over a window that cannot shrink below eight frames cannot be traversed
- * arbitrarily fast, whatever else gives way.
+ * **The number comes from the recorder, not from this file's own curve.** A
+ * bound a renderer picks for itself can always be argued down; this one cannot,
+ * because it is what the material can hold. Every pointer journey the recorder
+ * walks is at least fourteen 60Hz slots long: `travelDuration` is floored at
+ * 220ms (`src/motion.ts:305-307`) and the sample count starts at
+ * `ceil(220/1000 * 60)` = 14 (`src/motion.ts:92`), each sample consuming its
+ * own tick (`src/record.ts:238-249`). So fourteen frames is the shortest gap
+ * two interactions on two different elements can have, one of those frames
+ * belongs to the earlier shot keeping its own element (`ARRIVAL_FLOOR_MS`), and
+ * thirteen is what is left. A floor above that would refuse recordable work; a
+ * floor below it buys nothing, because no log asks for it.
  *
- * It never exceeds what the look asked for: a look that deliberately sets a
- * 130ms `zoomInMs` gets a 130ms floor, not a contradiction.
+ * Round five set it at eight frames and let the look pull it lower still —
+ * `min(look.zoomInMs, floor)` — so a look with a 50ms `zoomInMs` got a 50ms
+ * floor and the bound derived from it permitted 86% of a journey in one frame.
+ * The floor is absolute now: a look that asks for less is refused in
+ * `resolveLook` rather than quietly granted its own, smaller standard.
+ *
+ * What eight frames cost was not theoretical. At a 150ms gap the guard's worst
+ * case was 36.7% of the journey in one frame; rendered, that is 201px then
+ * 235px in consecutive frames where ordinary camera motion in the same material
+ * is 8.3px — twenty-five times ordinary speed, which reads as a cut. No
+ * recording can produce a 150ms gap across a visible distance, so the material
+ * that case refuses is synthetic only.
  */
-const MIN_APPROACH_MS = 8 * FRAME_MS
+export const MIN_TRAVEL_MS = 13 * FRAME_MS
 
 /**
  * A journey shorter than this is not a camera move, in source pixels.
@@ -260,14 +297,14 @@ const MIN_APPROACH_MS = 8 * FRAME_MS
  * `roundOutward` may already move a crop's width by (`geometry.ts:138-141`), so
  * a journey under it is inside the framing's own rounding noise. Measured over
  * `artifacts/m2-001` in all three formats: the journeys this skips are 5.7,
- * 7.1 and 9.2px, and the shortest journey it still guards is 280px.
+ * 7.1 and 9.2px, and the shortest journey it still guards is 100px.
+ *
+ * It is pinned from both sides in `tests/render/zoom.test.ts`: a 15.5px journey
+ * covered in one frame passes and a 16.5px one fails, so lowering it to 8, 10
+ * or 15 and raising it to 17 each break a test. Round five left it unpinned
+ * from below — 8, 10 and 15 killed none of 165 tests.
  */
-const INVISIBLE_MOVE_PX = 16
-
-/** The window an approach may never be squeezed below, for a given look. */
-function approachFloorMs(look: ResolvedLook): number {
-  return Math.min(look.zoomInMs, MIN_APPROACH_MS)
-}
+export const INVISIBLE_MOVE_PX = 16
 
 /** The ∞-norm distance between two crops: the largest single-axis move. */
 function rectSpan(a: Rect, b: Rect): number {
@@ -332,6 +369,48 @@ export function peakStepFraction(
     if (step > peak) peak = step
   }
   return Math.min(1, peak)
+}
+
+/**
+ * The largest share of its journey the camera may cover in one 60Hz frame on
+ * the way in, for a given look.
+ *
+ * **It is read off the floor, not off the shot being judged.** The shot list may
+ * squeeze an approach — a second interaction inside the first shot's lead takes
+ * time away from it — but never below `MIN_TRAVEL_MS`, so the fastest legitimate
+ * approach is exactly the spring over thirteen frames and that is the number
+ * here. Round four measured each shot against its own window, which is the same
+ * quantity the interpolation used, and the comparison was an identity that
+ * passed a 639.5px step across a 640px journey. Round five moved the reference
+ * to a floor but let the look lower the floor, which is the same identity with
+ * one more step in it.
+ *
+ * Stated as a multiple of ordinary motion: at the default look this is **2.943
+ * times** the share the same spring covers in its busiest frame over the 650ms
+ * approach the look actually configures (0.2714 against 0.0922). The multiple is
+ * derived from the floor rather than chosen, so it cannot drift away from it;
+ * both numbers are pinned to four places in `tests/render/zoom.test.ts`.
+ */
+export function approachStepFraction(look: ResolvedLook): number {
+  return peakStepFraction(MIN_TRAVEL_MS, look.spring)
+}
+
+/**
+ * The same bound for the way out, on the relaxed spring the pull-out rides.
+ *
+ * The pull-out is never squeezed — nothing in the shot list shortens it — so
+ * unlike the approach it is judged against the duration the look configures
+ * rather than against the floor, which makes this the tighter of the two. What
+ * the floor does here is stop the bound from dissolving: round five formed the
+ * seam allowance as `peakStepFraction(previous.zoomOutMs)` with no floor at all,
+ * and since that function returns 1 for a non-positive duration, a look with
+ * `zoomOutMs: 0` was allowed the entire journey in a single frame and the
+ * renderer said nothing. Measured on `run-interior-button` at 16:9, a 640px
+ * journey: 35.0px permitted at 900ms, 154.3px at 200ms, 472.3px at 50ms and
+ * 640.0px at 0ms, every one of them accepted.
+ */
+export function pullOutStepFraction(look: ResolvedLook): number {
+  return peakStepFraction(look.zoomOutMs, relaxSpring(look.spring))
 }
 
 /**
@@ -437,7 +516,7 @@ export function buildZoomSegments(
       // the look asks for, and below the approach floor there is no honest move
       // left to make. There is also nothing before it to cut away from, so the
       // video simply opens on the close-up rather than flicking towards it.
-      if (segment.eventMs - segment.startMs < approachFloorMs(resolved)) {
+      if (segment.eventMs - segment.startMs < MIN_TRAVEL_MS) {
         segment.from = segment.target
         segment.zoomInMs = 0
       }
@@ -480,10 +559,10 @@ export function buildZoomSegments(
       // frame. Round three gave the whole gap to the approach, which left the
       // hold at 16.7ms in all eighteen measured cases and made `minHoldMs`
       // invisible — a 900ms setting that the shipped shot never showed.
-      const floor = approachFloorMs(resolved)
+      const floor = MIN_TRAVEL_MS
       const travels =
         rectSpan(previous.target, segment.target) > INVISIBLE_MOVE_PX
-      if (travels && gap < ARRIVAL_FLOOR_MS + floor) {
+      if (travels && gap < ARRIVAL_FLOOR_MS + floor - 1e-9) {
         throw new Error(
           `Two interactions ${gap.toFixed(1)}ms apart (at ` +
             `${previous.lastEventMs.toFixed(1)}ms and ` +
@@ -502,13 +581,25 @@ export function buildZoomSegments(
       }
       const hold = crowdedHoldMs(gap, resolved)
       if (hold < resolved.minHoldMs - 1e-9) {
+        // Which of the two limits actually bound, named. Round five printed the
+        // proportional sentence in both cases, so a log that read "held 17ms
+        // instead of the 900ms asked for … in proportion to what each asked
+        // for" described a 58% share of a 150ms gap that was in fact 11% — the
+        // message was wrong for every gap under 317.9ms, which is most of them.
+        const shared = proportionalHoldMs(gap, resolved)
         previous.clamps = [
           ...previous.clamps,
           `A shot was held ${hold.toFixed(0)}ms instead of the ` +
             `${resolved.minHoldMs.toFixed(0)}ms asked for: the next ` +
-            `interaction follows ${gap.toFixed(0)}ms later, and hold and ` +
-            `approach share that gap in proportion to what each asked for. ` +
-            `Record the two interactions further apart to see the full hold.`,
+            `interaction follows ${gap.toFixed(0)}ms later, and ` +
+            (hold < shared - 1e-9
+              ? `the move to it may never be squeezed below ` +
+                `${MIN_TRAVEL_MS.toFixed(0)}ms, which is what is left of the ` +
+                `gap once the hold has had ${hold.toFixed(0)}ms of it`
+              : `hold and approach share that gap in proportion to what each ` +
+                `asked for, so the hold gets ` +
+                `${((100 * hold) / gap).toFixed(0)}% of it`) +
+            `. Record the two interactions further apart to see the full hold.`,
         ]
       }
       previous.endMs = Math.min(previous.endMs, previous.lastEventMs + hold)
@@ -567,24 +658,41 @@ function mergeShots(previous: ZoomSegment, segment: ZoomSegment): void {
 }
 
 /**
+ * What the two crowded shots would each like out of the `gap` between their
+ * events, before the approach's floor is applied: everything the approach does
+ * not need when the gap can pay for both wishes, and otherwise a split in
+ * proportion to what each asked for — with the default look, 900ms of hold
+ * against 650ms of approach, 58% of the gap to the hold.
+ */
+function proportionalHoldMs(gap: number, look: ResolvedLook): number {
+  const wishes = look.minHoldMs + look.zoomInMs
+  return gap >= wishes ? gap - look.zoomInMs : (gap * look.minHoldMs) / wishes
+}
+
+/**
  * How long the earlier of two crowded shots holds, out of the `gap` between the
  * two events.
  *
- * When the gap can pay for both wishes the hold takes everything the approach
- * does not need. When it cannot, the two share it in proportion to what they
- * asked for — with the default look, 900ms of hold against 650ms of approach,
- * the hold gets 58% of the gap. The hold is floored at one frame, which keeps
- * the earlier shot alive through its own event; the approach is floored at
- * `approachFloorMs`, which is what keeps it from becoming a cut. A gap that
- * cannot pay for both is refused above rather than split into a teleport.
+ * Two limits sit on top of the proportional split above, and which one binds
+ * depends on the gap. The hold is floored at one frame, which keeps the earlier
+ * shot alive through its own event. The approach is floored at `MIN_TRAVEL_MS`,
+ * which is what keeps it from becoming a cut — and since that floor is taken out
+ * of the same gap, it caps the hold at `gap - MIN_TRAVEL_MS`.
+ *
+ * **The cap binds for every gap below 516.7ms**, which is most crowded gaps:
+ * with the default look the proportional share only drops under `gap - 216.7ms`
+ * above that point. Measured on the corpus, `run-crowded-taps` at a 600ms gap
+ * holds its proportional 348ms while `run-a` at 433ms is cut to 217ms by the
+ * cap. The clamp the caller sees names whichever one bound; round five printed
+ * the proportional sentence in both cases and was wrong in the commoner one.
+ *
+ * A gap that cannot pay for one frame of hold plus the floor is refused above
+ * rather than split into a teleport.
  */
 function crowdedHoldMs(gap: number, look: ResolvedLook): number {
-  const wishes = look.minHoldMs + look.zoomInMs
-  const share =
-    gap >= wishes ? gap - look.zoomInMs : (gap * look.minHoldMs) / wishes
   return Math.min(
-    Math.max(share, ARRIVAL_FLOOR_MS),
-    Math.max(gap - approachFloorMs(look), ARRIVAL_FLOOR_MS),
+    Math.max(proportionalHoldMs(gap, look), ARRIVAL_FLOOR_MS),
+    Math.max(gap - MIN_TRAVEL_MS, ARRIVAL_FLOOR_MS),
   )
 }
 
@@ -598,10 +706,10 @@ function crowdedHoldMs(gap: number, look: ResolvedLook): number {
  * interpolated over `segment.zoomInMs`, which in the crowded branch *is* that
  * same number — the check compared the motion against itself and passed a
  * 639.5px step across a 640px journey. The reference here is
- * `approachFloorMs`, a property of the look alone: a shot that crosses its path
- * faster than the spring would cross it in eight frames is a cut, whatever its
- * own `zoomInMs` claims. The window itself is asserted separately, so a shot
- * list that shortened the approach below the floor fails even where the
+ * `MIN_TRAVEL_MS`, a constant the recorder fixes: a shot that crosses its path
+ * faster than the spring would cross it in thirteen frames is a cut, whatever
+ * its own `zoomInMs` claims. The window itself is asserted separately, so a
+ * shot list that shortened the approach below the floor fails even where the
  * interpolation happens to look smooth.
  *
  * **The bound has an absolute floor under it.** A fraction of a journey too
@@ -616,21 +724,42 @@ function crowdedHoldMs(gap: number, look: ResolvedLook): number {
  * a 7.1px journey, and `pnpm render` died on all three formats. So the seam
  * gets two checks of its own instead: the shot must open exactly where the
  * camera already is, and the step across the seam may be no larger than the
- * previous shot's own pull-out covers in its busiest frame.
+ * pull-out configured by the look covers in its busiest frame.
+ *
+ * **The way out is checked too.** Round five guarded the approach and left the
+ * pull-out to no check at all: `assertSmoothApproach` ran its frame loop from
+ * `startMs` to `eventMs` only, so the frames after a shot's hold were watched by
+ * nothing. `assertSmoothPullOut` below covers them.
  *
  * Everything is checked against the crops `cropAt` really produces, rather than
  * against the `zoomInMs` field — a guard that read the field back would pass
  * any value that field was given.
+ *
+ * **Which of these can fire on a list the builder produces, and which cannot.**
+ * The opening equality, the seam bound and the two duration floors are all
+ * reachable and tested from real material. The two frame loops are not: with
+ * `resolveLook` refusing a `zoomInMs` or `zoomOutMs` under the floor and the
+ * crowded branch capping the hold at `gap - MIN_TRAVEL_MS`, every window the
+ * builder hands over is at least thirteen frames, and `lerpRect` is linear, so
+ * the realised step is exactly the spring's own and can never exceed a bound
+ * read off the floor. That is defence in depth and is kept deliberately: the
+ * fields say what the builder *intended*, the loops measure what `cropAt`
+ * actually draws, and those are different claims. A future change to the
+ * stitching, to `lerpRect` or to the easing would be caught by the loops and by
+ * nothing else. They are exercised from hand-built segment lists in
+ * `tests/render/zoom.test.ts`, which is precisely the shape a builder bug takes.
  */
 export function assertSmoothApproach(
   segments: readonly ZoomSegment[],
   format: ResolvedFormat,
   look: ResolvedLook,
 ): void {
-  const floor = approachFloorMs(look)
-  const fraction = peakStepFraction(floor, look.spring)
-  const relax = relaxSpring(look.spring)
+  const floor = MIN_TRAVEL_MS
+  const fraction = approachStepFraction(look)
+  const outFraction = pullOutStepFraction(look)
   for (const [index, segment] of segments.entries()) {
+    assertSmoothPullOut(segment, segments[index + 1], segments, format, look)
+
     // A journey too small to see is not evidence of anything, and neither is a
     // fraction of it. This is the absolute floor under a bound that is
     // otherwise purely relative.
@@ -662,9 +791,11 @@ export function assertSmoothApproach(
         cropAt(segment.startMs - FRAME_MS, segments, format, look),
         opening,
       )
-      const pullOut =
-        rectSpan(previous.target, format.base) *
-        peakStepFraction(previous.zoomOutMs, relax)
+      // The pull-out's pace comes from the look, not from `previous.zoomOutMs`.
+      // They are the same number for every list the builder produces, and the
+      // difference is the whole point: a shot list that shortened a pull-out is
+      // judged against the pace the look configured, instead of against itself.
+      const pullOut = rectSpan(previous.target, format.base) * outFraction
       if (seam > Math.max(INVISIBLE_MOVE_PX, pullOut * 1.001 + 1e-6)) {
         throw new Error(
           `The camera moves ${seam.toFixed(1)}px in the single frame where ` +
@@ -699,7 +830,7 @@ export function assertSmoothApproach(
       // A thousandth of slack for the sampled supremum in `peakStepFraction`,
       // which is a grid over a smooth curve and so sits a hair below the true
       // peak. Far too small to admit a cut: the mutation this catches moves
-      // 100% of the path in one frame against a 42.6% allowance.
+      // 100% of the path in one frame against a 27.1% allowance.
       if (step > limit * 1.001 + 1e-6) {
         throw new Error(
           `The camera would cover ${step.toFixed(1)}px of a ` +
@@ -710,6 +841,65 @@ export function assertSmoothApproach(
             `is a cut, not a camera move.`,
         )
       }
+    }
+  }
+}
+
+/**
+ * The same promise for the way home, over the frames between a shot's hold and
+ * whatever comes next.
+ *
+ * The journey is the whole distance back to the resting frame, and the pace it
+ * is judged against is the relaxed spring over the pull-out the *look*
+ * configures — never over `segment.zoomOutMs`, which is the quantity the motion
+ * is interpolated along. Round five formed the allowance from that field with no
+ * floor beneath it, so shortening the pull-out raised its own permission in
+ * step: at `zoomOutMs: 0` the field's `peakStepFraction` is 1 and the entire
+ * journey in one frame was accepted in silence. In a finished video that is a
+ * hard cut back to the wide shot at the end of every shot.
+ *
+ * The frames are sampled from the shot's end up to whichever comes first, the
+ * pull-out finishing or the next shot opening. The single frame that straddles a
+ * hand-over belongs to the seam and is judged there instead of twice.
+ */
+function assertSmoothPullOut(
+  segment: ZoomSegment,
+  next: ZoomSegment | undefined,
+  segments: readonly ZoomSegment[],
+  format: ResolvedFormat,
+  look: ResolvedLook,
+): void {
+  const path = rectSpan(segment.target, format.base)
+  if (path <= INVISIBLE_MOVE_PX) return
+
+  if (segment.zoomOutMs < MIN_TRAVEL_MS - 1e-9) {
+    throw new Error(
+      `A shot with ${path.toFixed(1)}px to travel home was given ` +
+        `${segment.zoomOutMs.toFixed(1)}ms to travel it, below the ` +
+        `${MIN_TRAVEL_MS.toFixed(1)}ms floor. However smoothly that window is ` +
+        `interpolated, the camera leaves by cutting.`,
+    )
+  }
+
+  const limit = path * pullOutStepFraction(look)
+  const until = Math.min(
+    segment.endMs + segment.zoomOutMs,
+    next?.startMs ?? Number.POSITIVE_INFINITY,
+  )
+  for (let timeMs = segment.endMs; timeMs < until; timeMs += FRAME_MS) {
+    const step = rectSpan(
+      cropAt(timeMs, segments, format, look),
+      cropAt(Math.min(timeMs + FRAME_MS, until), segments, format, look),
+    )
+    if (step > limit * 1.001 + 1e-6) {
+      throw new Error(
+        `The camera would cover ${step.toFixed(1)}px of the ` +
+          `${path.toFixed(1)}px journey back to the resting frame in one ` +
+          `frame at ${timeMs.toFixed(1)}ms, against the ` +
+          `${limit.toFixed(1)}px the relaxed spring covers in its busiest ` +
+          `frame over the ${look.zoomOutMs.toFixed(1)}ms pull-out the look ` +
+          `asks for. That is a cut, not a camera move.`,
+      )
     }
   }
 }
