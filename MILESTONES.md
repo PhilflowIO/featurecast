@@ -36,6 +36,8 @@ Der Erkundungs-Meilenstein. Die drei in [PLAN.md](PLAN.md) beschriebenen Wege we
 
 Dazu: Touch statt Maus im Wrapper (`page.touchscreen.tap`), Touch-Ripple statt Pfeil im Render, und die Frage, ob die Aufnahme unter WebKit funktioniert oder ob die iPhone-Profile unter Chromium gefahren werden müssen.
 
+**Gemessen und entschieden am 2026-09-15:** der Rahmen-Weg gewinnt; fünf Wege wurden geprüft, vier verworfen, jeder mit seiner Zahl. Die Begründung, die verworfenen Wege und was der Weg kostet stehen in [docs/M3-VERDICT.md](docs/M3-VERDICT.md). Offen bleibt allein WebKit — gemessen wurde unter Chromium mit dem iPhone-Profil.
+
 **Abnahme:** ein Hochformat-Video 1080×1920 einer echten mobilen Oberfläche, angesehen und für Social-Media-tauglich befunden. Text in normaler Fließtextgröße ist lesbar. Kein Mauszeiger im Bild. Die Entscheidung samt verworfener Wege steht schriftlich im Repo.
 
 ---
