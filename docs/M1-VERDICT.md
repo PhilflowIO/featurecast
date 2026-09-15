@@ -2,7 +2,7 @@
 
 Date: 2026-09-11. Subject: `artifacts/m1-008/output.mp4` (1920×1080, constant
 60 fps, 62.78 s, ffprobe in `artifacts/m1-008/ffprobe.txt`), recorded on the
-RTX 3090 box from the real OnlyDash UI.
+RTX 3090 box from the real UI of the recorded application.
 
 ## The owner watched it
 

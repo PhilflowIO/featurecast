@@ -101,13 +101,13 @@ larger resolution, by cutting frame size instead of resolution.
 
 **Practical rule: keep the mean JPEG frame size under ~1.3MB
 (80MB/s ÷ 60fps) to sustain 60fps, regardless of how that frame size is
-reached** — lower resolution, lower quality, or (as with OnlyDash) content
-that simply compresses smaller than a synthetic worst case. OnlyDash's
-real frames average 408KB in the `artifacts/m1-003` acceptance run — well
+reached** — lower resolution, lower quality, or (as with the recorded
+application) content that simply compresses smaller than a synthetic worst
+case. That application's real frames average 408KB in the `artifacts/m1-003` acceptance run — well
 under the 1.3MB budget — which is _why_ 2560×1600/q100 reaches ~54fps on
-real OnlyDash content despite this synthetic dense-table probe topping out
+its real content despite this synthetic dense-table probe topping out
 at 25fps at the same size/quality. The earlier "2560×1600/q100 sustains
-60fps" claim was true for OnlyDash specifically and false as a general
+60fps" claim was true for that application specifically and false as a general
 statement about that resolution/quality pair; a denser or more colorful
 target app could still hit this ceiling at the current default.
 
@@ -151,14 +151,14 @@ independent constraints govern cadence: the GPU backend (fixed by
 software rendering a loud failure instead of a silent 17-31fps capture
 that still passes every duration/frame-count check) and a hard ~80MB/s
 screencast throughput ceiling that no backend or resolution choice
-removes. 2560×1600/q100 stays because OnlyDash's real frames (408KB mean)
+removes. 2560×1600/q100 stays because the recorded application's real frames (408KB mean)
 fit comfortably under the ~1.3MB budget that ceiling implies at 60fps —
 not because 2560×1600/q100 is fast in general (the synthetic dense-table
 probe above tops out at 25fps at that exact size/quality).
 
 If a future target app's frames are heavier (more colorful, less
 whitespace, higher-entropy content that compresses worse — the exact
-opposite of what makes OnlyDash's frames small), the same 2560×1600/q100
+opposite of what makes the recorded application's frames small), the same 2560×1600/q100
 default will re-hit this ceiling regardless of the GPU backend. The fix in
 that case is smaller frames, most cheaply via quality (`q20` reaches 60fps
 even at full 2560×1600 in the table above) rather than resolution, since
@@ -189,19 +189,19 @@ range varies from 2px to 500+px depending on MUI's row-virtualization
 layout timing, so the "scroll" it measured was frequently near-empty). On
 the AI box's RTX 3090, with the corrected scroll target and counting
 **distinct content changes** rather than raw paint ticks, the same real
-OnlyDash Tasks view delivers ~58-60 content changes/s while scrolling — the
+dense table view delivers ~58-60 content changes/s while scrolling — the
 app was never the bottleneck; both the wrong scroll target and this
 workstation's weaker iGPU were. The paragraph immediately below (the
 ~14fps/~69%-loss number) is **workstation-only** and reflects that iGPU,
-not a property of OnlyDash. See "AI-box acceptance run" further down for
+not a property of the recorded application. See "AI-box acceptance run" further down for
 the corrected, decisive numbers.
 
 **Where the loss actually is (workstation, iGPU).** Measured directly
-against real OnlyDash `tasks`-grid scrolling on this box: the page painted
+against the recorded application's real `tasks`-grid scrolling on this box: the page painted
 ~21fps (in-page rAF, screencast attached, using the since-corrected scroll
 target) while this pipeline only captured ~14fps of it — a real ~69%
 efficiency loss on this hardware, not a page-paint-rate problem general to
-OnlyDash. Isolating the cause with
+the recorded application. Isolating the cause with
 synthetic fixtures (no Playwright interaction, a trivial `() => count++`
 `onFrame` with no I/O, so this pipeline's own write queue is provably not
 engaged):
@@ -264,7 +264,7 @@ transport bandwidth limit: Chromium's screencast production does not queue
 and eventually deliver a slow-to-encode frame later, it drops it outright
 (confirmed by the fast, unaffected ack round-trip on every delivered frame),
 so a heavier per-frame encode cost shows up as missing frames, not merely
-slower ones. **Real OnlyDash frames during scroll (615-660KB median,
+slower ones. **The recorded application's real frames during scroll (615-660KB median,
 comparable to this table's q70 row) would predict near-full efficiency from
 byte size alone** — the measured 45-86% loss during real DOM churn
 (`artifacts/m1-006`/`m1-007`) is therefore not explained by frame size on
@@ -278,7 +278,8 @@ the M1 benchmark.** The acceptance run `artifacts/m1-007` reported 82.6%
 capture efficiency while an isolated probe on the same box captured
 97.6-99.3%. Walked from that probe to the benchmark one difference at a
 time, serially on GPU1 (RTX 3090, `--use-gl=angle --use-angle=gl-egl`,
-renderer logged every run), real OnlyDash Tasks view, 12s per step.
+renderer logged every run), the recorded application's real dense table
+view, 12s per step.
 Efficiency is captured frames ÷ distinct content changes counted per rAF
 tick in the page (scroll positions of the grid scroller and `main`, plus
 the grid's height).
@@ -295,8 +296,8 @@ the grid's height).
 | 3b   | + product `startPaintRateProbe`                                 | 60.0        | 53.9        | 0.899           |
 | 4    | product (q100) + `demo.scroll` legs on settled `main`           | 47.7        | 39.8        | 0.834           |
 | 5    | product (q100) + `demo.scroll` on the **still-growing** grid    | **21.0**    | 20.2        | 0.960           |
-| 6a   | product `runOnlyDashMotion`, clicks/typing/sorts no-op'd        | 31.9        | 28.6        | 0.896           |
-| 6b   | full `runOnlyDashMotion`                                        | 31.0        | 28.6        | 0.922           |
+| 6a   | the product's full motion script, clicks/typing/sorts no-op'd   | 31.9        | 28.6        | 0.896           |
+| 6b   | the same script unmodified                                      | 31.0        | 28.6        | 0.922           |
 
 Steps 6a/6b are totals over all scroll windows; the product's own
 `capture-efficiency.json` number for 6b was 0.837. Quality sweep (raw
@@ -307,13 +308,13 @@ step before them.
 
 **Mechanism 1 — capture loss: JPEG quality 100.** The first material drop
 is 1 → 1', and every later step inherits it. Chromium drops a screencast
-frame whose encode misses the frame budget; at quality 100 a real OnlyDash
-frame is twice the bytes of quality 90 and ~9% of changes are never
+frame whose encode misses the frame budget; at quality 100 a real frame of
+the recorded application is twice the bytes of quality 90 and ~9% of changes are never
 delivered. Fix: `CAPTURE_QUALITY = 90` in `src/capture.ts`, the highest
 quality that measured ≥98%.
 
 **Mechanism 2 — too few changes: scrolling a layout that is still
-growing.** After a table switch OnlyDash's DataGrid root starts at the
+growing.** After a table switch the recorded application's DataGrid root starts at the
 height the previous view left and grows by 1px per rendered frame until it
 fits every row (27s for `tasks` after the Projects view; measured with an
 in-page layout log). While it grows, (a) scroll range drains from
@@ -385,7 +386,7 @@ Question: does the gate's denominator (`paint-rate.ts`'s change-signal ticks)
 over-count, i.e. were the missing frames never presented by Chromium, or did
 Chromium present frames the screencast skipped? Answered with a browser-level
 CDP trace across the unchanged product pipeline (`captureScreencast` at
-2560×1600, bind-mount writes, full `runOnlyDashMotion`), serially on GPU1
+2560×1600, bind-mount writes, the product's full motion script), serially on GPU1
 (RTX 3090, ANGLE GL, Chromium 153.0.8010.12), nine runs. Per window it
 counts the product's ticks, frames viz actually drew
 (`Display::DrawAndSwap`), frames the viz video capturer took
@@ -417,7 +418,7 @@ both compositor and refresh triggers, so it can exceed `presented`.
 failing windows (e.g. 30 vs 27, 32 vs 33). Chromium _did_ present the frames
 the screencast is missing; switching the gate to presented frames would make
 it stricter (0.81-0.91), not pass. `pq-q90-r1` is not comparable to the other
-runs: OnlyDash's live layout gave it 42 motion windows instead of 38, and its
+runs: the recorded application's live layout gave it 42 motion windows instead of 38, and its
 invoices sort was not preceded by a long scroll (see mechanism 3).
 
 **Mechanism 3 — capture loss: Chromium's animated-content lock-in.** The

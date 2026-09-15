@@ -18,8 +18,8 @@ them; it says what happened, in order, and which issue holds the detail.
 
 ## 2026-09-11 — the verdict that started it
 
-The owner watched `artifacts/m1-008/output.mp4`, recorded from the real
-OnlyDash UI on the RTX 3090 box. Verdict: **vertical scrolling is smooth,
+The owner watched `artifacts/m1-008/output.mp4`, recorded from the real UI
+of the recorded application on the RTX 3090 box. Verdict: **vertical scrolling is smooth,
 horizontal scrolling visibly hitches, reproducibly.** That is the acceptance
 criterion of #2, and it failed. Full reasoning in
 [`M1-VERDICT.md`](./M1-VERDICT.md).

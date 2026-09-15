@@ -1,7 +1,7 @@
 # M4 acceptance: the chain produced a finished video, and here are its numbers
 
 Date: 2026-09-15. Run on the RTX 3090 box, patched Chromium, container
-`featurecast-box:1`, against the real OnlyDash guest UI.
+`featurecast-box:1`, against the real guest UI of the recorded application.
 
 Everything below is **measured** — a command ran and its output is quoted —
 except the one line marked otherwise. The owner's verdict on how it _looks_ is
