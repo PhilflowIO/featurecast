@@ -35,6 +35,8 @@ function createHarness(
   options: {
     gridRange?: number
     gridStartY?: number
+    /** Whether the phone-width menu button is on screen. */
+    menuVisible?: boolean
     viewport?: { height: number; width: number }
     wheelBlocked?: 'all' | 'inner' | 'none'
   } = {},
@@ -76,10 +78,17 @@ function createHarness(
     .fn()
     .mockImplementation((role: string, options_?: { name?: string }) => {
       roleCalls.push({ name: options_?.name, role })
+      // The menu button only exists at a phone's width, so waiting for it is
+      // what fails on a wide viewport — which is exactly the branch the
+      // warm-up reads.
+      const isMenu = /menu/i.test(String(options_?.name))
+      const present = !isMenu || (options.menuVisible ?? false)
       const roleLocator = {
         click: vi.fn().mockResolvedValue(undefined),
         first: () => roleLocator,
-        waitFor: vi.fn().mockResolvedValue(undefined),
+        waitFor: vi.fn().mockImplementation(async () => {
+          if (!present) throw new Error('not visible')
+        }),
       }
       return roleLocator
     })
@@ -88,7 +97,15 @@ function createHarness(
   // through `page.locator(selector).click()` now (see m1-benchmark.ts's
   // doc comments on why they avoid `demo.click`'s travel cost), so this
   // mock has to branch on the selector to know which behavior to return.
+  let drawerCloseClicks = 0
+  const drawerCloseLocator = {
+    click: vi.fn().mockImplementation(async () => {
+      drawerCloseClicks += 1
+    }),
+    first: () => drawerCloseLocator,
+  }
   const locator = vi.fn().mockImplementation((selector: string) => {
+    if (selector.includes('CloseIcon')) return drawerCloseLocator
     const tableLinkMatch = /title="([^"]+)"/.exec(selector)
     if (tableLinkMatch) {
       return {
@@ -209,6 +226,8 @@ function createHarness(
     callOrder,
     demo,
     demoClick,
+    /** Whether the warm-up used the drawer's own close control. */
+    drawerClosed: () => drawerCloseClicks > 0,
     setGeometrySettles: (settles: boolean) => {
       geometrySettles = settles
     },
@@ -243,6 +262,13 @@ describe('warmUpOnlyDash', () => {
       role: 'button',
     })
     expect(roleCalls).toContainEqual({ name: 'Projects', role: 'link' })
+    // It looks for the menu button on every viewport — but on a wide one it
+    // is not there, and the warm-up carries on to the sidebar link instead of
+    // failing. That is the branch this asserts: asked for, not required.
+    const menuLookups = roleCalls.filter((call) =>
+      /menu/i.test(String(call.name)),
+    )
+    expect(menuLookups).toHaveLength(1)
     expect(roleCalls).toContainEqual({ name: 'Projects', role: 'heading' })
     expect(roleCalls).toContainEqual({ name: undefined, role: 'grid' })
   })
@@ -519,6 +545,28 @@ describe('runOnlyDashMotion', () => {
 
     const totalMs = waitForTimeoutCalls.reduce((total, ms) => total + ms, 0)
     expect(totalMs).toBeGreaterThan(0)
+  })
+  it('opens the menu first when the sidebar is behind one, and closes it after', async () => {
+    // At a phone's width OnlyDash hides its sidebar behind a menu button, so
+    // the Projects link is present but not reachable — and following it does
+    // not close the drawer, which then covers the grid the warm-up waits for.
+    // Both facts are about the layout, not the device, which is why the
+    // warm-up reads the button rather than a profile.
+    const { drawerClosed, page, roleCalls } = createHarness({
+      menuVisible: true,
+    })
+
+    await warmUpOnlyDash(page as never, 'https://app.onlydash.io/')
+
+    const menuCall = roleCalls.findIndex((call) =>
+      /menu/i.test(String(call.name)),
+    )
+    const projectsCall = roleCalls.findIndex(
+      (call) => call.name === 'Projects' && call.role === 'link',
+    )
+    expect(menuCall).toBeGreaterThanOrEqual(0)
+    expect(menuCall).toBeLessThan(projectsCall)
+    expect(drawerClosed()).toBe(true)
   })
 })
 

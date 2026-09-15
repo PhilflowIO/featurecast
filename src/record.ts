@@ -327,7 +327,15 @@ export function createRecorder(
             ),
           )
           dispatchedAt = Date.now()
-          await page.mouse.move(next.x, next.y, { steps: 1 })
+          // A touch device has no cursor to move, and moving one anyway is
+          // not free: it fires `:hover` on everything the path crosses, so
+          // the video shows highlight states a phone can never produce. The
+          // travel itself is kept — it is written to the log and the render
+          // draws the finger along it — because what is being recorded is a
+          // journey across the screen, not a teleport between two taps.
+          if (!page.hasTouch) {
+            await page.mouse.move(next.x, next.y, { steps: 1 })
+          }
           pointer = next
           // `tick` is the scheduled 60Hz slot index: every generated sample —
           // including one that rounds to the same pixel as its predecessor
@@ -444,8 +452,23 @@ export function createRecorder(
         point: async (target) => {
           await moveTo(target)
         },
+        // The one press a shared script writes. On a pointer device it is a
+        // mouse click; on a touch device it is a tap, and the log says so —
+        // which is what makes the render draw a blooming ripple instead of
+        // an arrow (`src/render/cursor.ts` reads the event types, not the
+        // device). PLAN.md's promise that the same script runs desktop and
+        // mobile without a branch in the script lives or dies here.
+        //
+        // It used to click with the mouse on every device. Measured against
+        // a real application at a phone's width: the drawer that opens from
+        // the menu button never opened, because it listens for a tap.
         click: async (target) => {
           const hit = await moveTo(target)
+          if (page.hasTouch) {
+            await page.touchscreen.tap(hit.x, hit.y)
+            log({ type: 'tap', tick, x: hit.x, y: hit.y, bbox: hit.bbox })
+            return
+          }
           await page.mouse.click(hit.x, hit.y)
           log({
             type: 'click',
@@ -1080,6 +1103,20 @@ async function observeFrames(
           top: number
         }[] = []
         const start = performance.now()
+        // Where this document sits in the picture. `getBoundingClientRect`
+        // is relative to the document it runs in, and under the framed
+        // capture strategy that document is the application inside a scaled
+        // frame, not the page being recorded — the same box the recorder
+        // reads as 16,7 is 44,19 in the video. `frameElement` is readable
+        // because the shell is served from the application's own origin
+        // (src/framed.ts), and its own box already carries the CSS
+        // transform, so the ratio is the conversion. Directly recorded,
+        // there is no frame element and the numbers are the identity.
+        const holder = window.frameElement
+        const seat = holder === null ? null : holder.getBoundingClientRect()
+        const scale = seat === null ? 1 : seat.width / window.innerWidth
+        const offsetX = seat === null ? 0 : seat.left
+        const offsetY = seat === null ? 0 : seat.top
         const loop = {} as { tick: () => void }
         loop.tick = () => {
           const rect = element.getBoundingClientRect()
@@ -1090,10 +1127,10 @@ async function observeFrames(
           const elapsed = performance.now() - start
           collected.push({
             t: elapsed,
-            left: rect.left,
-            top: rect.top,
-            right: rect.left + rect.width,
-            bottom: rect.top + rect.height,
+            left: offsetX + rect.left * scale,
+            top: offsetY + rect.top * scale,
+            right: offsetX + (rect.left + rect.width) * scale,
+            bottom: offsetY + (rect.top + rect.height) * scale,
           })
           if (elapsed < arg.windowMs || collected.length < arg.minFrames) {
             requestAnimationFrame(loop.tick)
@@ -1818,11 +1855,23 @@ async function hitTestPoints(
   points: { x: number; y: number }[],
 ): Promise<boolean[]> {
   const result = await locator.evaluate(
-    (element, arg) =>
-      arg.points.map((point) => {
-        const hit = document.elementFromPoint(point.x, point.y)
+    (element, arg) => {
+      // The mirror image of the conversion in `observeFrames`: the points
+      // arrive in the picture's coordinates and `elementFromPoint` answers
+      // in this document's. Identity when nothing frames this document.
+      const holder = window.frameElement
+      const seat = holder === null ? null : holder.getBoundingClientRect()
+      const scale = seat === null ? 1 : seat.width / window.innerWidth
+      const offsetX = seat === null ? 0 : seat.left
+      const offsetY = seat === null ? 0 : seat.top
+      return arg.points.map((point) => {
+        const hit = document.elementFromPoint(
+          (point.x - offsetX) / scale,
+          (point.y - offsetY) / scale,
+        )
         return hit !== null && (hit === element || element.contains(hit))
-      }),
+      })
+    },
     { points },
   )
   return result as boolean[]

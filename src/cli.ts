@@ -28,10 +28,16 @@ const USAGE = `featurecast run <script> [options]
 
   The script exports the body of the recording, it does not call record():
 
+    export const url = 'https://app.example.com'
+
     export default async (page, demo) => {
       await page.goto('https://app.example.com/feature')
       await demo.click('#nav-settings')
     }
+
+  \`url\` names the application. Optional for a pointer device, required for
+  a touch one: a mobile recording films the application inside a shell served
+  from its own origin, and that origin has to be known before the first frame.
 
 Options
   --devices <a,b>   Comma-separated device or preset names. Required.

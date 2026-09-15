@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { requireCaptureSettings, resolveDevice } from '../src/devices.js'
+import { resolveDevice } from '../src/devices.js'
 import {
   parseEventLog,
   parseEventTimes,
@@ -87,7 +87,7 @@ describe('one clock for the frames and the events', () => {
       const directory = join(await temporaryDirectory(), 'capture')
       const device = resolveDevice('desktop-wide')
       await recordSession({
-        capture: requireCaptureSettings(device),
+        capture: device.capture,
         device,
         outputDirectory: directory,
         seed: 3,

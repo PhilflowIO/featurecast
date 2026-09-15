@@ -15,6 +15,7 @@ import {
   scriptStem,
   type PipelineDependencies,
 } from '../src/pipeline.js'
+import { requireAppUrl } from '../src/session.js'
 
 const directories: string[] = []
 
@@ -50,7 +51,12 @@ const RECORDED_CAPTURE = {
 const gatedRecord: PipelineDependencies['record'] = async (
   device,
   outputDirectory,
-) => ({ capture: prepareCapture(device), captureDirectory: outputDirectory })
+  script,
+) => {
+  const capture = prepareCapture(device)
+  requireAppUrl(device, script.url)
+  return { capture, captureDirectory: outputDirectory }
+}
 
 /**
  * Stand-ins for the browser, ffmpeg and the object store. The pipeline's job
@@ -165,10 +171,10 @@ describe('runPipeline', () => {
     expect(dependencies.assemble).toHaveBeenCalledTimes(1)
   })
 
-  it('passes the M3 refusal through instead of guessing a capture area', async () => {
-    // docs/DEVICES.md leaves every mobile preset's capture area open. A
-    // silent default here would be a 393px-wide video that looks like a
-    // decision.
+  it('refuses a framed device whose script never named the application', async () => {
+    // A mobile recording films the application inside a shell served from
+    // its own origin (src/framed.ts), so the address has to be known before
+    // the browser starts. Discovering it afterwards costs the launch.
     const dependencies = stubs({ record: vi.fn(gatedRecord) })
     const report = await runPipeline(
       {
@@ -183,8 +189,8 @@ describe('runPipeline', () => {
     expect(outcome?.kind).toBe('failed')
     if (outcome?.kind !== 'failed') throw new Error('unreachable')
     expect(outcome.stage).toBe('record')
-    expect(outcome.reason).toContain('M3')
-    expect(outcome.reason).toContain('deviceScaleFactor')
+    expect(outcome.reason).toContain('iphone')
+    expect(outcome.reason).toContain('export const url')
   })
 
   it('lets resolveDevice refuse an unknown name, and adds no list of its own', async () => {
@@ -361,15 +367,21 @@ describe('prepareCapture', () => {
     ).toThrow(/30 fps/)
   })
 
-  it('refuses an unimplemented capture strategy by naming it', () => {
+  it('lets both implemented strategies through', () => {
+    // M3 left two strategies standing, and the gate is about geometry and
+    // cadence rather than about which of them is in use.
+    for (const name of ['desktop', 'iphone']) {
+      expect(() => prepareCapture(resolveDevice(name))).not.toThrow()
+    }
+  })
+
+  it('refuses a framed device with no application address, before the browser', () => {
+    expect(() => requireAppUrl(resolveDevice('iphone'), undefined)).toThrow(
+      /export const url/,
+    )
     expect(() =>
-      prepareCapture(
-        resolveDevice({
-          capture: { height: 1600, strategy: 'framed-scale', width: 2560 },
-          extends: 'iphone',
-        }),
-      ),
-    ).toThrow(/"framed-scale" capture strategy/)
+      requireAppUrl(resolveDevice('desktop'), undefined),
+    ).not.toThrow()
   })
 })
 

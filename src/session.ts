@@ -1,4 +1,9 @@
-import type { Page } from 'playwright'
+import type {
+  BrowserContext,
+  BrowserContextOptions,
+  Frame,
+  Page,
+} from 'playwright'
 
 import { FRAME_RATE } from './assemble.js'
 import {
@@ -8,12 +13,14 @@ import {
 } from './browser.js'
 import { CAPTURE_QUALITY, captureScreencast } from './capture.js'
 import type { CaptureSettings, ResolvedDevice } from './devices.js'
+import { framedGeometry, openFramedSurface } from './framed.js'
 import {
   createRecorder,
   type Demo,
   type RecordPage,
   type RecordRuntime,
 } from './record.js'
+import { recordPageFor } from './surface.js'
 
 /**
  * One device's browser leg: open a context for the resolved device, run the
@@ -34,11 +41,29 @@ import {
  */
 export type RecordingScript = (page: RecordPage, demo: Demo) => Promise<void>
 
-/** Setup that runs before the capture starts. See `SessionRequest.prepare`. */
-export type PrepareStep = (page: Page) => Promise<void>
+/**
+ * Setup that runs before the capture starts, against the document the video
+ * is about. See `SessionRequest.prepare`.
+ *
+ * A `Frame` rather than a `Page` because under the framed strategy the
+ * application is not the page — it is one document inside it, and a
+ * `page.goto` in a prepare step would navigate the shell away and take the
+ * recording with it. For a direct capture this is the page's main frame, so
+ * nothing about a desktop prepare step changes except the name of its type.
+ */
+export type PrepareStep = (app: Frame) => Promise<void>
 
 export type SessionRequest = {
-  /** The capture settings `requireCaptureSettings` already approved. */
+  /**
+   * The application being filmed.
+   *
+   * Required by the framed strategy and unused by the direct one: the shell
+   * a framed capture puts the application inside has to be served from the
+   * application's own origin (src/framed.ts), which cannot be known from a
+   * navigation the recording script has not performed yet.
+   */
+  appUrl?: string
+  /** The capture settings `assertCaptureSupported` already approved. */
   capture: CaptureSettings
   device: ResolvedDevice
   /** Directory that receives `frames/`, `timestamps.json`, `browser.json`. */
@@ -76,9 +101,11 @@ export type SessionResult = {
  *
  * The capture *area* is no longer on this list: `captureScreencast` records
  * whatever rectangle it is handed, and `validateCaptureManifest` checks the
- * delivered frames against that same rectangle. What remains fixed is
- * everything the capture stage still owns outright — the JPEG quality, the
- * frame rate shared with the render stage, and the one implemented strategy.
+ * delivered frames against that same rectangle. Nor is the strategy, since
+ * M3: both of them produce their frames through the same screencast, and
+ * they differ in what the page under it contains, not in how it is filmed.
+ * What remains fixed is the JPEG quality and the frame rate the capture and
+ * render stages share.
  */
 export function assertCaptureSupported(
   capture: CaptureSettings,
@@ -95,13 +122,37 @@ export function assertCaptureSupported(
       `it asks for ${String(capture.fps)} fps, and the capture and render stages are both fixed at ${String(FRAME_RATE)}`,
     )
   }
-  if (capture.strategy !== 'screencast') {
-    mismatches.push(
-      `it asks for the "${capture.strategy}" capture strategy, and only "screencast" is implemented (the other three are M3's candidates)`,
-    )
-  }
   if (mismatches.length === 0) return
   throw new Error(`${label} cannot be recorded yet: ${mismatches.join('; ')}.`)
+}
+
+/**
+ * The second gate, next to `assertCaptureSupported`: a framed recording has
+ * to know the application before the browser starts.
+ *
+ * Here rather than inside the browser leg for the reason the whole pipeline
+ * checks what it can up front — this is knowable at second zero, and finding
+ * it out after a browser launch costs the launch for nothing.
+ */
+export function requireAppUrl(
+  device: ResolvedDevice,
+  appUrl: string | undefined,
+): void {
+  if (device.capture.strategy === 'framed-scale') framedAppUrl(device, appUrl)
+}
+
+/** The same demand, phrased as the value the framed leg needs. */
+function framedAppUrl(
+  device: ResolvedDevice,
+  appUrl: string | undefined,
+): string {
+  if (appUrl !== undefined) return appUrl
+  throw new Error(
+    `"${device.preset ?? device.playwrightName}" is recorded through the framed strategy, ` +
+      'which needs to know the application up front — its shell is served from the ' +
+      "application's own origin. Export the address from the recording script: " +
+      "`export const url = 'https://app.example.com/'`.",
+  )
 }
 
 /**
@@ -111,13 +162,69 @@ export function assertCaptureSupported(
  * opens its own browser, which would leave the capture pointed at a page
  * nothing happens on.
  */
-function capturedPageRuntime(page: Page, hasTouch: boolean): RecordRuntime {
+function capturedPageRuntime(recordPage: RecordPage): RecordRuntime {
   return {
     async run(_options, script) {
-      const recordPage = page as unknown as RecordPage
-      recordPage.hasTouch = hasTouch
       await script(recordPage)
     },
+  }
+}
+
+/**
+ * The browser context a device is recorded in.
+ *
+ * Under the direct strategy the context *is* the device, with one field
+ * replaced: the viewport becomes the recorded area, because the screencast
+ * records the page's layout size and the device profile's own would decide
+ * the video's resolution.
+ *
+ * Under the framed strategy three more fields have to go, and each for its
+ * own reason. `deviceScaleFactor` is dropped to 1 because the shell is
+ * already at video resolution and a density on top of it would raster pixels
+ * nothing reads. `isMobile` is dropped because it makes the *shell* honour a
+ * viewport meta tag it does not carry, which lays the shell out at 980 CSS
+ * pixels instead of the recorded width — the application inside the frame
+ * still gets a mobile layout, because the frame is the device's own width and
+ * that is what a layout responds to. What stays is the part that makes the
+ * application behave like a phone: the user agent and `hasTouch`.
+ */
+function contextOptionsFor(
+  device: ResolvedDevice,
+  captureArea: { height: number; width: number },
+): BrowserContextOptions {
+  if (device.capture.strategy === 'screencast') {
+    return { ...device.device, viewport: captureArea }
+  }
+  return {
+    ...device.device,
+    deviceScaleFactor: 1,
+    isMobile: false,
+    viewport: captureArea,
+  }
+}
+
+/**
+ * Opens the document the recording is driven against, and says how many
+ * picture pixels one of its own pixels is worth.
+ */
+async function openSurface(
+  context: BrowserContext,
+  page: Page,
+  device: ResolvedDevice,
+  appUrl: string | undefined,
+): Promise<{ app: Frame; scale: number }> {
+  if (device.capture.strategy === 'screencast') {
+    return { app: page.mainFrame(), scale: 1 }
+  }
+  const geometry = framedGeometry(device.capture, device.device)
+  return {
+    app: await openFramedSurface(
+      context,
+      page,
+      framedAppUrl(device, appUrl),
+      geometry,
+    ),
+    scale: geometry.scale,
   }
 }
 
@@ -129,28 +236,37 @@ export async function recordSession(
     resolveBrowserRequest(process.env),
   )
   // The screencast delivers CSS pixels and ignores `deviceScaleFactor`
-  // (PLAN.md, "Der ungelöste Teil"), so the viewport — not the device
-  // profile's own — is what decides the recorded resolution. Everything else
-  // about the device (touch, user agent, engine hint) comes from the resolved
-  // descriptor unchanged. One rectangle, read once: the context lays the page
-  // out at it and the screencast records at it, so the two cannot drift.
+  // (measured, M3), so the viewport — not the device profile's own — is what
+  // decides the recorded resolution. One rectangle, read once: the context
+  // lays the page out at it and the screencast records at it, so the two
+  // cannot drift.
   const captureArea = {
     height: request.capture.height,
     width: request.capture.width,
   }
   try {
-    const context = await browser.newContext({
-      ...request.device.device,
-      viewport: captureArea,
-    })
+    const context = await browser.newContext(
+      contextOptionsFor(request.device, captureArea),
+    )
     try {
       const page = await context.newPage()
+      const { app, scale } = await openSurface(
+        context,
+        page,
+        request.device,
+        request.appUrl,
+      )
       // Before the capture, not inside it. `captureScreencast` starts
       // recording the moment it is called, so anything that must not appear
       // in the video has to be finished by now.
-      if (request.prepare !== undefined) await request.prepare(page)
+      if (request.prepare !== undefined) await request.prepare(app)
       const runInteractions = createRecorder(
-        capturedPageRuntime(page, request.device.device.hasTouch),
+        capturedPageRuntime(
+          recordPageFor(app, page, {
+            hasTouch: request.device.device.hasTouch,
+            scale,
+          }),
+        ),
       )
       const capture = await captureScreencast(
         page,

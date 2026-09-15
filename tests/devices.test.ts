@@ -5,7 +5,6 @@ import {
   aspectOf,
   listDeviceNames,
   listPresetNames,
-  requireCaptureSettings,
   resolveDevice,
 } from '../src/devices.js'
 import type { DeviceRegistry } from '../src/devices.js'
@@ -153,7 +152,7 @@ describe('curated presets', () => {
     },
   )
 
-  it('records desktop over-sized and leaves mobile capture open', () => {
+  it('records desktop over-sized and mobile at its exact output size', () => {
     // Every desktop preset records the same over-sized area, and every one of
     // them records more than it outputs: that margin is what M4 cuts its
     // second and third format out of, and what the zoom spring pans inside.
@@ -174,10 +173,13 @@ describe('curated presets', () => {
       expect(resolved.capture.height).toBeGreaterThan(resolved.output.height)
     }
     for (const row of CURATED_TABLE.filter((candidate) => candidate.touch)) {
-      expect(resolveDevice(row.preset).capture).toMatchObject({
-        milestone: 'M3',
-        status: 'pending',
-      })
+      const resolved = resolveDevice(row.preset)
+      // The mobile counterpart of the desktop rule above, and its mirror
+      // image: no reserve at all, because the frame already holds the whole
+      // device and the reserve would cost half the frame rate.
+      expect(resolved.capture).toMatchObject({ strategy: 'framed-scale' })
+      expect(resolved.capture.width).toBe(resolved.output.width)
+      expect(resolved.capture.height).toBe(resolved.output.height)
     }
   })
 })
@@ -325,34 +327,38 @@ describe('overrides', () => {
   })
 })
 
-describe('undecided capture (M3)', () => {
+describe('capture per device class (M3)', () => {
   it('hands out desktop capture settings unchanged', () => {
-    expect(requireCaptureSettings(resolveDevice('desktop')).width).toBe(2560)
+    expect(resolveDevice('desktop').capture.width).toBe(2560)
   })
 
-  it('fails on use with a message that names M3 and a way forward', () => {
-    let message = ''
-    try {
-      requireCaptureSettings(resolveDevice('iphone'))
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error)
+  it('records every touch preset at its own output size, framed', () => {
+    for (const name of listPresetNames()) {
+      const resolved = resolveDevice(name)
+      if (!resolved.device.hasTouch) continue
+      expect({ preset: name, ...resolved.capture }).toEqual({
+        fps: 60,
+        height: resolved.output.height,
+        preset: name,
+        quality: 90,
+        status: 'decided',
+        strategy: 'framed-scale',
+        width: resolved.output.width,
+      })
     }
-    expect(message).toContain('M3')
-    expect(message).toContain('iphone')
-    expect(message).toContain('iPhone 15 Pro')
-    expect(message).toContain('not decided yet')
-    expect(message).toContain('capture')
   })
 
-  it('refuses a partial completion and names what is missing', () => {
-    expect(() =>
-      resolveDevice({ capture: { width: 1080 }, extends: 'iphone' }),
-    ).toThrow(/still open \(M3\); an override must supply height, strategy/)
+  it('gives a bare touch device the same treatment as a curated one', () => {
+    const resolved = resolveDevice('Galaxy S9+')
+    expect(resolved.preset).toBeNull()
+    expect(resolved.capture.strategy).toBe('framed-scale')
+    expect(resolved.capture.width).toBe(1080)
+    expect(resolved.capture.height).toBe(1920)
   })
 
-  it('accepts a complete capture override', () => {
+  it('accepts a partial capture override on a touch preset', () => {
     const resolved = resolveDevice({
-      capture: { height: 1920, strategy: 'framed-scale', width: 1080 },
+      capture: { width: 1440 },
       extends: 'iphone',
     })
     expect(resolved.capture).toEqual({
@@ -361,9 +367,8 @@ describe('undecided capture (M3)', () => {
       quality: 90,
       status: 'decided',
       strategy: 'framed-scale',
-      width: 1080,
+      width: 1440,
     })
-    expect(requireCaptureSettings(resolved).strategy).toBe('framed-scale')
   })
 })
 

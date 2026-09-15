@@ -54,11 +54,11 @@ Verworfen: `ghost-cursor`, die bekannteste Bibliothek. Ihre Kurve ist gut, aber 
 
 Ja, der Browser emuliert das vollständig, und zwar mehr als nur die Fenstergröße: Playwright setzt pro Gerät auch `isMobile`, `hasTouch`, den Pixeldichte-Faktor und den User-Agent, sodass Media-Queries, Touch-Events und `@media (hover: none)` echt greifen. Statt `click()` läuft die Interaktion über `page.touchscreen.tap()`, und im Video ersetzt ein aufblühender Touch-Ripple den Pfeil. Der `demo`-Wrapper entscheidet das automatisch am Geräteprofil — dasselbe Skript läuft Desktop und Mobile, ohne Verzweigung im Skript.
 
-**Der ungelöste Teil, ehrlich benannt:** die Aufnahme liefert CSS-Pixel und ignoriert die Pixeldichte (gemessen — bei angeforderter Pixeldichte 2 kamen trotzdem 1280×800 heraus). Ein iPhone 15 Pro hat 393 CSS-Pixel Breite. Eine unbehandelte Aufnahme wäre also 393 Pixel breit und damit für Social-Video unbrauchbar. Drei Wege, alle noch ungeprüft, deshalb ein eigener Meilenstein:
+**Der ungelöste Teil — seit dem 2026-09-15 gelöst, siehe [docs/M3-VERDICT.md](docs/M3-VERDICT.md):** die Aufnahme liefert CSS-Pixel und ignoriert die Pixeldichte (gemessen — bei angeforderter Pixeldichte 2 kamen trotzdem 1280×800 heraus). Ein iPhone 15 Pro hat 393 CSS-Pixel Breite. Eine unbehandelte Aufnahme wäre also 393 Pixel breit und damit für Social-Video unbrauchbar. Drei Wege standen hier zur Wahl, M3 hat fünf gemessen:
 
-- **Rahmen-Trick**: die App in einem 393 Pixel breiten Rahmen innerhalb einer großen Seite laden und den Rahmen per CSS um Faktor 3 vergrößert darstellen. Die App sieht weiterhin 393 Pixel Layout-Breite, die Rasterung passiert aber in 1179 Pixeln — Text bliebe scharf. Risiko: Eingabe-Koordinaten müssen umgerechnet werden, und Seiten mit `X-Frame-Options` sperren sich.
-- **Einzelbild-Aufnahme**: `Page.captureScreenshot` berücksichtigt die Pixeldichte (gemessen, 3840×2160). Ist aber nicht echtzeitfähig — für ruhige Mobile-Demos vielleicht trotzdem gut genug.
-- **Hochskalieren im Render**: billig, aber weich. Der Rückfallweg, wenn beides scheitert.
+- **Rahmen-Trick** — **gewonnen.** Die App in einem 393 Pixel breiten Rahmen innerhalb einer großen Seite laden und den Rahmen per CSS vergrößert darstellen: die App sieht weiterhin 393 Pixel Layout-Breite, gerastert wird in 1080. Die beiden hier genannten Risiken traten beide ein und sind beide behoben — die Hülle wird vom Ursprung der Anwendung selbst ausgeliefert, womit `X-Frame-Options` erfüllt ist und die App ihren Speicher behält; umgerechnet werden muss allein der Rad-Betrag.
+- **Einzelbild-Aufnahme** — verworfen. `Page.captureScreenshot` ist tatsächlich dichte-treu, liefert aber **8,8 Bilder pro Sekunde**, sobald sich auf der Seite etwas bewegt. Auch für eine ruhige Demo ist das kein Video.
+- **Hochskalieren im Render** — verworfen, ohne Messung: nach dem Rahmen-Trick gegenstandslos.
 
 ### 3. Geräte als Parameter
 
@@ -85,7 +85,7 @@ Aus `45ck/demo-machine` übernehmen wir nur das Muster der sauberen Trennung von
 
 **Aufnahme über `page.screencast`**, nicht über `recordVideo`. Gemessen: 60,0 Bilder pro Sekunde bei frei wählbarer Qualität, gegenüber `recordVideo` mit 25 Bildern, von denen nur 121 von 173 überhaupt unterschiedlich waren.
 
-**Desktop wird übergroß aufgenommen** (2560×1600 CSS-Pixel) und im Render auf 1920 verkleinert — alle drei Desktop-Presets, ohne Ausnahme ([docs/DEVICES.md](docs/DEVICES.md)). Das ist der einzige Weg zu scharfem Text, weil die Aufnahme die Pixeldichte ignoriert. Der Rand darüber hinaus ist kein Nebeneffekt, sondern die Voraussetzung für M4: mehrere Ausgabeformate aus **demselben** Rohmaterial ohne zweiten Browser-Lauf, und eine Zoomfeder, die in der Aufnahme umherfährt statt hochzuskalieren. Aus 2560×1600 fallen 16:10, 16:9 und 1:1 scharf heraus; **9:16 nicht** — das gehört den mobilen Presets (M3).
+**Desktop wird übergroß aufgenommen** (2560×1600 CSS-Pixel) und im Render auf 1920 verkleinert — alle drei Desktop-Presets, ohne Ausnahme ([docs/DEVICES.md](docs/DEVICES.md)). Mobil gilt das ausdrücklich **nicht**: dort ist die Aufnahmefläche die Ausgabefläche, weil die doppelte Fläche die Bildrate halbiert (gemessen, [docs/M3-VERDICT.md](docs/M3-VERDICT.md)). Das ist der einzige Weg zu scharfem Text, weil die Aufnahme die Pixeldichte ignoriert. Der Rand darüber hinaus ist kein Nebeneffekt, sondern die Voraussetzung für M4: mehrere Ausgabeformate aus **demselben** Rohmaterial ohne zweiten Browser-Lauf, und eine Zoomfeder, die in der Aufnahme umherfährt statt hochzuskalieren. Aus 2560×1600 fallen 16:10, 16:9 und 1:1 scharf heraus; **9:16 nicht** — das gehört den mobilen Presets (M3).
 
 **Zoom ist ein Ausschnitt aus dem Original, nie eine Vergrößerung.** Jedes geprüfte Werkzeug macht hier denselben Fehler und skaliert hoch.
 
