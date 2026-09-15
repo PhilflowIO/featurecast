@@ -1660,7 +1660,10 @@ describe('the smoothness guard', () => {
     // short for the approach they ask for, which is a different refusal and has
     // its own test.
     expect(built).toBe(2160)
-  })
+    // 2160 shot lists built and each one re-checked: seconds, not milliseconds,
+    // and the default 5s budget is not enough when the rest of the suite is
+    // running beside it.
+  }, 60_000)
 
   it('throws when a shot starts from the resting frame it has already left', () => {
     // The other way a cut gets in: the previous shot's pull-out is still
