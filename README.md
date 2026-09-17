@@ -45,9 +45,23 @@ desktop screen squeezed into a phone-shaped hole.
 pnpm featurecast run demo/fixture-tour.ts --devices desktop,tablet,iphone
 ```
 
-Eleven devices are ready to name, and every phone and tablet Playwright knows
+Twelve devices are ready to name, and every phone and tablet Playwright knows
 works too — [docs/DEVICES.md](docs/DEVICES.md) lists them. If you do want all
 three shapes out of a single take anyway, `--all-formats` still delivers them.
+
+One of the twelve is `desktop-4k`, and it comes with two conditions worth
+reading before you reach for it.
+
+**4K is a preset, not a promise about frame rate.** `desktop-4k` records and
+delivers 3840×2160 at 98.6 % yield, but the browser stops presenting sixty
+frames a second at that size: the median gap between presented frames is
+20.52 ms against 16.76 ms at 2560×1600. So: 4K, yes. 4K at 60, no.
+
+**At 4K the camera holds still.** The output is the whole capture area, so
+there is no reserve to crop into and every push-in clamps to 1.00× — the same
+trade the phone presets make. For a large picture _and_ a moving camera, give
+the standard `desktop` preset a 3840×2160 capture area and keep its 1920×1080
+delivery: that leaves a 2× reserve instead of the usual 1.33×.
 
 <!--
   Two further comparisons and a full product video exist as full-resolution
