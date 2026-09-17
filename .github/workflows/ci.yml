@@ -1,0 +1,61 @@
+# The check a visitor sees.
+#
+# This repository's origin is a private Forgejo instance and GitHub is its
+# public mirror, so there are two workflow files that do the same thing. This
+# is not duplication for its own sake: a stranger who opens a pull request here
+# has to be able to see the run and re-start it, and a self-hosted runner
+# behind a private network can give them neither.
+#
+# Forgejo reads `.forgejo/workflows/` and never looks in this directory while
+# that one exists, so the two do not collide.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Lint
+        run: pnpm lint
+      - name: Format
+        run: pnpm format
+      - name: Unit tests
+        run: pnpm test
+
+      # The unit suite mocks the browser; this step proves a real Chromium starts.
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Browser smoke test
+        run: pnpm demo:hello
+
+      # ffmpeg is not on the hosted image, and the smoothness suite generates
+      # its own calibration clips with it.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Lint smoothness (ruff)
+        run: uv run --project tools/smoothness ruff check tools/smoothness
+      # Includes the slow video cases (ffmpeg-generated calibration clips,
+      # cached under tools/smoothness/.eichvideos/) — this tool's whole premise
+      # is that its tests prove the instrument moves, so nothing gets skipped.
+      - name: Smoothness tests
+        run: uv run --project tools/smoothness pytest tools/smoothness
