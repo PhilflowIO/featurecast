@@ -26,14 +26,22 @@ import type { FfmpegPlan } from './render/ffmpeg.js'
  * anything. A comparison is evidence; evidence produced by an unversioned
  * shell line is not evidence.
  *
- * ## Why slowed down, and why one file
+ * ## Why one file, and why real time
  *
- * Two clips played separately in real time cannot be judged against each
- * other: by the time the second one plays, the first is a memory. The whole
- * reason this exists is that the judgement needs both pictures on screen at
- * the same instant, slowly enough that a single dropped frame is visible. The
- * default is 5x because that is the factor the earlier hand-written lines
- * converged on after the owner rejected real-time pairs twice.
+ * Two clips played separately cannot be judged against each other: by the
+ * time the second one plays, the first is a memory. The judgement needs both
+ * pictures on screen at the same instant — that is what the command is for.
+ *
+ * It runs at **real time**, and the reason is the opposite of obvious. Slow
+ * motion is the better instrument for *inspecting* two results: at a fifth
+ * speed a single late frame is visible, which is exactly what an internal
+ * A/B wants to see. It is the wrong thing to publish. A pointer path that is
+ * smooth at real speed reads as a stutter at 5x, so a slowed comparison
+ * argues against the tool it was made to defend — the viewer's conclusion is
+ * not "look how even that is", it is "why is the mouse lagging".
+ *
+ * So `--slow` stays, and is an inspection tool. Nothing shown to somebody who
+ * has not already made up their mind should use it.
  *
  * ## Why the labels are burnt in
  *
@@ -73,11 +81,25 @@ export type CompareOptions = {
    */
   height?: number
   quality?: OutputQuality
-  /** How much slower than real time. 5 unless a caller says otherwise. */
+  /**
+   * How much slower than real time.
+   *
+   * 1 — real time — unless a caller says otherwise. Raise it to *inspect* a
+   * pair, never to present one: see this module's header for why a slowed
+   * comparison makes the smooth side look broken.
+   */
   slow?: number
 }
 
-export const DEFAULT_SLOW_FACTOR = 5
+/**
+ * Real time.
+ *
+ * This was 5 and the first comparisons were all made at it, which was a
+ * mistake with a direction: every one of them made the product look worse
+ * than it is, because slowing a smooth motion down is indistinguishable from
+ * a motion that was never smooth.
+ */
+export const DEFAULT_SLOW_FACTOR = 1
 export const DEFAULT_COMPARE_FPS = 60
 
 /**
@@ -430,7 +452,9 @@ Options
   --out <file>        Where the comparison goes. Required.
   --label-left <t>    Left caption (default: the left file's name)
   --label-right <t>   Right caption (default: the right file's name)
-  --slow <n>          How much slower than real time (${String(DEFAULT_SLOW_FACTOR)})
+  --slow <n>          Slow both sides down by this factor (${String(DEFAULT_SLOW_FACTOR)}, real time).
+                      An inspection tool: at a fifth speed a late frame is
+                      visible, and a smooth one looks late. Do not publish it.
   --from <s>          Skip this many seconds off the front of both sides
   --height <px>       Common height (default: the taller input's)
   --fps <n>           Output frame rate (${String(DEFAULT_COMPARE_FPS)})
