@@ -31,6 +31,7 @@
   },
   "scripts": {
     "browsers:install": "playwright install chromium",
+    "compare": "tsx src/compare.ts",
     "demo:hello": "tsx demo/hello.ts",
     "demo:m1-capture": "tsx demo/m1-capture.ts",
     "demo:record-smoke": "tsx demo/record-smoke.ts",
