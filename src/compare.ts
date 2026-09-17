@@ -57,7 +57,34 @@ export type CompareSide = {
   path: string
 }
 
+/**
+ * A rectangle of the inputs' own pixels, taken before anything is scaled.
+ *
+ * The same rectangle on both sides, always — which is the reason this is one
+ * option and not two. A comparison that takes a different region from each
+ * half is not comparing them, exactly as a comparison that starts the two
+ * halves at different moments is not comparing them.
+ */
+export type CompareCrop = {
+  height: number
+  width: number
+  x: number
+  y: number
+}
+
 export type CompareOptions = {
+  /**
+   * The region of both inputs the comparison is made of. Whole frames if
+   * absent.
+   *
+   * Why a comparison needs this at all: the evidence is rarely the whole
+   * picture. A scroll cadence lives in a slice of a table a few hundred
+   * pixels wide, and a reader who is shown two entire pages side by side
+   * gets each of them at half width or less — small enough that the type
+   * stops being type. Cropping to where the evidence is costs nothing, and
+   * not having it cost this repository its first legible hero picture.
+   */
+  crop?: CompareCrop
   /**
    * Where both sides start, in the inputs' own seconds.
    *
@@ -297,12 +324,103 @@ export function afterStart(
   })
 }
 
+/**
+ * The size each side has once the crop has been taken, and the refusal to
+ * take one that would not mean the same thing on both sides.
+ *
+ * Two refusals, and the first is the one worth stating. A rectangle is a
+ * region only relative to the frame it is cut from: `500,140 470x560` of a
+ * 1920x1080 recording and of a 960x540 one are different parts of the
+ * application, so a crop across two differently sized inputs would produce a
+ * picture that looks like a comparison and is not one. That is refused rather
+ * than resolved, because every way of resolving it — scaling first, matching
+ * proportionally — is a guess about which region the caller meant.
+ *
+ * The second is ordinary: a rectangle that leaves the frame. ffmpeg would
+ * quietly slide it back inside, so both sides would still line up and the
+ * comparison would silently be of somewhere else.
+ */
+export function afterCrop(
+  probes: readonly VideoInfo[],
+  crop: CompareCrop | undefined,
+): VideoInfo[] {
+  if (crop === undefined) return [...probes]
+  const { height, width, x, y } = crop
+  if (
+    !Number.isInteger(width) ||
+    !Number.isInteger(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    throw new Error(
+      `--crop needs a positive whole-pixel size, got ${String(width)}x${String(height)}.`,
+    )
+  }
+  if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0) {
+    throw new Error(
+      `--crop needs a non-negative whole-pixel offset, got +${String(x)}+${String(y)}.`,
+    )
+  }
+  const [first, ...rest] = probes
+  if (first === undefined) return []
+  for (const probe of rest) {
+    if (probe.width !== first.width || probe.height !== first.height) {
+      throw new Error(
+        `--crop takes the same rectangle from both sides, but ${first.path} is ` +
+          `${String(first.width)}x${String(first.height)} and ${probe.path} is ` +
+          `${String(probe.width)}x${String(probe.height)}. The same rectangle ` +
+          'would be a different region of each, which is not a comparison.',
+      )
+    }
+  }
+  for (const probe of probes) {
+    if (x + width > probe.width || y + height > probe.height) {
+      throw new Error(
+        `--crop ${String(width)}x${String(height)}+${String(x)}+${String(y)} ` +
+          `does not fit inside ${probe.path}, which is ${String(probe.width)}x` +
+          `${String(probe.height)}. A rectangle that hangs over the edge is ` +
+          'moved back inside by ffmpeg, so the comparison would silently be ' +
+          'of somewhere else.',
+      )
+    }
+  }
+  return probes.map((probe) => ({ ...probe, height, width }))
+}
+
+/**
+ * The geometry a caller types: `WxH+X+Y`, the same shape ffmpeg and X11 use.
+ *
+ * Parsed strictly rather than leniently. A crop is the one option here whose
+ * mistakes are invisible in the result — a comparison of the wrong region
+ * still looks like a comparison — so a spec that is nearly right is refused
+ * by name instead of being read as something close to it.
+ */
+export function parseCropSpec(spec: string): CompareCrop {
+  const match = /^(\d+)x(\d+)\+(\d+)\+(\d+)$/.exec(spec.trim())
+  if (match === null) {
+    throw new Error(
+      `--crop wants a rectangle as WIDTHxHEIGHT+X+Y, for example ` +
+        `470x560+500+140, got "${spec}".`,
+    )
+  }
+  const [, width, height, x, y] = match
+  return {
+    height: Number(height),
+    width: Number(width),
+    x: Number(x),
+    y: Number(y),
+  }
+}
+
 export function buildCompareFilter(
   sides: readonly [CompareSide, CompareSide],
   rawProbes: readonly [VideoInfo, VideoInfo],
   options: CompareOptions = {},
 ): string {
-  const probes = afterStart(rawProbes, options.from) as [VideoInfo, VideoInfo]
+  const probes = afterCrop(
+    afterStart(rawProbes, options.from),
+    options.crop,
+  ) as [VideoInfo, VideoInfo]
   const slow = options.slow ?? DEFAULT_SLOW_FACTOR
   if (!Number.isFinite(slow) || slow <= 0) {
     throw new Error(
@@ -323,7 +441,21 @@ export function buildCompareFilter(
     const probe = probes[index]
     if (probe === undefined) throw new Error('A side has no probe')
     const hold = longest - probe.durationSeconds
-    const steps = [`[${String(index)}:v]scale=-2:${String(height)}`, 'setsar=1']
+    // The crop comes first, before the scale: it is expressed in the input's
+    // own pixels, which is the only frame of reference a caller can read off
+    // a still. Cropping after a scale would make the numbers depend on
+    // --height, so the same rectangle would mean different regions on two
+    // runs of the same command.
+    const crop = options.crop
+    const steps = [
+      `[${String(index)}:v]${
+        crop === undefined
+          ? ''
+          : `crop=${String(crop.width)}:${String(crop.height)}:` +
+            `${String(crop.x)}:${String(crop.y)},`
+      }scale=-2:${String(height)}`,
+      'setsar=1',
+    ]
     if (hold > 0.001) {
       steps.push(`tpad=stop_mode=clone:stop_duration=${hold.toFixed(3)}`)
     }
@@ -359,7 +491,10 @@ export function compareOutputSize(
   rawProbes: readonly [VideoInfo, VideoInfo],
   options: CompareOptions = {},
 ): { band: number; height: number; width: number } {
-  const probes = afterStart(rawProbes, options.from) as [VideoInfo, VideoInfo]
+  const probes = afterCrop(
+    afterStart(rawProbes, options.from),
+    options.crop,
+  ) as [VideoInfo, VideoInfo]
   const height = commonHeight(probes, options.height)
   const band = labelBandHeight(labelFontSize(sides, probes, height))
   return {
@@ -456,6 +591,9 @@ Options
                       An inspection tool: at a fifth speed a late frame is
                       visible, and a smooth one looks late. Do not publish it.
   --from <s>          Skip this many seconds off the front of both sides
+  --crop <WxH+X+Y>    Compare this rectangle of both inputs instead of whole
+                      frames, in the inputs' own pixels. The same rectangle on
+                      each side; both inputs must be the same size.
   --height <px>       Common height (default: the taller input's)
   --fps <n>           Output frame rate (${String(DEFAULT_COMPARE_FPS)})
   --encoder <name>    x264, nvenc-h264 or nvenc-hevc (x264)
@@ -516,6 +654,11 @@ export function parseCompareArguments(
       case '--label-right':
         if (next === undefined) throw new Error('--label-right needs a text')
         labelRight = next
+        index += 1
+        break
+      case '--crop':
+        if (next === undefined) throw new Error('--crop needs a rectangle')
+        options.crop = parseCropSpec(next)
         index += 1
         break
       case '--from':
