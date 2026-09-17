@@ -377,13 +377,13 @@ Fewer disturbances, much heavier ones. Measured independently of the
 instrument (phase correlation straight off the video), the after-arm puts
 46 px in a single frame pair against neighbours of 12-16 px, in both
 directions; the before-arm's worst is 31 px and only at the start. The
-owner watched both recordings at normal speed and ruled: "A ist nur am
-Anfang ruckelig einmal, sonst ist A aber viel besser. B ruckelt zurück ja
-auch komplett." So ticket 35's pacing gets reverted and the window fix stays.
+owner watched both recordings at normal speed and ruled: "A only judders once
+at the start, otherwise A is much better. B judders right back as well." So
+ticket 35's pacing gets reverted and the window fix stays.
 
 Two things worth keeping from this. The hitch **count** favoured the arm
 the eye rejected; only severity got it right, which is the ticket 28/ticket 29
-decision confirmed on real material. And "ruckelt zurück" is not backwards
+decision confirmed on real material. And "judders right back" is not backwards
 motion — there is no step against the direction of travel in either arm.
 It is one jump big enough to read as a teleport, which is the first
 calibration bracket the eye has ever given this project (ticket 30): ~5 even
