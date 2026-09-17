@@ -141,7 +141,44 @@ our own settings; both have now been proven (M1 for desktop, M3 for mobile).
 `S` marks the captures that run through the shell (strategy `framed-scale`) —
 exactly the touch profiles. Each of the 143 Playwright names also works
 directly, without a preset. The shortlist exists only so that a later dropdown
-has eleven sensible entries instead of 143.
+has twelve sensible entries instead of 143.
+
+## The 4K preset, and what it does not promise
+
+`desktop-4k` records and delivers 3840×2160. It exists because "can it do 4K"
+is a fair question and the answer used to be "only by editing the source".
+
+Two things it deliberately does not claim:
+
+**Not 4K at 60 frames a second.** Measured on the benchmark machine
+2026-09-17: capture yield 98.60 % (282 of 286 presented frames), gate cleared,
+frames sharp and intact — recording at this size is not the problem. The
+cadence is. At 2560×1600 the browser presents a frame every 16.76 ms in the
+median and 84.8 % of the gaps are one full 60 Hz interval; at 3840×2160 it is
+20.52 ms and half. So: 4K, yes. 4K at 60, no, and saying so would be claiming
+more than was measured.
+
+**The camera holds still.** Output equals capture area, so there is no reserve
+to crop into and every push-in is clamped to 1.00× — the same trade the mobile
+presets make. A run that wants a large picture _and_ a moving camera asks for
+the two sizes separately:
+
+```ts
+export const devices = [
+  {
+    extends: 'desktop',
+    as: 'desktop-roomy',
+    capture: { width: 3840, height: 2160 },
+  },
+]
+```
+
+That keeps `desktop`'s own 1920×1080 delivery and leaves a 2× reserve — a
+sharper 1080p with a far more dramatic camera move than the 1.33× the standard
+desktop area affords. It costs the same 35 % more recording time as the 4K
+preset, and the frames are 826 KB each instead of 452 KB.
+
+---
 
 ## A note on engines
 
@@ -163,7 +200,7 @@ Four points that had to be decided concretely while building:
 
 **The registry is larger than noted here.** The checked-out `playwright` 1.63.0
 supplies **207** names (107 devices plus 100 `… landscape` variants), not the
-143 noted above. The eleven curated names and all the characteristics in the
+143 noted above. The twelve curated names and all the characteristics in the
 table still match the registry exactly — checked in the test. That discrepancy
 is precisely the reason to read the list at run time.
 
