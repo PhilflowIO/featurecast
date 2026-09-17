@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  afterCrop,
   afterStart,
   buildCompareFilter,
   buildComparePlan,
@@ -9,6 +10,7 @@ import {
   labelBandHeight,
   labelFontSize,
   parseCompareArguments,
+  parseCropSpec,
   runCompare,
   scaledWidth,
   type CompareSide,
@@ -349,6 +351,99 @@ describe('two inputs that do not match', () => {
         'broken.mp4',
       ),
     ).toThrow(/broken\.mp4 reports no usable duration/)
+  })
+})
+
+describe('comparing a region instead of whole frames', () => {
+  const CROP = { height: 560, width: 470, x: 500, y: 140 }
+
+  it('takes the rectangle out of both sides, before anything is scaled', () => {
+    const filter = buildCompareFilter(SIDES, [video(), video()], {
+      crop: CROP,
+    })
+    for (const index of [0, 1] as const) {
+      const chain = sideChain(filter, index)
+      expect(chain).toContain('crop=470:560:500:140')
+      // The rectangle is read off a still of the input, so it has to be in
+      // the input's pixels. After a scale it would mean something different
+      // on every run with a different --height.
+      expect(chain.indexOf('crop=')).toBeLessThan(chain.indexOf('scale='))
+    }
+  })
+
+  it('sizes the finished frame from the rectangle, not from the inputs', () => {
+    const whole = compareOutputSize(SIDES, [video(), video()])
+    const cropped = compareOutputSize(SIDES, [video(), video()], { crop: CROP })
+    expect(whole.width).toBe(1920 * 2)
+    // Two 470-wide halves, brought to the crop's own height, plus the band.
+    expect(cropped.width).toBe(470 * 2)
+    expect(cropped.height).toBe(560 + cropped.band)
+  })
+
+  it('leaves whole frames alone when no rectangle is asked for', () => {
+    expect(buildCompareFilter(SIDES, [video(), video()])).not.toContain('crop=')
+    expect(afterCrop([video(), video()], undefined)).toHaveLength(2)
+  })
+
+  it('refuses one rectangle across two differently sized inputs', () => {
+    // The same numbers are a different part of the application in each, so
+    // the picture would look like a comparison without being one.
+    expect(() =>
+      afterCrop(
+        [
+          video({ height: 1080, path: 'left.mp4', width: 1920 }),
+          video({ height: 540, path: 'right.mp4', width: 960 }),
+        ],
+        CROP,
+      ),
+    ).toThrow(/would be a different region of each/)
+  })
+
+  it('refuses a rectangle that hangs over the edge, naming the input', () => {
+    expect(() => afterCrop([video(), video()], { ...CROP, x: 1600 })).toThrow(
+      /does not fit inside left\.mp4, which is 1920x1080/,
+    )
+    expect(() => afterCrop([video(), video()], { ...CROP, y: 900 })).toThrow(
+      /does not fit inside/,
+    )
+  })
+
+  it('refuses a rectangle with no area and a negative offset', () => {
+    expect(() => afterCrop([video(), video()], { ...CROP, width: 0 })).toThrow(
+      /positive whole-pixel size/,
+    )
+    expect(() => afterCrop([video(), video()], { ...CROP, x: -8 })).toThrow(
+      /non-negative whole-pixel offset/,
+    )
+  })
+
+  it('reads the geometry a caller types, and refuses a near miss', () => {
+    expect(parseCropSpec('470x560+500+140')).toEqual(CROP)
+    expect(parseCropSpec(' 470x560+500+140 ')).toEqual(CROP)
+    for (const wrong of [
+      '470x560',
+      '470,560+500+140',
+      '470x560+500',
+      '470x560+500+140+0',
+    ]) {
+      expect(() => parseCropSpec(wrong)).toThrow(/WIDTHxHEIGHT\+X\+Y/)
+    }
+  })
+
+  it('carries the rectangle from the command line into the picture', () => {
+    const request = parseCompareArguments([
+      'left.mp4',
+      'right.mp4',
+      '--out',
+      'out.mp4',
+      '--crop',
+      '470x560+500+140',
+    ])
+    expect(request?.options.crop).toEqual(CROP)
+    const plan = buildComparePlan(SIDES, [video(), video()], 'out.mp4', {
+      crop: CROP,
+    })
+    expect(plan.arguments.join(' ')).toContain('crop=470:560:500:140')
   })
 })
 

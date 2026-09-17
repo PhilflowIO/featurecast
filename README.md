@@ -8,19 +8,22 @@ One browser run produces two things: clean raw footage and an event log of where
 
 ---
 
-## The recording, paced
+## How far the picture moves between two frames
 
-Left: wheel events handed to the page as they arrive. Right: the same scroll, paced to 60 Hz. Same script, same page, same browser.
+The same 700 px of sideways travel, in the same time, through the same three
+columns of the same table. Left: whole 38.9 px wheel packets, the procedure
+this tool used to have. Right: eased steps, never more than 30 px between two
+frames. Nothing else differs — same script, same page, same browser.
 
-![Unpaced versus paced scroll, side by side](docs/media/paced-scroll.gif)
+![Wheel packets against eased steps, side by side, on a slice of a table](docs/media/scroll-steps.gif)
 
 <!--
   Two further comparisons and a full product video exist as full-resolution
   60 fps MP4 and are deliberately not committed: GitHub renders an .mp4 from
   the repository tree as a link rather than a player, and what each one
-  demonstrates (sharpness, frame yield) is exactly what a downscaled,
-  64-colour GIF destroys. They are uploaded once through GitHub's attachment
-  lane and their URLs pasted in here. See issue #103 for the sources.
+  demonstrates (sharpness, frame yield) is exactly what a 32-colour GIF
+  destroys. They are uploaded once through GitHub's attachment lane and their
+  URLs pasted in here. See issue #103 for the sources.
 -->
 
 ---
