@@ -159,6 +159,36 @@ export function labelBandHeight(fontSize: number): number {
 }
 
 /**
+ * How wide the frame around each picture is, as a multiple of the font size.
+ *
+ * Derived rather than tabulated, for the same reason the band is: a
+ * comparison of two phone recordings and one of two desktop recordings should
+ * get a frame in the same proportion to their type, not the same number of
+ * pixels.
+ */
+const FRAME_WIDTH_EM = 0.5
+
+/**
+ * The frame around each half, in pixels — and why a comparison needs one.
+ *
+ * Without it the two pictures touch, and two pictures that touch are one
+ * picture. That is not a theory: the first comparison published from this
+ * command filmed the same application on both sides, and a reader looking at
+ * it asked how many recordings he was seeing. The halves shared a table
+ * border, so the eye ran a heading on the left edge of one half onto the
+ * tail of a heading on the right edge of the other and read the pair as a
+ * single word.
+ *
+ * Black, the caption band's own colour, so the band and the frame are one
+ * shape: each side ends up as a panel with its name written on it, which is
+ * what it is.
+ */
+export function frameWidth(fontSize: number): number {
+  const frame = Math.max(4, Math.round(fontSize * FRAME_WIDTH_EM))
+  return frame + (frame % 2)
+}
+
+/**
  * Characters a burnt-in label may not contain.
  *
  * The text travels through two unescaping passes — the filtergraph parser's
@@ -436,6 +466,7 @@ export function buildCompareFilter(
   const fontSize = labelFontSize(sides, probes, height)
   const margin = Math.round(fontSize * 0.8)
   const band = labelBandHeight(fontSize)
+  const frame = frameWidth(fontSize)
 
   const chains = sides.map((side, index) => {
     const probe = probes[index]
@@ -471,10 +502,20 @@ export function buildCompareFilter(
         `:x=${String(margin)}:y=(${String(band)}-text_h)/2` +
         `:fontsize=${String(fontSize)}:fontcolor=white`,
     )
+    // The frame goes on the left of each half, after the caption is drawn, so
+    // that stacking them puts one frame outside the picture and one between
+    // the two — the same shape, doing both jobs. The right and bottom edges
+    // are closed once, on the stacked picture.
+    steps.push(
+      `pad=iw+${String(frame)}:ih:${String(frame)}:0:color=${BAND_COLOUR}`,
+    )
     return `${steps.join(',')}[side${String(index)}]`
   })
 
-  return `${chains.join(';')};[side0][side1]hstack=inputs=2[stacked]`
+  return (
+    `${chains.join(';')};[side0][side1]hstack=inputs=2,` +
+    `pad=iw+${String(frame)}:ih+${String(frame)}:0:0:color=${BAND_COLOUR}[stacked]`
+  )
 }
 
 /**
@@ -490,20 +531,24 @@ export function compareOutputSize(
   sides: readonly [CompareSide, CompareSide],
   rawProbes: readonly [VideoInfo, VideoInfo],
   options: CompareOptions = {},
-): { band: number; height: number; width: number } {
+): { band: number; frame: number; height: number; width: number } {
   const probes = afterCrop(
     afterStart(rawProbes, options.from),
     options.crop,
   ) as [VideoInfo, VideoInfo]
   const height = commonHeight(probes, options.height)
-  const band = labelBandHeight(labelFontSize(sides, probes, height))
+  const fontSize = labelFontSize(sides, probes, height)
+  const band = labelBandHeight(fontSize)
+  const frame = frameWidth(fontSize)
   return {
     band,
-    height: height + band,
-    width: probes.reduce(
-      (total, probe) => total + scaledWidth(probe, height),
-      0,
-    ),
+    frame,
+    // One frame down the outside of each half and one between them: three in
+    // a two-sided picture, and the last of them is the seam.
+    height: height + band + frame,
+    width:
+      probes.reduce((total, probe) => total + scaledWidth(probe, height), 0) +
+      frame * 3,
   }
 }
 
@@ -768,7 +813,8 @@ export async function runCompare(
   write(
     `${request.outputPath}\n` +
       `  ${String(size.width)}x${String(size.height)}, of which ` +
-      `${String(size.band)} px is caption band above the picture; ` +
+      `${String(size.band)} px is caption band above each picture and ` +
+      `${String(size.frame)} px is the frame around it; ` +
       `${slow.toFixed(1)}x slower, ${(longest * slow).toFixed(1)}s long\n`,
   )
   for (const [index, side] of request.sides.entries()) {
