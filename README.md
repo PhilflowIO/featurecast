@@ -8,20 +8,46 @@ One browser run produces two things: clean raw footage and an event log of where
 
 ---
 
-## How far the picture moves between two frames
+## One recording, every look
 
-The same 700 px of sideways travel, in the same time, through the same three
-columns of the same table. Left: whole 38.9 px wheel packets, the procedure
-this tool used to have. Right: eased steps, never more than 30 px between two
-frames. Nothing else differs — same script, same page, same browser.
+![The same take rendered three ways: no pointer, the default pointer, a bigger pointer](docs/media/one-take-every-look.gif)
 
-![Wheel packets against eased steps, side by side, on a slice of a table](docs/media/scroll-steps.gif)
+Three versions of one browser run. The application behind them is the same
+pixels in all three, at the same instant — only the pointer is different,
+because the pointer is not in the recording. It is drawn afterwards from the
+log of where it went.
+
+That is what makes "can we have a bigger cursor" a re-render of a few seconds
+instead of another visit to the application. And the motion cannot drift while
+you try things, because nothing was recorded again.
+
+```bash
+pnpm compare plain/16-9.mp4 default/16-9.mp4 big/16-9.mp4 --out looks.mp4 \
+  --label "no pointer" --label "the default pointer" --label "a bigger pointer"
+```
+
+---
+
+## One recording, every format
+
+![The same take as 16:9, 9:16 and 1:1, playing at the same time](docs/media/one-take-every-format.gif)
+
+Landing page, phone and social post out of one run. Each format frames the
+clicked element for itself: the wide one keeps the page around it, the tall one
+crops to a column, the square one sits in between. Nobody records three times.
+
+Zoom is a crop of the original, never a magnification — so a format is only
+delivered at a size the capture can actually pay for, and told when it cannot.
+
+```bash
+pnpm render artifacts/tour/desktop dist/tour --formats 16:9,9:16,1:1
+```
 
 <!--
   Two further comparisons and a full product video exist as full-resolution
   60 fps MP4 and are deliberately not committed: GitHub renders an .mp4 from
   the repository tree as a link rather than a player, and what each one
-  demonstrates (sharpness, frame yield) is exactly what a 32-colour GIF
+  demonstrates (sharpness, frame yield) is exactly what a 128-colour GIF
   destroys. They are uploaded once through GitHub's attachment lane and their
   URLs pasted in here. See issue #103 for the sources.
 -->
@@ -98,6 +124,17 @@ at full sharpness and says so, instead of upscaling.
 drawing happen frame by frame in our own code rather than in ffmpeg's filter
 graph, because a time-driven command channel was not reproducible: six
 identical runs produced four different videos.
+
+---
+
+## How far the picture moves between two frames
+
+The same 700 px of sideways travel, in the same time, through the same three
+columns of the same table. Left: whole 38.9 px wheel packets, the procedure
+this tool used to have. Right: eased steps, never more than 30 px between two
+frames. Nothing else differs — same script, same page, same browser.
+
+![Wheel packets against eased steps, side by side, on a slice of a table](docs/media/scroll-steps.gif)
 
 ---
 
