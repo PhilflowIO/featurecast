@@ -45,10 +45,19 @@ const USAGE = `featurecast run <script> [options]
   a touch one: a mobile recording films the application inside a shell served
   from its own origin, and that origin has to be known before the first frame.
 
-  Three more exports describe the browser context, which a script cannot
+  \`devices\` says what it is filmed on. A bare name is a preset or a
+  Playwright device; an object overrides any field of it, and \`as\` gives the
+  variant its own name and directory:
+
+    export const devices = [
+      'desktop-wide',
+      { extends: 'iphone', as: 'phone-with-reserve',
+        capture: { width: 1620, height: 2880 } },
+    ]
+
+  Three further exports describe the browser context, which a script cannot
   reach itself — it is handed a page that is already open:
 
-    export const devices = ['desktop-wide', { extends: 'iphone', as: 'phone-wide-capture', capture: { width: 1620, height: 2880 } }]
     export const storageStatePath = 'auth/state.json'
     export const hideSelectors = ['#cookie-banner', '#internal-card']
     export const fixedTime = '2026-01-15T09:00:00Z'
