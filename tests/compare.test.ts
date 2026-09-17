@@ -7,6 +7,7 @@ import {
   buildComparePlan,
   commonHeight,
   compareOutputSize,
+  frameWidth,
   labelBandHeight,
   labelFontSize,
   parseCompareArguments,
@@ -44,7 +45,7 @@ function sideChain(filter: string, index: 0 | 1): string {
 describe('the comparison picture', () => {
   it('puts both inputs in one frame, side by side', () => {
     const filter = buildCompareFilter(SIDES, [video(), video()])
-    expect(filter).toContain('[side0][side1]hstack=inputs=2[stacked]')
+    expect(filter).toContain('[side0][side1]hstack=inputs=2')
     const plan = buildComparePlan(SIDES, [video(), video()], 'out.mp4')
     expect(plan.arguments).toContain('-map')
     expect(plan.arguments).toContain('[stacked]')
@@ -203,8 +204,8 @@ describe('the caption band', () => {
     ]
     const size = compareOutputSize(SIDES, probes)
     expect(size.height).toBeGreaterThan(1080)
-    expect(size.height).toBe(1080 + size.band)
-    expect(size.width).toBe(3840)
+    expect(size.height).toBe(1080 + size.band + size.frame)
+    expect(size.width).toBe(3840 + size.frame * 3)
   })
 
   it('derives the band from the type size, not from a guessed constant', () => {
@@ -374,10 +375,11 @@ describe('comparing a region instead of whole frames', () => {
   it('sizes the finished frame from the rectangle, not from the inputs', () => {
     const whole = compareOutputSize(SIDES, [video(), video()])
     const cropped = compareOutputSize(SIDES, [video(), video()], { crop: CROP })
-    expect(whole.width).toBe(1920 * 2)
-    // Two 470-wide halves, brought to the crop's own height, plus the band.
-    expect(cropped.width).toBe(470 * 2)
-    expect(cropped.height).toBe(560 + cropped.band)
+    expect(whole.width).toBe(1920 * 2 + whole.frame * 3)
+    // Two 470-wide halves, brought to the crop's own height, plus the band
+    // above them and the three frames around and between them.
+    expect(cropped.width).toBe(470 * 2 + cropped.frame * 3)
+    expect(cropped.height).toBe(560 + cropped.band + cropped.frame)
   })
 
   it('leaves whole frames alone when no rectangle is asked for', () => {
@@ -444,6 +446,45 @@ describe('comparing a region instead of whole frames', () => {
       crop: CROP,
     })
     expect(plan.arguments.join(' ')).toContain('crop=470:560:500:140')
+  })
+})
+
+describe('telling the two halves apart', () => {
+  it('frames each half and puts the frames between them, not only outside', () => {
+    const filter = buildCompareFilter(SIDES, [video(), video()])
+    const frame = frameWidth(labelFontSize(SIDES, [video(), video()], 1080))
+    for (const index of [0, 1] as const) {
+      // Each half carries its own frame on its left edge, so stacking them
+      // puts one outside the picture and one in the middle.
+      expect(sideChain(filter, index)).toContain(
+        `pad=iw+${String(frame)}:ih:${String(frame)}:0:color=black`,
+      )
+    }
+    // And the right and bottom edges are closed once, after the stack.
+    expect(filter).toContain(
+      `hstack=inputs=2,pad=iw+${String(frame)}:ih+${String(frame)}:0:0:color=black`,
+    )
+  })
+
+  it('draws the frame after the caption, so the caption does not move into it', () => {
+    const chain = sideChain(buildCompareFilter(SIDES, [video(), video()]), 0)
+    expect(chain.indexOf('drawtext')).toBeLessThan(chain.lastIndexOf('pad='))
+  })
+
+  it('counts the frames into the finished size, three of them', () => {
+    const size = compareOutputSize(SIDES, [video(), video()])
+    expect(size.frame).toBeGreaterThan(0)
+    expect(size.width).toBe(1920 * 2 + size.frame * 3)
+    expect(size.height).toBe(1080 + size.band + size.frame)
+  })
+
+  it('keeps the frame in proportion to the type, and never hairline', () => {
+    // A frame of one or two pixels is a rendering artefact to the eye, not a
+    // separation; below that size it stops doing the only job it has.
+    expect(frameWidth(40)).toBe(20)
+    expect(frameWidth(4)).toBe(4)
+    expect(frameWidth(40) % 2).toBe(0)
+    expect(frameWidth(30) % 2).toBe(0)
   })
 })
 

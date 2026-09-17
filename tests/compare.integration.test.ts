@@ -8,7 +8,9 @@ import { afterAll, describe, expect, it } from 'vitest'
 
 import {
   buildComparePlan,
+  commonHeight,
   compareOutputSize,
+  scaledWidth,
   type CompareSide,
 } from '../src/compare.js'
 import { parseVideoInfo, readVideoInfo } from '../src/probe.js'
@@ -103,5 +105,81 @@ describe('a real comparison encode', () => {
     expect(expected.band).toBeGreaterThan(0)
     // Both sides end together: 2 seconds of material at half speed.
     expect(finished.durationSeconds).toBeGreaterThan(3.8)
+  }, 60_000)
+
+  /**
+   * The seam, measured in pixels rather than read off the filter graph.
+   *
+   * The reason this is an encode and not a string assertion: the finding it
+   * answers was not "the command forgets to draw a separator", it was "a
+   * reader cannot tell there are two recordings". A filter that is present
+   * and covers nothing would satisfy the graph and fail the reader, which is
+   * exactly the failure mode this file exists for.
+   */
+  it('puts a black frame between the two halves, and it occupies pixels', async () => {
+    const directory = await scratch()
+    const left = join(directory, 'left.mp4')
+    const right = join(directory, 'right.mp4')
+    const out = join(directory, 'comparison.mp4')
+    await testClip(left, '320x180', 1)
+    await testClip(right, '320x180', 1)
+
+    const probes: [
+      Awaited<ReturnType<typeof readVideoInfo>>,
+      Awaited<ReturnType<typeof readVideoInfo>>,
+    ] = [await readVideoInfo(left), await readVideoInfo(right)]
+    const sides: readonly [CompareSide, CompareSide] = [
+      { label: 'one way', path: left },
+      { label: 'the other way', path: right },
+    ]
+    const expected = compareOutputSize(sides, probes)
+    const plan = buildComparePlan(sides, probes, out, { fps: 30 })
+    await run(plan.command, plan.arguments)
+
+    const { stdout } = await run('ffprobe', buildFfprobeArguments(out))
+    const finished = parseVideoInfo(stdout, out)
+
+    // Three frames' worth of width that the material does not contain: one
+    // down each outer edge and one between the halves.
+    const material = probes.reduce(
+      (total, probe) => total + scaledWidth(probe, commonHeight(probes)),
+      0,
+    )
+    expect(expected.frame).toBeGreaterThan(0)
+    expect(expected.width).toBe(material + expected.frame * 3)
+    expect(finished.width).toBe(expected.width)
+
+    const column = async (x: number): Promise<Buffer> => {
+      const { stdout: pixels } = await run(
+        'ffmpeg',
+        [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-i',
+          out,
+          '-frames:v',
+          '1',
+          '-vf',
+          `crop=2:${String(expected.height)}:${String(x)}:0,format=gray`,
+          '-f',
+          'rawvideo',
+          '-',
+        ],
+        { encoding: 'buffer', maxBuffer: 1 << 24 },
+      )
+      return pixels
+    }
+
+    const seam = expected.frame + scaledWidth(probes[0], commonHeight(probes))
+    const inTheSeam = await column(seam)
+    const insideTheLeftHalf = await column(expected.frame + 40)
+
+    expect(inTheSeam.length).toBeGreaterThan(0)
+    // Every pixel of the seam, top to bottom, is the band's own black.
+    expect(Math.max(...inTheSeam)).toBeLessThan(24)
+    // And the control: the picture next to it is not black, so the test is
+    // reading the file and not an empty buffer.
+    expect(Math.max(...insideTheLeftHalf)).toBeGreaterThan(80)
   }, 60_000)
 })
