@@ -29,9 +29,9 @@ import { recordPageFor } from './surface.js'
  * around it.
  *
  * This is the composition `docs/RECORDING-SCRIPTS.md` said did not exist yet
- * — "Die Aufnahme der Einzelbilder (src/capture.ts) und der Zusammenbau
- * (src/assemble.ts) existieren, sind aber bisher nur in demo/m1-capture.ts
- * von Hand mit dem Wrapper verdrahtet." The wiring is the same one that
+ * — "frame capture (src/capture.ts) and assembly (src/assemble.ts) exist, but
+ * so far are only wired to the wrapper by hand in demo/m1-capture.ts." The
+ * wiring is the same one that
  * benchmark uses and for the same reason: `record()`'s own default runtime
  * launches a *second*, uncaptured browser, so the script has to be driven
  * against the exact page the screencast is attached to.

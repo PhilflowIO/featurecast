@@ -120,8 +120,8 @@ type Seen = Record<string, boolean>
  * Asks the page which of the four nodes are on screen, in one go.
  *
  * A string payload rather than a function, for the reason
- * `docs/RECORDING-SCRIPTS.md` gives under "Die Falle, die jedes
- * eingespritzte Skript trifft": a string is never compiled, so no esbuild
+ * `docs/RECORDING-SCRIPTS.md` gives under "The trap that
+ * catches every injected script": a string is never compiled, so no esbuild
  * name wrapper can travel into the page with it. It also answers without
  * waiting — `locator.boundingBox()` blocks for its own timeout on a node
  * that is not there, which would turn a clear "the session never arrived"

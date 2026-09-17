@@ -1,17 +1,25 @@
-# Wie featurecast arbeitet
+# How featurecast works
 
-Dieses Dokument war bis 2026-09-17 das README des Repositories. Es ist der
-innere Bericht: wie Aufnahme und Nachbearbeitung funktionieren, welche
-Garantien gelten und wodurch sie belegt sind. Es bleibt bewusst auf Deutsch
-und ungekürzt. Der Einstieg für Neue ist [README.md](../README.md).
+Until 2026-09-17 this document was the repository's README. It is the inner
+report: how capture and post-processing work, which guarantees hold and what
+backs them. It is deliberately unabridged. The entry point for newcomers is
+[README.md](../README.md).
 
 ---
 
-Aus einem Playwright-Skript wird ein Marketing-Video eines Features — in Desktop und Mobile, mit weicher, menschlich wirkender Cursor-Bewegung und automatischem Zoom auf das, was gerade passiert.
+A Playwright script becomes a marketing video of a feature — on desktop and
+mobile, with soft, human-looking cursor motion and automatic zoom onto
+whatever is happening at the time.
 
-Der Kern der Idee: **die Aufnahme brennt nichts in die Pixel.** Es entstehen zwei Artefakte — ein sauberes Rohvideo und ein Ereignis-Log (wohin der Zeiger lief, was wann geklickt wurde, welches Element dabei getroffen wurde). Cursor, Zoom, Beschriftungen und Seitenverhältnis entstehen erst danach. Eine Änderung am Look ist deshalb ein neuer Render von zehn Sekunden, kein neuer Browser-Lauf.
+The core of the idea: **the capture burns nothing into the pixels.** Two
+artifacts come out of it — a clean raw video and an event log (where the
+pointer went, what was clicked and when, which element it hit). Cursor, zoom,
+labels and aspect ratio are all added afterwards. Changing the look is
+therefore a ten-second re-render, not another browser run.
 
-Zielgruppe des Repos sind die eigenen Playwright-Skripte: ein bestehendes Skript wird zur Aufnahme, indem seine Interaktionen über einen Wrapper laufen, der Bewegung glättet und protokolliert.
+The repository's target is your own Playwright scripts: an existing script
+becomes a recording by routing its interactions through a wrapper that smooths
+motion and logs it.
 
 ```ts
 import { record } from 'featurecast'
@@ -20,301 +28,478 @@ await record(
   { device: 'iPhone 15 Pro', out: 'dist/feature-xy' },
   async (page, demo) => {
     await page.goto('https://app.example.com/new-feature')
-    await demo.point('#nav-settings') // weiche Anfahrt, kein Klick
-    await demo.tap('#toggle-dark-mode') // Klick bzw. Tap, je nach Gerät
-    await demo.hold(1200) // Wirkung zeigen
+    await demo.point('#nav-settings') // smooth approach, no click
+    await demo.tap('#toggle-dark-mode') // click or tap, depending on the device
+    await demo.hold(1200) // let the effect land
   },
 )
 ```
 
-Stand: M0 und M2 sind umgesetzt: TypeScript, Playwright, Formatierung, ein Smoke-Demo und der `demo`-Wrapper mit Ereignis-Log sind lauffähig. Die Aufnahme- und Render-Stufen folgen den weiteren Meilensteinen. [PLAN.md](../PLAN.md) beschreibt Architektur und belegte Entscheidungen, [MILESTONES.md](../MILESTONES.md) die Ziele in Reihenfolge, [DEVICES.md](DEVICES.md) das Geräte-Konzept.
+Status: M0 and M2 are implemented — TypeScript, Playwright, formatting, a
+smoke demo and the `demo` wrapper with its event log all run. The capture and
+render stages follow in the later milestones. [PLAN.md](../PLAN.md) describes
+the architecture and the decisions behind it, [MILESTONES.md](../MILESTONES.md)
+the goals in order, [DEVICES.md](DEVICES.md) the device concept.
 
-Ein bestehendes Playwright-Skript wird in [RECORDING-SCRIPTS.md](RECORDING-SCRIPTS.md) zur Aufnahme umgebaut — samt der Rezepte für Anmeldung über gespeicherten Sitzungszustand, Cookie-Banner und eingefrorene Uhrzeiten.
+An existing Playwright script is converted into a recording in
+[RECORDING-SCRIPTS.md](RECORDING-SCRIPTS.md) — including the recipes for
+signing in through a saved session state, cookie banners and frozen clocks.
 
-## Ereignis-Log v1
+## Event log v1
 
-`record({ device?, out, seed? }, async (page, demo) => ...)` legt einen `demo`-Wrapper (`point`, `click`, `tap`, `type`, `hold`, `scroll`) um Playwrights Seite und schreibt daneben ein kanonisches, versioniertes `events.jsonl`. Jede Zeile hat eine feste Feldreihenfolge; die Datei endet immer mit einem Zeilenumbruch. Zwei Läufe desselben Skripts mit demselben `seed` erzeugen bitidentische Dateien — bewiesen gegen einen echten headless Chromium in `tests/record.browser.test.ts`.
+`record({ device?, out, seed? }, async (page, demo) => ...)` wraps a `demo`
+object (`point`, `click`, `tap`, `type`, `hold`, `scroll`) around Playwright's
+page and writes a canonical, versioned `events.jsonl` beside it. Every line
+has a fixed field order; the file always ends with a newline. Two runs of the
+same script with the same `seed` produce bit-identical files — proven against
+a real headless Chromium in `tests/record.browser.test.ts`.
 
-Jede Bewegung läuft über die übernommene Minimum-Jerk-Kurve aus `matinee` (Anfahren, Abbremsen, leichtes Überschwingen, Zittern) statt über lineare Interpolation, und wird der Seite bei echten 60 Bildern pro Sekunde vorgespielt: jede Zeigerprobe wartet auf ihren absoluten Zeitpunkt (Start + i/60 s), nicht auf eine aufaddierte Pause, damit sich kein Zeitfehler aufsummiert. Zwischen zwei benachbarten Zeigerproben liegen nie mehr als 20 Pixel — das ist eine Garantie, keine Wahrscheinlichkeit: `src/motion.ts` startet mit einer analytisch hergeleiteten Abtastanzahl und erhöht sie deterministisch weiter, bis die tatsächlich gerenderte, gerundete Kurve die Grenze einhält (gleicher Seed, gleiches Ergebnis). Bei langen Bewegungen kostet das spürbar Zeit — 1500 Pixel brauchen real rund 3,2–4,1 Sekunden, deutlich mehr als `matinee`s ungebremste 1,1 Sekunden, weil dessen Tempo nie für ein 20-Pixel-Limit ausgelegt war. `hold(ms)` legt die Seite für die angegebene Zeit wirklich still, statt nur das Protokoll weiterzuzählen. `type(target, text)` fährt das Feld mit dem Zeiger an, fokussiert es per Klick oder Tap (je nach Gerät) und tippt dann echte Tasten mit einer seed-abhängigen Verzögerung pro Zeichen.
+Every movement runs through the minimum-jerk curve adopted from `matinee`
+(acceleration, braking, slight overshoot, tremor) rather than through linear
+interpolation, and is played to the page at a real 60 frames per second: every
+pointer sample waits for its absolute point in time (start + i/60 s), not for
+an accumulated pause, so no timing error can add up. Two neighbouring pointer
+samples are never more than 20 pixels apart — that is a guarantee, not a
+probability: `src/motion.ts` starts from an analytically derived sample count
+and raises it deterministically until the actually rendered, rounded curve
+holds the limit (same seed, same result). On long movements this costs
+noticeable time — 1500 pixels really do take about 3.2–4.1 seconds, well above
+`matinee`'s unconstrained 1.1 seconds, because its pace was never designed for
+a 20-pixel limit. `hold(ms)` genuinely holds the page still for the given
+time, instead of merely advancing the log. `type(target, text)` travels to the
+field with the pointer, focuses it by click or tap (depending on the device),
+and then types real keys with a seed-dependent delay per character.
 
-Bevor ein `point`/`click`/`tap`/`type` ein Ziel anfährt, wird dessen Geometrie nicht aus einer einzelnen Momentaufnahme übernommen, sondern über ein Beobachtungsfenster hinweg Bild für Bild abgetastet (`requestAnimationFrame` in der Seite, ein Round-Trip pro Fenster — ein Browser berechnet den Wert einer CSS-Animation nur einmal pro Rendering-Takt neu, jede dichtere Abfrage liefert denselben eingefrorenen Wert). Aus den Bildern werden drei Fälle unterschieden, in der Reihenfolge, in der sie am billigsten zu erkennen sind.
+Before a `point`/`click`/`tap`/`type` travels to a target, its geometry is not
+taken from a single snapshot but sampled frame by frame across an observation
+window (`requestAnimationFrame` inside the page, one round trip per window — a
+browser recomputes the value of a CSS animation only once per render tick, so
+any denser query returns the same frozen value). Three cases are distinguished
+from those frames, in the order in which they are cheapest to detect.
 
-**Unbewegt.** Alle Bilder eines 80-ms-Fensters melden exakt dieselben Kanten — bitgleich, ohne Toleranz. Das ist der Normalfall und kostet genau ein Fenster. Die fehlende Toleranz ist Absicht: `getBoundingClientRect()` liefert Sub-Pixel-Werte, ein Ziel, das sich noch bewegt, meldet also von Bild zu Bild andere Zahlen, und eine Schwelle von einem halben Pixel hat genau deshalb eine Verbreiterung von 0,05 px pro Bild als „steht still“ durchgewunken. Die Grenze ist jetzt nicht mehr ein gewählter Wert, sondern die Sub-Pixel-Quantisierung des Browsers selbst (Chromium: 1/64 px) über die Fensterdauer — rechnerisch rund 0,2 px/s bei 80 ms. **Nachgewiesen ist 3 px/s** (`tests/settle-criterion.browser.test.ts`): ein Ziel, das drei Sekunden lang genau so langsam wächst, wird ausgewartet und mit seiner Endbreite protokolliert. Die rechnerische Untergrenze darunter ist nicht durch einen Test belegt.
+**Still.** Every frame of an 80 ms window reports exactly the same edges —
+bit-identical, no tolerance. This is the normal case and costs exactly one
+window. The absence of tolerance is deliberate: `getBoundingClientRect()`
+returns sub-pixel values, so a target that is still moving reports different
+numbers from frame to frame, and a threshold of half a pixel waved through a
+widening of 0.05 px per frame as "standing still" for exactly that reason. The
+limit is no longer a chosen value but the browser's own sub-pixel
+quantisation (Chromium: 1/64 px) over the window duration — around 0.2 px/s at
+80 ms, arithmetically. **What is proven is 3 px/s**
+(`tests/settle-criterion.browser.test.ts`): a target that grows exactly that
+slowly for three seconds is waited out and logged with its final width. The
+arithmetic lower bound below that is not backed by a test.
 
-**Endliche Animation.** Sie endet irgendwann und hinterlässt ein wirklich unbewegtes Element, also wird einfach Fenster für Fenster weiter beobachtet, bis eines unbewegt ist. Eine Animation der Dauer D braucht damit rund D, nicht ein Vielfaches davon — eine gewöhnliche 4-Sekunden-Transition bleibt innerhalb des 5000-ms-Standardbudgets, für das dieser Wert gewählt wurde.
+**Finite animation.** It ends at some point and leaves a genuinely still
+element behind, so the code simply keeps observing window after window until
+one of them is still. An animation of duration D therefore costs roughly D,
+not a multiple of it — an ordinary 4-second transition stays inside the
+5000 ms default budget, which is the value that was chosen for it.
 
-**Dauerhafte, begrenzte Animation.** Eine pulsierende CTA, ein Bounce, ein Wackeln um einen beliebigen `transform-origin`, eine Drehung: sie hört nie auf, Warten würde also zwangsläufig ins Timeout laufen. Stattdessen wird ihre Periode bestimmt — über die Web-Animations-API gelesen, nie gesetzt, und zwar am Element, an seinem Teilbaum **und an allen Vorfahren** (eine Animation am Elternknoten bewegt das Ziel, taucht aber in dessen eigener `getAnimations()` nicht auf); bei `alternate` zählt die doppelte Iterationsdauer, bei mehreren Animationen deren kleinstes gemeinsames Vielfaches. Jede so gewonnene Periode wird anschließend **gegen die gemessene Geometrie verifiziert**: was die Seite deklariert, ist ein Vorschlag, was die Box tatsächlich tut, ist die Entscheidung. Findet sich keine haltbare Periode, wird sie aus den Messwerten selbst geschätzt; bleibt auch das ergebnislos, bricht `record` nach `settleTimeoutMs` mit einer Meldung ab, die genau das sagt (das Ziel bewegt sich begrenzt, aber ohne messbare Periode), statt still über ein beliebig langes Fenster zu mitteln.
+**Permanent, bounded animation.** A pulsing CTA, a bounce, a wobble around
+some `transform-origin`, a rotation: it never stops, so waiting would
+inevitably run into the timeout. Instead its period is determined — read
+through the Web Animations API, never set, and read on the element, on its
+subtree **and on all its ancestors** (an animation on the parent node moves
+the target but does not appear in the target's own `getAnimations()`); with
+`alternate` the doubled iteration duration counts, and with several animations
+their least common multiple. Every period obtained this way is then **verified
+against the measured geometry**: what the page declares is a proposal, what
+the box actually does is the decision. If no defensible period is found, one
+is estimated from the measurements themselves; if that too comes to nothing,
+`record` aborts after `settleTimeoutMs` with a message that says exactly that
+(the target moves within bounds but without a measurable period), instead of
+quietly averaging over an arbitrarily long window.
 
-Gemessen wird dann über eine **ganzzahlige Anzahl von Perioden**, und diese Anzahl ist eine reine Funktion der Periode (`ceil(480 ms / Periode)`) — nicht der verstrichenen Zeit, nicht des Restbudgets, nicht der Anzahl vorheriger Fenster. Genau diese Abhängigkeit war die Ursache dafür, dass zwei Läufe desselben Skripts unterschiedliche Boxen protokollierten: ein Lauf, der eine Beobachtungsrunde mehr brauchte, mittelte über ein anders phasiertes Fenster. Jedes Bild geht mit der Zeit bis zum nächsten gewichtet ein, das letzte nur mit der im Fenster verbleibenden Zeit — das Ergebnis ist ein echtes Zeitintegral über die Periodenanzahl und nicht ein Mittel über so viele Bilder, wie die Maschine gerade geschafft hat. Unter Last, wo `requestAnimationFrame` von 60 Hz auf eine Handvoll Bilder einbricht, ist das der Unterschied zwischen einer stabilen Antwort und einer, die der Last folgt.
+The measurement then runs over an **integer number of periods**, and that
+number is a pure function of the period (`ceil(480 ms / period)`) — not of
+elapsed time, not of the remaining budget, not of the number of previous
+windows. Exactly that dependency was the reason two runs of the same script
+logged different boxes: a run that needed one more observation round averaged
+over a differently phased window. Every frame enters weighted by the time
+until the next one, the last frame only by the time remaining in the window —
+the result is a true time integral over the period count, not an average over
+however many frames the machine happened to manage. Under load, where
+`requestAnimationFrame` collapses from 60 Hz to a handful of frames, that is
+the difference between a stable answer and one that follows the load.
 
-Die protokollierte Box ist die **am längsten gehaltene** (am häufigsten bewohnte) Box, sofern eine deutlich dominiert — „Ruhegeometrie“ heißt bei einer Animation mit Ruhephase die Box, in der das Element wirklich sitzt, nicht der Mittelwert aus Ruhe und kurzem Ausschlag. Eine Animation, die 70 % jedes Zyklus bei `scale(1)` verharrt und kurz auf 1,6 ausschlägt, würde gemittelt eine Box liefern, die das Element nie einnimmt, und M4 würde genau die heranzoomen. Gibt es keine dominierende Box (eine gleichmäßig durchlaufende Bewegung ohne Ruhelage), ist der periodengenaue Zeitmittelwert die Antwort. Der Interaktionspunkt ist der Mittelpunkt dieser Ruhebox, hineingezogen in den Bereich, den das Ziel in **jeder** beobachteten Phase bedeckte — ein Klick trifft damit zu jedem Zeitpunkt der Animation. Der Mittelpunkt jenes Schnittbereichs selbst wäre dafür ungeeignet: seine Kanten sind die Extrema der Animation, und ein Extremum kann ein Prozess prinzipiell nur bis auf ein Rendering-Bild genau treffen — genau daher kam der verbliebene Ein-Pixel-Unterschied zwischen zwei Prozessen.
+The logged box is the **longest-held** (most frequently occupied) box, provided
+one clearly dominates — for an animation with a rest phase, "resting geometry"
+means the box the element actually sits in, not the mean of rest and brief
+excursion. An animation that spends 70 % of each cycle at `scale(1)` and
+briefly swings out to 1.6 would, averaged, yield a box the element never
+occupies, and M4 would zoom onto exactly that. Where no box dominates (a
+steadily traversing motion with no resting position), the period-accurate time
+average is the answer. The interaction point is the centre of that resting
+box, pulled into the region the target covered in **every** observed phase — a
+click therefore lands at any point in the animation. The centre of that
+intersection region would itself be unsuitable: its edges are the extremes of
+the animation, and a process can in principle only hit an extreme to within one
+render frame — which is exactly where the remaining one-pixel difference
+between two processes came from.
 
-Zwei separate Prozesse protokollieren dadurch dieselbe Box und denselben Punkt: `tests/settle-determinism.test.ts` startet pro Fall drei eigene Prozesse und vergleicht `sha256(events.jsonl)` — **und zwar unter Last** (32 Rechenschleifen im selben Container, per `FEATURECAST_LOAD_WORKERS` einstellbar), weil die Garantie auf einer unbelasteten Maschine auch dann grün aussah, wenn sie nicht galt. Auf dem Messrechner: zehn Wiederholungen, drei Prozesse je Fall, drei Fälle (Puls, Bounce, asymmetrische Ruhephase) — jeder Lauf grün, und die Hashes über alle Wiederholungen hinweg identisch, nicht nur innerhalb eines Laufs. Die gemessene Grenze liegt darüber: bei 96 Rechenschleifen auf 32 Kernen (dreifache Überbuchung) liefert der Browser so wenige Rendering-Takte, dass keine Periode mehr verifizierbar ist — dann **bricht die Aufnahme mit der `settleTimeoutMs`-Meldung ab**, in drei Läufen ausnahmslos so und nie mit abweichenden Hashes. Das ist der richtige Ausgang: lieber kein Protokoll als ein falsches. Das kostet etwas, und zwar genau benennbar: ein einzelner Klick auf eine statische Seite 1479 ms gegenüber 1362 ms auf `main` (+8,6 %), zehn Interaktionen 7038 ms gegenüber 6026 ms (+16,8 %, also rund 101 ms je Interaktion), je Mittel aus drei Läufen auf dem Messrechner (`demo/settle-cost.ts`). Der Aufschlag ist fast vollständig das zweite Beobachtungsfenster nach der Ankunft — der Preis dafür, dass die protokollierte Box bei der Ankunft _gemessen_ und nicht einmal abgelesen wird.
+Two separate processes therefore log the same box and the same point:
+`tests/settle-determinism.test.ts` starts three of its own processes per case
+and compares `sha256(events.jsonl)` — **and does so under load** (32 compute
+loops in the same container, adjustable via `FEATURECAST_LOAD_WORKERS`),
+because the guarantee looked green on an unloaded machine even when it did not
+hold. On the benchmark machine: ten repetitions, three processes per case,
+three cases (pulse, bounce, asymmetric rest phase) — every run green, and the
+hashes identical across all repetitions, not merely within one run. The
+measured limit lies above that: at 96 compute loops on 32 cores (triple
+oversubscription) the browser delivers so few render ticks that no period can
+be verified any more — and then **the recording aborts with the
+`settleTimeoutMs` message**, in three runs without exception and never with
+diverging hashes. That is the right outcome: better no log than a wrong one.
+This costs something, and the cost can be named precisely: a single click on a
+static page takes 1479 ms against 1362 ms on `main` (+8.6 %), ten interactions
+7038 ms against 6026 ms (+16.8 %, so around 101 ms per interaction), each the
+mean of three runs on the benchmark machine (`demo/settle-cost.ts`). The
+surcharge is almost entirely the second observation window after arrival — the
+price of _measuring_ the logged box on arrival rather than reading it off once.
 
-Das alles ist unabhängig davon, wodurch sich die Geometrie bewegt haben könnte: natives Fenster-Scrollen, ein `overflow:auto`-Container, oder ein per JavaScript animierter Transform (Lenis-artiges Scrollen), der `window.scrollX/Y` nie anfasst. `scroll(dx, dy)` selbst wartet nicht darauf — es kennt sein Ziel nicht —, sondern die nächste Interaktion tut es. Wartet die Geometrie zu lange nicht still, bricht `record` nach `settleTimeoutMs` (Standard 5000 ms, per `RecordOptions.settleTimeoutMs` einstellbar) mit einer Fehlermeldung ab, die die Option beim Namen nennt. Dieses Budget gilt pro Interaktion, nicht pro Messung: jede Interaktion löst die Geometrie zweimal auf (vor der Anfahrt und nach der Ankunft), und beide teilen sich dieselbe Frist — vorher konnte eine einzelne Interaktion das doppelte Budget verbrauchen, gemessen 125 s bei einer Einstellung von 60 s.
+All of this is independent of whatever moved the geometry: native window
+scrolling, an `overflow:auto` container, or a JavaScript-animated transform
+(Lenis-style scrolling) that never touches `window.scrollX/Y`. `scroll(dx, dy)`
+itself does not wait for it — it does not know its target — but the next
+interaction does. If the geometry fails to settle for too long, `record`
+aborts after `settleTimeoutMs` (default 5000 ms, adjustable via
+`RecordOptions.settleTimeoutMs`) with an error message that names the option.
+That budget applies per interaction, not per measurement: every interaction
+resolves the geometry twice (before travel and after arrival) and both share
+the same deadline — previously a single interaction could consume double the
+budget, measured at 125 s with a setting of 60 s.
 
-Weil das Anfahren selbst 0,4 bis über 4 Sekunden dauern kann, reicht "die Geometrie war beim Start stabil" allein nicht: das Ziel kann sich währenddessen bewegen, neu gerendert werden, in der Größe ändern oder von etwas anderem verdeckt werden. Deshalb ist die Interaktion selbstverifizierend. Vor der Bewegung wird der tatsächliche Interaktionspunkt gegen die lebende Seite geprüft — welches Element liegt wirklich an diesen Koordinaten (`document.elementFromPoint`)? Geprüft wird zuerst genau der oben bestimmte Punkt, der Mittelpunkt der Ruhebox: ist er frei, ist er der Interaktionspunkt — der häufige, günstige Fall, eine einzige Prüfung. Ist er verdeckt (ein Sticky-Header, oder zwei Overlays von gegenüberliegenden Seiten), sucht ein deterministisches Raster von Prüfpunkten über die ganze sichtbare Fläche die größte zusammenhängende freie Region und wählt darin den Punkt nächst ihrem Schwerpunkt — nicht neun feste Stellen an Rändern und Ecken, die eine freie Zone irgendwo dazwischen (etwa zwischen zwei Overlays) systematisch verfehlt haben. Der Abstand zwischen zwei Prüfpunkten ist ein fester, größenunabhängiger Wert (6 px) statt eines Durchschnitts, der mit der Zielgröße gröber wird: die _Anzahl_ der Prüfpunkte wächst mit dem Ziel, nicht ihr Abstand, sodass ein 6 px schmaler freier Streifen auf einem 300-px-Ziel genauso zuverlässig gefunden wird wie ein 30-px-Streifen auf einem 1200 px hohen Hero. Zwei Läufe gegen dieselbe Verdeckung wählen denselben Punkt — über drei separate Prozesse per `sha256(events.jsonl)` nachgewiesen (`tests/occluded-target-determinism.test.ts`). Das kostet etwas, und zwar nur im verdeckten Fall: auf einem bildschirmfüllenden Hero (1280×720 sichtbare Fläche, rund 26 000 Prüfpunkte in einem Round-Trip) wurden auf dem Messrechner 1,86 s pro Interaktion gemessen (4,28 s gegenüber 2,43 s für denselben Hero ohne Verdeckung, je Mittel aus drei Läufen); ist dieser erste Punkt frei, fällt das Raster komplett weg. Nach der Ankunft wird die Geometrie vollständig neu aufgelöst — nicht nur wenn etwas auffällig war, denn ein Ziel kann um denselben Mittelpunkt wachsen und den Treffertest dabei nie verlieren. Ob dafür ein zweiter, ebenso Pixel-limitierter Bewegungsabschnitt nötig ist, entscheidet allein ein Treffertest an der aktuellen Zeigerposition: „würde ein Klick hier jetzt das Ziel treffen“ ist eine Ja/Nein-Frage, die ein Pixel Messrauschen nicht kippen kann — deshalb braucht es dafür keine Toleranzkonstante mehr. Die geloggte Bounding-Box ist die bei der Ankunft bestimmte Ruhegeometrie, nie ein einzelner roher Lesewert unmittelbar vor dem Klick: ein solcher Lesewert liefert bei einem animierten Ziel genau die Phase, die dieser eine Round-Trip zufällig erwischt hat — die falsche Box und in jedem Prozess eine andere. Bemerkt der Treffertest nach der Ankunft eine Veränderung, wird komplett neu aufgelöst. Schlägt die Verifikation fehl, bricht `record` mit einer Fehlermeldung ab, statt zu raten. Das ist eine sehr starke, aber keine absolute Garantie: zwischen der letzten Prüfung und dem tatsächlichen `page.mouse.click` liegt noch ein einzelner Netzwerk-Umlauf, in dem sich die Seite theoretisch ein letztes Mal ändern könnte — dieses Fenster ist absichtlich klein gehalten (ein Evaluate-Aufruf statt der vollen 0,4–4 Sekunden Anfahrt), aber nicht auf null reduziert. Ein plausibel aussehender, aber nie ausgeführter Klick ist trotzdem der schlimmste Fehlerfall dieses Werkzeugs: Meilenstein M4 würde später auf ein Ereignis zoomen, das nie passiert ist.
+Because the approach itself can take from 0.4 to over 4 seconds, "the geometry
+was stable at the start" is not enough on its own: the target can move,
+re-render, change size or be occluded by something else in the meantime. The
+interaction is therefore self-verifying. Before the movement, the actual
+interaction point is checked against the live page — which element really lies
+at these coordinates (`document.elementFromPoint`)? What is checked first is
+exactly the point determined above, the centre of the resting box: if it is
+free, it is the interaction point — the common, cheap case, a single check. If
+it is occluded (a sticky header, or two overlays from opposite sides), a
+deterministic grid of probe points across the whole visible area finds the
+largest contiguous free region and picks the point nearest its centroid —
+rather than nine fixed spots at edges and corners, which systematically missed
+a free zone somewhere in between (between two overlays, say). The spacing
+between two probe points is a fixed, size-independent value (6 px) instead of
+an average that grows coarser with the target: the _number_ of probe points
+grows with the target, not their spacing, so a 6 px free strip on a 300 px
+target is found just as reliably as a 30 px strip on a 1200 px hero. Two runs
+against the same occlusion pick the same point — proven across three separate
+processes via `sha256(events.jsonl)`
+(`tests/occluded-target-determinism.test.ts`). This costs something, and only
+in the occluded case: on a screen-filling hero (1280×720 visible area, around
+26,000 probe points in one round trip) 1.86 s per interaction was measured on
+the benchmark machine (4.28 s against 2.43 s for the same hero without
+occlusion, each the mean of three runs); if that first point is free, the grid
+falls away entirely. After arrival the geometry is resolved completely afresh
+— not only when something looked suspicious, because a target can grow around
+the same centre and never fail the hit test while doing so. Whether a second,
+equally pixel-limited movement leg is needed for that is decided solely by a
+hit test at the current pointer position: "would a click here hit the target
+now" is a yes/no question that a pixel of measurement noise cannot flip —
+which is why no tolerance constant is needed for it any more. The logged
+bounding box is the resting geometry determined on arrival, never a single raw
+reading immediately before the click: on an animated target such a reading
+returns exactly the phase that one round trip happened to catch — the wrong
+box, and a different one in every process. If the hit test after arrival
+notices a change, everything is resolved afresh. If verification fails,
+`record` aborts with an error message instead of guessing. This is a very
+strong guarantee but not an absolute one: between the last check and the
+actual `page.mouse.click` there is still a single network round trip in which
+the page could theoretically change one last time — that window is
+deliberately kept small (one evaluate call instead of the full 0.4–4 seconds
+of approach) but it is not reduced to zero. A plausible-looking click that
+never executed is nonetheless this tool's worst failure case: milestone M4
+would later zoom onto an event that never happened.
 
-`tick` ist der geplante 60-Hz-Zeitschlitz-Index, nicht Echtzeit, aber ein durchgängiger Zeitmaßstab: alles, was geplante Zeit verbraucht, zählt ihn weiter. Zeigerproben erhöhen ihn um eins pro Probe — auch eine Probe, die auf demselben Pixel wie ihr Vorgänger landet (der Zeiger "hält" kurz), wird protokolliert und zählt einen Schlitz. `hold(ms)` zählt `ceil(ms / 1000 * 60)` weiter, `scroll` einen Schlitz pro 60-Hz-Rad-Inkrement, und `type` die Summe der (seed-abhängigen, also deterministischen) Zeichenverzögerungen in Schlitzen. **Was `tick` nicht kennt:** alles, was echte Zeit kostet, aber nicht selbst geplant ist — `page.goto`, jede `boundingBox()`-Messung samt der Warteschleife auf stabile Geometrie und der Verifikations-Hit-Tests, die Round-Trip-Zeit eines Klicks. Dadurch laufen `tick` und die Wanduhr auseinander: in dieser Session gemessen rund +14–15 % bei einem gewöhnlichen Skript (Klick, Tippen, Hold, Scroll, Klick), und rund das 1,3-Fache bei einem Skript mit einem langsam animierenden inneren Scroll-Container — je nach Animation der Seite kann das deutlich mehr sein. Die Selbstverifikation oben hat diesen Wert in dieser Session nicht spürbar verschlechtert (die zusätzlichen Prüfungen sind klein gegen die ohnehin mehrhundert Millisekunden lange Zeigerbewegung). Das ist kein Bug, sondern der offene Rand dieses Meilensteins: die Abbildung von `tick` auf die echte Capture-Uhr ist Sache von Ticket 9, das genau deshalb diese Gleichförmigkeit von `tick` braucht.
+`tick` is the planned 60 Hz time-slot index, not real time, but a continuous
+time scale: everything that consumes planned time advances it. Pointer samples
+raise it by one per sample — even a sample that lands on the same pixel as its
+predecessor (the pointer briefly "holds") is logged and counts a slot.
+`hold(ms)` advances it by `ceil(ms / 1000 * 60)`, `scroll` by one slot per
+60 Hz wheel increment, and `type` by the sum of the (seed-dependent, hence
+deterministic) character delays in slots. **What `tick` does not know:**
+everything that costs real time without being planned itself — `page.goto`,
+every `boundingBox()` measurement including the wait loop for stable geometry
+and the verification hit tests, the round-trip time of a click. `tick` and the
+wall clock therefore drift apart: measured in this session at around +14–15 %
+for an ordinary script (click, type, hold, scroll, click), and around 1.3× for
+a script with a slowly animating inner scroll container — depending on the
+page's animation it can be considerably more. The self-verification above did
+not measurably worsen that figure in this session (the extra checks are small
+against the several-hundred-millisecond pointer movement that happens anyway).
+This is not a bug but the open edge of this milestone: mapping `tick` onto the
+real capture clock belongs to ticket 9, which needs exactly this uniformity of
+`tick` in order to work.
 
-Ein Ziel, dessen Bounding-Box gar keine sichtbare Überschneidung mit dem Viewport hat, lässt `record` mit einer Fehlermeldung abbrechen, die auf `demo.scroll` verweist — ein automatisches Scrollen würde einen unsichtbaren Sprung ins Video einbauen. Ist die Box größer als der Viewport (ein hoher Hero-Bereich, ein Overlay) oder teilweise von etwas anderem verdeckt (ein Sticky-Header), wird nicht abgebrochen: der oben beschriebene Punktetest findet die sichtbare, tatsächlich klickbare Stelle, und die volle Bounding-Box bleibt trotzdem im Log stehen. Erst wenn keiner der Prüfpunkte trifft, bricht `record` ab.
+A target whose bounding box has no visible intersection with the viewport at
+all makes `record` abort with an error message that points at `demo.scroll` —
+scrolling automatically would build an invisible jump into the video. If the
+box is larger than the viewport (a tall hero area, an overlay) or partly
+occluded by something else (a sticky header), there is no abort: the probe-point
+search described above finds the visible, genuinely clickable spot, and the
+full bounding box still goes into the log. Only when none of the probe points
+hits does `record` abort.
 
-`device` wird bereits gegen Playwrights Geräteregistrierung aufgelöst, unter anderem für `hasTouch`, damit `tap` in einem echten Touch-Kontext läuft statt abzustürzen. Ein unbekannter Name bricht mit einer Fehlermeldung ab, die ähnliche oder verfügbare Namen nennt. Die kuratierte Voreinstellungs-Ebene darüber (Aufnahme-/Ausgabeformat, Zeiger-Art) folgt in M5.
+`device` is already resolved against Playwright's device registry, among other
+things for `hasTouch`, so that `tap` runs in a real touch context instead of
+crashing. An unknown name aborts with an error message naming similar or
+available names. The curated preset layer above it (capture/output format,
+pointer style) follows in M5.
 
-## Nachbearbeitung: Zoom, Zeiger, Tempo, Formate
+## Post-processing: zoom, pointer, pace, formats
 
-`pnpm render <aufnahme-ordner> <ziel-ordner>` macht aus einer Rohaufnahme
-fertige Videos. Es startet keinen Browser und kann keinen starten: die Eingabe
-sind die Einzelbilder, die die Aufnahme geschrieben hat, und das Ereignis-Log
-daneben. Ein anderer Zeiger, ein anderer Zoom, ein anderes Seitenverhältnis ist
-deshalb ein erneuter Lauf dieses Kommandos, kein erneuter Lauf des Skripts.
+`pnpm render <recording-folder> <target-folder>` turns a raw recording into
+finished videos. It starts no browser and cannot start one: its inputs are the
+frames the capture wrote and the event log beside them. A different pointer, a
+different zoom, a different aspect ratio is therefore another run of this
+command, not another run of the script.
 
 ```sh
 pnpm render artifacts/m1-008 dist/feature-xy
 pnpm render artifacts/m1-008 dist/feature-xy --padding 40 --cursor-size 32
 ```
 
-Aus demselben Rohmaterial entstehen 16:9, 9:16 und 1:1. **Zoom ist immer ein
-Ausschnitt aus dem Original, nie eine Vergrößerung** — und das hat eine Folge,
-die die meisten Werkzeuge verschweigen: in einer 2560×1600-Desktop-Aufnahme
-steckt kein scharfes 1080×1920-Hochformat. Das größte 9:16-Rechteck darin ist
-900×1600. Der Renderer liefert dann 900×1600 in voller Schärfe und sagt es in
-der Ausgabe, statt hochzuskalieren. Ein scharfes Hochformat entsteht durch eine
-Aufnahme im Hochformat, das ist M3.
+16:9, 9:16 and 1:1 all come out of the same raw material. **Zoom is always a
+crop out of the original, never an enlargement** — and that has a consequence
+most tools keep quiet about: a 2560×1600 desktop capture does not contain a
+sharp 1080×1920 portrait frame. The largest 9:16 rectangle inside it is
+900×1600. The renderer then delivers 900×1600 at full sharpness and says so in
+its output, instead of upscaling. A sharp portrait frame comes from capturing
+in portrait, and that is M3.
 
-Kein Zoom heißt aber nicht kein Schwenk. Ein 900 Pixel breites Fenster kann
-überall in einer 2560 Pixel breiten Aufnahme stehen, und dieses Verschieben
-kostet nichts — es ist immer noch derselbe Ausschnitt aus dem Original. Das
-Hochformat folgt dem angeklickten Element deshalb seitlich, mit derselben Feder
-wie alles andere, statt als eingefrorener Mittelstreifen 65 % der Oberfläche nie
-zu zeigen. Für 1:1 gilt dasselbe. 16:9 füllt die Breite der Aufnahme ohnehin
-schon aus und ändert sich dadurch nicht; dass dort oben angeschnitten wird und
-nicht mittig, bleibt eine bewusste Entscheidung — Navigationsleisten und
-Werkzeugleisten wohnen genau dort.
+No zoom does not mean no pan, though. A 900 pixel wide window can sit anywhere
+in a 2560 pixel wide capture, and moving it costs nothing — it is still the
+same crop out of the original. Portrait therefore follows the clicked element
+sideways, on the same spring as everything else, instead of never showing 65 %
+of the interface as a frozen centre strip. The same holds for 1:1. 16:9
+already fills the width of the capture and does not change as a result; that
+it is cropped at the top rather than centred remains a deliberate decision —
+navigation bars and toolbars live exactly there.
 
-Der Zoom rahmt beim Klick die Bounding-Box des getroffenen Elements. Diese Box
-ist die **Ruhelage** des Elements, nicht seine Geometrie im Bild, in dem der
-Klick landete: bei einem Element, das einblendet oder pulsiert, die Geometrie,
-in der es sich am längsten aufhält — nicht der Mittelwert seiner Extreme, denn
-bei einer unsymmetrischen Animation ist der Mittelwert eine Größe, die das
-Element in keinem einzigen Bild hat. Der Ausschnitt steht deshalb still, während
-das Element atmet, und wird nie nachträglich aufgeweitet.
+On a click, the zoom frames the bounding box of the element that was hit. That
+box is the element's **resting position**, not its geometry in the frame the
+click landed in: for an element that fades in or pulses, it is the geometry it
+spends longest in — not the mean of its extremes, because for an asymmetric
+animation the mean is a size the element has in no single frame. The crop
+therefore stands still while the element breathes, and is never widened after
+the fact.
 
-Folgen zwei Interaktionen dichter aufeinander, als die Kamera zum Anfahren
-braucht, teilen sich **Halten und Anfahrt** die Zeit zwischen den beiden
-Ereignissen: reicht sie für beide Wünsche, bekommt jeder seinen, sonst geben
-beide anteilig nach — mit den Standardwerten (900 ms halten, 650 ms anfahren)
-58 % der Lücke an das Halten. Die frühere Einstellung wird dabei nie vor ihrem
-eigenen Klick beendet — sonst zeigte das Bild im Moment des Klicks einen Punkt
-auf dem Weg zum nächsten Element statt das Element, das geklickt wurde, und bei
-zwei Zielen auf gegenüberliegenden Seiten wäre das geklickte Element überhaupt
-nicht im Bild. Musste das Halten gekürzt werden, sagt der Renderer es in seiner
-Ausgabe, statt die Einstellung still auf ein Bild zusammenzuschrumpfen.
+If two interactions follow each other more closely than the camera needs to
+travel, **hold and approach** share the time between the two events: if it
+suffices for both wishes, each gets its own, otherwise both give way
+proportionally — with the default values (900 ms hold, 650 ms approach) 58 %
+of the gap goes to the hold. The earlier shot is never ended before its own
+click — otherwise the frame at the moment of the click would show a point on
+the way to the next element instead of the element that was clicked, and with
+two targets on opposite sides the clicked element would not be in frame at
+all. If the hold had to be shortened, the renderer says so in its output
+instead of quietly collapsing the shot into a single frame.
 
-Zwei Interaktionen im **selben Augenblick auf demselben Element** sind eine
-einzige Einstellung: die Kamera rahmt das Element und hält über beide Ereignisse
-hinweg. Das ist der Normalfall, kein Sonderfall — ein zweimal umgelegter
-Schalter oder ein zweimal gedrückter Zähler landen im Ereignis-Log auf demselben
-Zeitschlitz, weil `click` den Zähler nicht weiterstellt und eine Bewegung auf
-ein Ziel, auf dem der Zeiger schon steht, keine Proben erzeugt. Weil beide
-Boxen dieselbe sind, ist die Rahmung der Einstellung Bit für Bit die Rahmung
-jedes einzelnen Ereignisses.
+Two interactions at the **same instant on the same element** are a single
+shot: the camera frames the element and holds across both events. That is the
+normal case, not a special case — a switch toggled twice or a counter pressed
+twice land on the same time slot in the event log, because `click` does not
+advance the counter and a movement onto a target the pointer is already on
+produces no samples. Because both boxes are the same, the framing of the shot
+is bit for bit the framing of each individual event.
 
-Zwei Interaktionen im selben Augenblick auf **verschiedenen** Elementen bricht
-der Renderer ab — dafür gibt es keine Kamera —, und nennt dabei das Mittel, das
-heute hilft: ein `demo.hold(…)` zwischen den beiden. Auch überlappende Elemente
-sind verschiedene Elemente: eine gemeinsame Rahmung beider wäre die Hülle, und
-die Hülle eines Symbols in einer seitenfüllenden Fläche ist die ganze Seite —
-ein „Zoom", der sich nicht bewegt.
+Two interactions at the same instant on **different** elements make the
+renderer abort — there is no camera for that — and it names the remedy that
+helps today: a `demo.hold(…)` between the two. Overlapping elements are
+different elements too: framing both together would mean their union, and the
+union of an icon inside a page-filling area is the whole page — a "zoom" that
+does not move.
 
-Ebenso bricht der Renderer ab, wenn zwischen zwei Interaktionen zu wenig Zeit
-liegt, um die Kamera ehrlich hinüberzubringen: das Halten der ersten Einstellung
-braucht mindestens ein Bild, die Anfahrt der zweiten mindestens acht. Ein
-Abstand, der beides nicht bezahlt, ist ein Schnitt und kein Kameraweg.
+The renderer also aborts when there is too little time between two
+interactions to carry the camera across honestly: holding the first shot needs
+at least one frame, approaching the second at least eight. A gap that pays for
+neither is a cut, not a camera move.
 
-Die Kamera schneidet nie: in keinem einzelnen Ausgabebild legt sie mehr ihres
-Wegs zurück, als die Feder, auf der sie fährt, über die kürzeste zugelassene
-Anfahrt in ihrem schnellsten Bild zurücklegt — 42,6 % des Wegs. Gewöhnliche
-Bewegung bleibt weit darunter (9,2 %), die gedrängteste im Korpus bei 33,1 %.
-Die Schranke liest bewusst nichts aus der Einstellung, über die sie urteilt:
-eine Schranke, die aus dem gekürzten Fenster selbst berechnet wird, vergleicht
-die Bewegung mit sich selbst und lässt alles durch. Zusätzlich gilt: eine
-Einstellung beginnt exakt dort, wo die Kamera ohnehin steht, und über die Naht
-zwischen zwei Einstellungen darf nur so viel Bewegung liegen, wie die Ausfahrt
-der vorigen selbst erzeugt. Wege unter 16 Quellpixeln sind kein Kameraweg und
-werden nicht beurteilt — eine rein relative Schranke ohne absoluten Boden hat in
-Runde vier eine gültige Aufnahme in allen drei Formaten verweigert.
+The camera never cuts: in no single output frame does it cover more of its
+path than the spring it rides on covers in its fastest frame over the shortest
+permitted approach — 42.6 % of the path. Ordinary movement stays well below
+that (9.2 %), the tightest in the corpus at 33.1 %. The bound deliberately
+reads nothing from the shot it is judging: a bound computed from the shortened
+window itself compares the movement with itself and lets everything through.
+In addition: a shot begins exactly where the camera already stands, and across
+the seam between two shots there may lie only as much movement as the previous
+shot's exit produces itself. Paths under 16 source pixels are not a camera
+move and are not judged — a purely relative bound with no absolute floor
+rejected a valid recording in all three formats in round four.
 
-Das ist keine Testzusage, sondern eine Zusicherung im Renderer selbst: eine
-Einstellungsliste, die sie verletzt, verlässt `buildZoomSegments` nicht.
+This is not a test promise but an assertion in the renderer itself: a shot
+list that violates it does not leave `buildZoomSegments`.
 
-Zeiger und Klick-Ripple werden hier gezeichnet, nicht aufgenommen: Headless
-Chromium rendert überhaupt keinen Zeiger, das Log ist die einzige Quelle. Größe,
-Form und Ripple-Dauer sind Parameter.
+The pointer and click ripple are drawn here, not captured: headless Chromium
+renders no pointer at all, so the log is the only source. Size, shape and
+ripple duration are parameters.
 
-Leerlauf wird gerafft. Das Signal dafür sind die Zeitstempel der Aufnahme
-selbst: die Aufnahme faltet bitgleiche Folgebilder bereits zusammen, eine große
-Lücke zwischen zwei überlebenden Bildern ist also eine Strecke, in der sich das
-Bild nicht geändert hat — nicht bloß ein Animationstakt ohne Neuzeichnung.
-Gerafft wird über eine einzige, streng monotone Zeitabbildung, durch die Bilder
-und Ereignisse gemeinsam laufen; sie können deshalb nicht auseinanderdriften.
+Idle passages are compressed. The signal for that is the capture's own
+timestamps: the capture already folds bit-identical consecutive frames
+together, so a large gap between two surviving frames is a stretch in which
+the picture did not change — not merely an animation tick without a repaint.
+Compression runs through a single, strictly monotonic time mapping through
+which frames and events pass together; they therefore cannot drift apart.
 
-Das Kernstück ist eine reine Funktion von (Ereignissen mit einer Zeit in
-Millisekunden, Bild-Zeitstempeln in Millisekunden) auf Ausschnitt-Rechteck und
-Zeiger-Zeichenliste je Bild. Diese Entscheidungsdaten landen als
-`decisions.json` neben dem Video.
+The core is a pure function from (events with a time in milliseconds, frame
+timestamps in milliseconds) to crop rectangle and pointer draw list per frame.
+That decision data lands as `decisions.json` beside the video.
 
-**Gleiche Entscheidungsdaten, gleiches Video — Byte für Byte.** Das Zuschneiden,
-Skalieren und Zeichnen des Zeigers passiert Bild für Bild in eigenem Code, nicht
-in ffmpegs Filtergraph. ffmpeg behält die Aufgaben, die es gut kann — dekodieren,
-kodieren, Zeitbasis — und verliert die, bei der es unzuverlässig war: pro Bild
-eine andere Geometrie zu setzen. Über einen zeitgesteuerten Kommandokanal
-(`sendcmd`) war das nicht reproduzierbar: sechs identische Läufe über dieselbe
-Kommandodatei erzeugten vier verschiedene Videos, mit falsch gerahmten
-Einzelbildern und einem Zeiger, der nicht dem folgte, was in `decisions.json`
-steht. Jetzt ist zwischen Entscheidung und Pixel nichts mehr, das von Lauf zu
-Lauf anders ausfallen könnte; sechs Läufe in sechs Prozessen ergeben pro Format
-genau eine Prüfsumme.
+**Same decision data, same video — byte for byte.** Cropping, scaling and
+drawing the pointer happen frame by frame in our own code, not in ffmpeg's
+filter graph. ffmpeg keeps the jobs it is good at — decoding, encoding, time
+base — and loses the one it was unreliable at: setting a different geometry
+per frame. Through a time-driven command channel (`sendcmd`) that was not
+reproducible: six identical runs over the same command file produced four
+different videos, with wrongly framed stills and a pointer that did not follow
+what `decisions.json` says. Now there is nothing left between decision and
+pixel that could come out differently from run to run; six runs in six
+processes yield exactly one checksum per format.
 
-Die fertigen Dateien sagen auch, welche Farben sie meinen: `tv`-Bereich,
-bt709. Ohne diese Beschriftung liest jede nachgelagerte Kette ein `yuv420p` im
-Zweifel als Vollbereich und zieht die Pegel auseinander — die Pixel wären
-richtig und das Bild trotzdem falsch. Geprüft wird das an `ffprobe` auf einem
-echten Encode, nicht an der ffmpeg-Kommandozeile: ein Argument ist eine Absicht,
-die Datei ist das Ergebnis.
+The finished files also say which colours they mean: `tv` range, bt709.
+Without that labelling, any downstream chain reads a `yuv420p` as full range
+when in doubt and pulls the levels apart — the pixels would be right and the
+picture wrong anyway. That is checked with `ffprobe` on a real encode, not on
+the ffmpeg command line: an argument is an intention, the file is the result.
 
-Das Hochformat zahlt dafür nicht mit Schärfe, im Gegenteil: ein 9:16-Ausschnitt
-ist genauso groß wie das Ausgabebild, wird also gar nicht skaliert, sondern
-1:1 aus dem Original kopiert.
+Portrait does not pay for this in sharpness, quite the opposite: a 9:16 crop
+is exactly as large as the output frame, so it is not scaled at all but copied
+1:1 out of the original.
 
-### Der Filter, der verkleinert
+### The filter that downscales
 
-Aufgenommen wird in 2560×1600 und ausgeliefert in 1920×1080, weil das der
-einzige Weg zu scharfem Text ist. Der Filter, der diese Verkleinerung macht, ist
-deshalb kein Implementierungsdetail, sondern genau das Merkmal, für das die
-hohe Aufnahmeauflösung existiert. Verkleinert wird mit einem Lanczos-3-Kern —
-gefensterte Sinc, separabel, am Maßstab gestreckt —, demselben Verfahren, das
-M1 über ffmpeg benutzt hat. Gemessen an vier echten Aufnahmebildern, Ausschnitt
-2560×1440 → 1920×1080, also exakt der 1,33× Reserve:
+Capture is at 2560×1600 and delivery at 1920×1080, because that is the only
+route to sharp text. The filter that performs this reduction is therefore not
+an implementation detail but precisely the feature the high capture resolution
+exists for. Downscaling uses a Lanczos-3 kernel — windowed sinc, separable,
+stretched to the scale factor — the same method M1 used through ffmpeg.
+Measured on four real capture frames, crop 2560×1440 → 1920×1080, so exactly
+the 1.33× reserve:
 
-| Filter                      | Kantenenergie (Laplace-RMS) | Rundlauf-PSNR |
-| --------------------------- | --------------------------- | ------------- |
-| **featurecast (Lanczos-3)** | **39,3**                    | **31,60 dB**  |
-| ffmpeg Lanczos (M1)         | 39,3                        | 31,60 dB      |
-| ffmpeg bicubic              | 35,7                        | 31,24 dB      |
-| bilinear (Runde 2)          | 35,4                        | 30,72 dB      |
-| ffmpeg area                 | 32,4                        | 30,61 dB      |
-| ffmpeg bilinear             | 26,9                        | 30,02 dB      |
+| Filter                      | Edge energy (Laplacian RMS) | Round-trip PSNR |
+| --------------------------- | --------------------------- | --------------- |
+| **featurecast (Lanczos-3)** | **39.3**                    | **31.60 dB**    |
+| ffmpeg Lanczos (M1)         | 39.3                        | 31.60 dB        |
+| ffmpeg bicubic              | 35.7                        | 31.24 dB        |
+| bilinear (round 2)          | 35.4                        | 30.72 dB        |
+| ffmpeg area                 | 32.4                        | 30.61 dB        |
+| ffmpeg bilinear             | 26.9                        | 30.02 dB        |
 
-Das kostet Rechenzeit, und zwar erheblich: ein 16:9-Bild aus dem vollen Raster
-braucht 179 ms statt 17,6 ms, ein 1:1-Bild 109 ms statt 10,7 ms — rund das
-Zehnfache. Der Ausschnitt, der genauso groß ist wie das Ausgabebild, wird nach
-wie vor gar nicht gefiltert, sondern zeilenweise kopiert (0,18 ms), und das
-bleibt so: Hochformat lebt von dieser 1:1-Kopie.
+This costs computation, and a lot of it: a 16:9 frame out of the full raster
+takes 179 ms instead of 17.6 ms, a 1:1 frame 109 ms instead of 10.7 ms — around
+ten times as long. The crop that is exactly as large as the output frame is
+still not filtered at all but copied row by row (0.18 ms), and it stays that
+way: portrait lives on that 1:1 copy.
 
-### Was das Rendern kostet, und auf welcher Maschine
+### What rendering costs, and on which machine
 
-Das Zuschneiden und Skalieren ist die gesamte Rechenarbeit des Renderers und
-läuft deshalb auf mehreren Threads: aufgeteilt nach Bildzeilen über alle Formate
-hinweg, gewichtet nach der gemessenen Arbeit je Zeile — ein Format ohne
-Zoomreserve wird kopiert statt gefiltert und zählt entsprechend wenig, sonst
-warten die Threads, die es gezeichnet haben, auf den Rest. Zusätzlich wird kein
-Bild zweimal gerechnet: eine Aufnahme liefert weniger Einzelbilder als das Video
-Bilder hat (m1-008: 1332 gegen 2873), und solange Quellbild und Ausschnitt
-gleich bleiben, ist das fertige Bild dasselbe — der Zeiger kommt danach darauf.
+Cropping and scaling are the renderer's entire computational work and
+therefore run on several threads: split by image rows across all formats,
+weighted by the measured work per row — a format with no zoom reserve is
+copied rather than filtered and counts accordingly little, otherwise the
+threads that drew it wait for the rest. On top of that, no frame is computed
+twice: a capture delivers fewer frames than the video has (m1-008: 1332
+against 2873), and as long as source frame and crop stay the same, the
+finished frame is the same one — the pointer goes on top of it afterwards.
 
-Gemessen auf der Workstation (16 Threads, unter Last), 300 echte Aufnahmebilder
-aus `artifacts/m1-008`, 11,8 Sekunden Video, 709 Ausgabebilder, drei Formate:
+Measured on the workstation (16 threads, under load), 300 real capture frames
+from `artifacts/m1-008`, 11.8 seconds of video, 709 output frames, three
+formats:
 
-|                                     | 1 Thread | 6 Threads | 14 Threads |
-| ----------------------------------- | -------- | --------- | ---------- |
-| bilinear (Runde 2)                  | —        | 18,2 s    | 16,2 s     |
-| Lanczos-3, naiv                     | 190,2 s  | 82,2 s    | 67,3 s     |
-| **Lanczos-3, mit Wiederverwendung** | —        | 43,4 s    | **38,3 s** |
+|                           | 1 thread | 6 threads | 14 threads |
+| ------------------------- | -------- | --------- | ---------- |
+| bilinear (round 2)        | —        | 18.2 s    | 16.2 s     |
+| Lanczos-3, naive          | 190.2 s  | 82.2 s    | 67.3 s     |
+| **Lanczos-3, with reuse** | —        | 43.4 s    | **38.3 s** |
 
-Die volle Aufnahme, nicht hochgerechnet sondern gemessen: `artifacts/m1-008`,
-47,9 Sekunden Video, 2873 Ausgabebilder, drei Formate, 14 Threads —
-**136,7 Sekunden**, also 2,9 Sekunden Rechenzeit pro Sekunde Video, gegen 79
-Sekunden mit der bilinearen Variante. Die Zwei-Minuten-Grenze des Meilensteins
-hält damit für Material bis rund 42 Sekunden und wird von dieser Aufnahme um
-14 % überschritten. **Das ist der bewusst bezahlte Preis für die Schärfe** — nicht ein Versehen: die hohe
-Aufnahmeauflösung existiert genau für diesen Filter, und ein weicheres Bild
-wäre ein Verlust am Produkt, während eine längere Wartezeit Bequemlichkeit
-kostet. Wer das anders gewichtet, hat mit ffmpeg-bicubic (31,24 dB gegen 31,60)
-eine messbar benannte Alternative, die etwa halb so lange braucht.
+The full recording, measured rather than extrapolated: `artifacts/m1-008`,
+47.9 seconds of video, 2873 output frames, three formats, 14 threads —
+**136.7 seconds**, so 2.9 seconds of computation per second of video, against
+79 seconds with the bilinear variant. The milestone's two-minute limit
+therefore holds for material up to around 42 seconds and is exceeded by this
+recording by 14 %. **That is the deliberately paid price for the sharpness** —
+not an oversight: the high capture resolution exists for exactly this filter,
+and a softer picture would be a loss to the product, while a longer wait costs
+convenience. Anyone weighing that differently has a measurably named
+alternative in ffmpeg bicubic (31.24 dB against 31.60), which takes about half
+as long.
 
-Die Hardware-Annahme steht damit ausdrücklich hier statt implizit im Code:
-**gerechnet wird mit einer Maschine, die mindestens acht Kerne hat.** Der
-Standard ist „alle Kerne minus zwei" — zwei bleiben für diesen Thread, der den
-Dekoder leerzieht und drei Encoder füttert. Auf einer Drei-Kern-Maschine
-komponiert der Renderer auf einem einzigen Thread und ist rund fünfmal langsamer
-als hier gemessen; die Zwei-Minuten-Grenze hält dort für keine
-nennenswerte Aufnahme.
+The hardware assumption is therefore stated here rather than left implicit in
+the code: **the calculation assumes a machine with at least eight cores.** The
+default is "all cores minus two" — two are left for this thread, which drains
+the decoder and feeds three encoders. On a three-core machine the renderer
+composes on a single thread and is around five times slower than measured
+here; the two-minute limit holds there for no recording worth the name.
 
-Bildzeilen sind voneinander unabhängig, deshalb hängt das Ergebnis nicht an der
-Kernzahl: derselbe Lauf mit einem und mit sechs Threads erzeugt dieselbe Datei,
-Byte für Byte. `--threads <n>` stellt es ein, ändert aber nur die Dauer.
+Image rows are independent of each other, so the result does not depend on the
+core count: the same run with one thread and with six produces the same file,
+byte for byte. `--threads <n>` sets it but only changes the duration.
 
-### Eine Uhr für Bilder und Ereignisse
+### One clock for frames and events
 
-Das Ereignis-Log trug lange **keine Uhrzeit**, sondern einen Zähler: er lief
-weiter für alles, was das Skript selbst tut (Zeigerbewegung, Tippen, `hold`), und
-blieb stehen für alles, was echte Zeit kostet, ohne geplant zu sein — Seiten
-laden, auf stabile Geometrie warten, der Umlauf eines Klicks. Der Fehler war
-keine gleichmäßige Abweichung, die ein Faktor hätte geradeziehen können, sondern
-eine Treppe: in der Aufnahme `m1-008` summierte sich der Versatz nach 62 Sekunden
-auf **42,6 Sekunden**, und der einzige Zoom dieser Aufnahme rahmte ein leeres
-Suchfeld 1,64 Sekunden bevor dort etwas passierte.
+For a long time the event log carried **no clock time**, only a counter: it
+advanced for everything the script does itself (pointer movement, typing,
+`hold`) and stood still for everything that costs real time without being
+planned — loading pages, waiting for stable geometry, the round trip of a
+click. The error was not a uniform deviation that a factor could have
+straightened out, but a staircase: in recording `m1-008` the offset added up
+to **42.6 seconds** after 62 seconds, and that recording's only zoom framed an
+empty search field 1.64 seconds before anything happened in it.
 
-Der Aufnehmer liest jetzt beim Schreiben jedes Ereignisses die Wanduhr — dieselbe,
-mit der die Aufnahme ihre Einzelbilder stempelt. Die Zeiten stehen in einer
-**eigenen Datei neben dem Log** (`event-times.jsonl`), nicht darin: zwei Läufe
-desselben Skripts mit demselben Seed liefern weiterhin ein bitgleiches
-`events.jsonl`, und das ist die Zusage aus M2. Die Uhrzeit ist bei jedem Lauf eine
-andere, also gehört sie nicht in eine Datei, die gleich bleiben soll.
+The recorder now reads the wall clock as it writes each event — the same clock
+the capture stamps its frames with. The times live in **their own file beside
+the log** (`event-times.jsonl`), not in it: two runs of the same script with
+the same seed still deliver a bit-identical `events.jsonl`, and that is the
+promise from M2. The clock time is different in every run, so it does not
+belong in a file that is meant to stay the same.
 
-Zusammengeführt werden beide beim Rendern, über die Startzeit der Aufnahme. Weil
-Bild- und Ereigniszeiten Epochen-Millisekunden derselben Maschine sind, ist das
-eine Subtraktion und keine Schätzung. Die alte Umrechnung ist ersatzlos
-verschwunden, samt ihrer zwei Stellschrauben.
+The two are merged at render time, via the capture's start time. Because frame
+and event times are epoch milliseconds from the same machine, that is a
+subtraction and not an estimate. The old conversion has disappeared without
+replacement, along with its two adjustment knobs.
 
-**Eine Aufnahme ohne Zeitdatei lässt sich nicht mehr rendern.** Sie stammt aus
-einer Fassung, die nicht wusste, wie spät es war, und der Renderer sagt das,
-statt eine Zeit zu erfinden — sie muss neu aufgenommen werden.
+**A recording without a time file can no longer be rendered.** It comes from a
+version that did not know what time it was, and the renderer says so instead
+of inventing a time — it has to be recorded again.
 
-## Ein Kommando für die ganze Kette
+## One command for the whole chain
 
 ```sh
 pnpm featurecast run demo/feature-xy.ts --devices desktop-wide --upload
 ```
 
-`featurecast run` spielt ein Aufnahme-Skript einmal pro Gerät ab, nimmt die
-Einzelbilder auf, schickt sie **durch die Nachbearbeitung** — Zoom, Zeiger,
-Leerlauf-Raffung — und lädt das Ergebnis auf Wunsch in den S3-kompatiblen
-Speicher. Ein Skript exportiert dafür den Rumpf der Aufnahme statt `record()`
-selbst aufzurufen; Aufbau, Schalter und das vollständige Beispiel stehen in
-[RECORDING-SCRIPTS.md](RECORDING-SCRIPTS.md#ein-kommando-für-die-ganze-kette).
+`featurecast run` plays a recording script once per device, captures the
+frames, sends them **through post-processing** — zoom, pointer, idle
+compression — and uploads the result to S3-compatible storage on request. For
+that, a script exports the body of the recording instead of calling `record()`
+itself; the structure, the switches and the full example are in
+[RECORDING-SCRIPTS.md](RECORDING-SCRIPTS.md#one-command-for-the-whole-chain).
 
-Welches Gerät aufgenommen wird, entscheidet allein sein Name: das aufgelöste
-Gerät bringt seine Aufnahmefläche, seine Ausgabegröße und seine
-Encoder-Einstellung mit bis in den ffmpeg-Aufruf. Alle elf Presets laufen
-durch, Desktop wie mobil.
+Which device is captured is decided by its name alone: the resolved device
+brings its capture area, its output size and its encoder setting all the way
+into the ffmpeg invocation. All eleven presets run through, desktop as well as
+mobile.
 
-**Geliefert wird die eine Größe, die das Gerät verspricht.** `--all-formats`
-macht daraus 16:9, 9:16 und 1:1 — aus derselben Aufnahme, ohne zweiten
-Browser-Lauf. Drei Formate sind ein Schalter und keine Voreinstellung: zwei
-davon wären Ausschnitte, die niemand bestellt hat, und aus einer mobilen
-Aufnahme lassen sich zwei der drei gar nicht scharf schneiden.
+**What is delivered is the one size the device promises.** `--all-formats`
+turns that into 16:9, 9:16 and 1:1 — out of the same recording, without a
+second browser run. Three formats are a switch and not a default: two of them
+would be crops nobody ordered, and out of a mobile recording two of the three
+cannot be cut sharply at all.
 
-Nebeneinander liegen zwei Ordner je Gerät: die Aufnahme (`frames/`,
-`timestamps.json`, das Ereignis-Log) und daneben die Videos samt
-`decisions.json`. Was Rohmaterial ist und was Ergebnis, sieht man am Ordner.
+Two folders sit side by side per device: the recording (`frames/`,
+`timestamps.json`, the event log) and beside it the videos with their
+`decisions.json`. Which is raw material and which is result is visible from
+the folder.
 
-**Ein Look wird hier nicht geändert.** Jeder Look-Schalter gehört `pnpm render`,
-das eine fertige Aufnahme liest und keinen Browser kostet — genau dafür ist die
-Nachbearbeitung eine eigene Stufe.
+**No look is changed here.** Every look switch belongs to `pnpm render`, which
+reads a finished recording and costs no browser — that is exactly why
+post-processing is a stage of its own.
 
-## Entwicklung
+## Development
 
 ```sh
 pnpm install
@@ -322,15 +507,15 @@ pnpm browsers:install
 pnpm demo:hello
 ```
 
-## M1-Aufnahme wiederholen
+## Repeating the M1 capture
 
-Der folgende manuelle Befehl zeichnet eine öffentliche, dichte Testoberfläche
-gut 20 Sekunden lang im festgelegten 2560×1600-Capture-Viewport auf. Er
-speichert JPEG-Frames, `timestamps.json`, `capture-stats.json` und `browser.json` unter dem
-angegebenen Artefaktordner und rendert daraus `output.mp4`. Der Render
-schneidet dabei auf 16:9 (`2560×1440`, 160 Pixel unten — oben wird nichts
-weggenommen, dort sitzt die Kopfleiste der App) und verkleinert anschließend
-auf 1920×1080; es wird nie hochskaliert.
+The following manual command records a public, dense test interface for a good
+20 seconds in the fixed 2560×1600 capture viewport. It stores JPEG frames,
+`timestamps.json`, `capture-stats.json` and `browser.json` under the given
+artifact folder and renders `output.mp4` from them. The render crops to 16:9
+(`2560×1440`, 160 pixels off the bottom — nothing is taken off the top, that
+is where the app's header sits) and then scales down to 1920×1080; it never
+upscales.
 
 ```sh
 pnpm demo:m1-capture
@@ -339,48 +524,49 @@ ffprobe -v error -select_streams v:0 \
   -of json artifacts/m1-capture/output.mp4
 ```
 
-Der Befehl ist kein automatisierter Test. Er startet standardmäßig den
-mitgelieferten Messkorpus aus `fixtures/bench/` über einen lokalen Server und
-filmt den — kein Konto, kein Netz, kein fremder Dienst, und für jeden, der das
-Repository klont, dieselbe Oberfläche. Eine abweichende öffentliche URL und ein
-Artefaktordner können als erstes und zweites Argument angegeben werden. Der
-Artefaktordner muss bei jedem Lauf neu sein oder vorher bewusst gelöscht werden;
-die Aufnahme überschreibt bestehende Artefakte nicht. Verwende dafür einen
-eindeutigen Pfad als zweites Argument, etwa
+The command is not an automated test. By default it starts the bundled
+measuring corpus from `fixtures/bench/` over a local server and films that — no
+account, no network, no third-party service, and the same interface for
+everyone who clones the repository. A different public URL and an artifact
+folder can be given as the first and second arguments. The artifact folder
+must be new on every run, or deliberately deleted beforehand; the capture does
+not overwrite existing artifacts. Use a unique path as the second argument for
+that, for example
 `pnpm demo:m1-capture https://example.com/ artifacts/m1-capture-001`.
 
-**Welcher Browser aufnimmt.** Ohne weitere Angabe startet Playwrights
-mitgelieferter Chromium. Ein anderes Binär — etwa der selbst gebaute,
-gepatchte Chromium aus Ticket 17 — wird über `CHROME_BIN` gewählt:
+**Which browser captures.** With no further instruction, Playwright's bundled
+Chromium starts. A different binary — the self-built, patched Chromium from
+ticket 17, for instance — is chosen through `CHROME_BIN`:
 
 ```sh
-CHROME_BIN=/pfad/zu/chromium/src/out/Release/chrome \
+CHROME_BIN=/path/to/chromium/src/out/Release/chrome \
   pnpm demo:m1-capture
 ```
 
-Ein `CHROME_BIN`, das leer ist oder kein ausführbares Binär benennt, bricht
-vor dem Start ab. Nach dem Start wird das tatsächlich laufende Binär beim
-Betriebssystem nachgefragt (`/proc`, deshalb nur unter Linux); weicht es vom
-angeforderten ab, bricht der Lauf ab. Jeder Lauf schreibt `browser.json` mit
-absolutem Pfad, `--version` und SHA-256 des laufenden Binärs in den
-Artefaktordner, ebenso `record()` in seinen `out`-Ordner. Der Hash ist das
-einzige Feld, das zwei Builds auseinanderhält, die an derselben Stelle
-eingehängt sind und dieselbe Versionszeile melden — genau der Fall im
-Messplatz, wo jeder Arm seinen Build nach `/crbuild` mountet (Ticket 36). Hintergrund: drei Tage Messungen
-wurden dem falschen Browser zugeschrieben, weil ein gesetztes `CHROME_BIN`
-still ignoriert wurde (Ticket 23, [JOURNEY.md](JOURNEY.md)).
+A `CHROME_BIN` that is empty or does not name an executable binary aborts
+before the start. After the start, the binary that is actually running is
+queried from the operating system (`/proc`, hence Linux only); if it differs
+from the one requested, the run aborts. Every run writes `browser.json` with
+the absolute path, `--version` and the SHA-256 of the running binary into the
+artifact folder, as does `record()` into its `out` folder. The hash is the
+only field that tells apart two builds mounted at the same location that
+report the same version line — exactly the case in the measurement rig, where
+each arm mounts its build at `/crbuild` (ticket 36). Background: three days of
+measurements were attributed to the wrong browser because a `CHROME_BIN` that
+had been set was silently ignored (ticket 23, [JOURNEY.md](JOURNEY.md)).
 
-Frame-Erfassung und Festplatten-Schreiben sind entkoppelt: `onFrame` reiht nur
-synchron ein, ein separater Writer schreibt im Hintergrund, damit ein
-langsamer Schreibvorgang die Quellbildrate nicht drosselt (Playwright ackt den
-nächsten Screencast-Frame erst, wenn `onFrame` zurückkehrt, und verschluckt
-dabei jeden Fehler). Vor dem Zusammenbau werden aufeinanderfolgende
-JPEG-Quellframes per SHA-256 auf Duplikate geprüft, und `capture-stats.json`
-hält Median- und p95-Bildabstand sowie den Anteil der Abstände ≤ 20 ms fest.
-Danach prüft `ffprobe` Auflösung, konstante 60 fps, Dauer gegen die
-Aufnahme-Zeitspanne und Frameanzahl gegen eine echte 60-fps-Kodierung dieser
-Dauer. Für die M1-Abnahme wird das Ergebnis dennoch angesehen und mit einer
-Screen-Studio-Aufnahme verglichen; Aufnahme und Vergleichsmaterial werden vor
-dem Teilen auf private Daten geprüft.
+Frame capture and disk writing are decoupled: `onFrame` only enqueues
+synchronously, a separate writer writes in the background, so that a slow
+write does not throttle the source frame rate (Playwright only acknowledges
+the next screencast frame once `onFrame` returns, and swallows every error
+while doing so). Before assembly, consecutive JPEG source frames are checked
+for duplicates by SHA-256, and `capture-stats.json` records the median and p95
+frame spacing along with the share of spacings ≤ 20 ms. `ffprobe` then checks
+resolution, constant 60 fps, duration against the capture time span, and frame
+count against a real 60 fps encode of that duration. For the M1 acceptance the
+result is nonetheless watched and compared with a Screen Studio recording;
+recording and comparison material are checked for private data before being
+shared.
 
-Vorarbeit: `research/web-feature-recording-sota-2026-09.md` im Research-Repo — 24 Kandidaten, 18 im Quelltext geprüft, 9 durchgemessen.
+Prior work: `research/web-feature-recording-sota-2026-09.md` in the research
+repository — 24 candidates, 18 checked in source, 9 measured through.
