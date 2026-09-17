@@ -66,6 +66,7 @@ const { positionals, values } = parseArgs({
     out: { type: 'string' },
     passes: { type: 'string' },
     render: { type: 'string' },
+    strategy: { type: 'string' },
     windowMs: { type: 'string' },
   },
   strict: true,
@@ -84,8 +85,29 @@ if (!Number.isInteger(width) || !Number.isInteger(height)) {
   throw new Error(`--capture wants WIDTHxHEIGHT, got "${values.capture ?? ''}"`)
 }
 
+// The strategy is overridable here and nowhere else in the project, because
+// only a measurement ever wants it. A touch profile is filmed through the
+// framed shell (src/framed.ts) for a reason the device layer explains, and
+// picking the plain screencast instead produces a video at the device's own
+// layout width — useless to deliver, and exactly what is needed to ask
+// whether the shell's embedded frame, rather than its scale transform, is
+// what halves the presentation rate on mobile (issue #116).
+const strategy = values.strategy
+if (
+  strategy !== undefined &&
+  strategy !== 'framed-scale' &&
+  strategy !== 'screencast'
+) {
+  throw new Error(
+    `--strategy is framed-scale or screencast, got "${strategy}".`,
+  )
+}
 const device: ResolvedDevice = resolveDevice({
-  capture: { height: height as number, width: width as number },
+  capture: {
+    height: height as number,
+    width: width as number,
+    ...(strategy === undefined ? {} : { strategy }),
+  },
   extends: values.device ?? 'desktop',
 })
 const capture = prepareCapture(device)
