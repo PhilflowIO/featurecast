@@ -213,14 +213,13 @@ and 98.8 % at twelve. Playwright's screencast wrapper cannot pass that bound at
 all, so featurecast drives the recording over the browser protocol directly.
 This used to require a self-built Chromium; it no longer does.
 
-**The visible defect is a separate claim, and a weaker one.** The loss is not
-evenly spread — it concentrates in horizontal scrolling right after a vertical
-one, and it is visible, not just measurable. Chromium's `AnimatedContentSampler`
-locking onto one damage region was caught doing exactly that in a trace, and a
-self-built browser can switch it off. But that switch changes the yield by
-nothing measurable, and the judder itself has never been isolated in either
-direction — so it remains the one reason to build your own browser, and an
-unproven one. Full analysis in
+**There is no longer a second reason to build your own browser.** The patched
+build also switched off Chromium's `AnimatedContentSampler`, which locks onto
+one damage region during an animation and was blamed for a visible judder in
+sideways scrolling. Measured against three instruments — capture yield, frame
+cadence, and smoothness of the finished video — at both queue depths, nine runs:
+switching it off changes nothing any of them can see. The judder that was
+attributed to it belonged to the starved frame queue next door. Full analysis in
 [docs/CAPTURE-CADENCE.md](docs/CAPTURE-CADENCE.md).
 
 Nothing here has ever been measured against another product. This README
