@@ -20,10 +20,24 @@ const CURATED_TABLE = [
   {
     density: 2,
     engine: 'chromium',
+    output: { height: 2160, width: 3840 },
+    playwrightName: 'Desktop Chrome HiDPI',
+    pointer: 'arrow',
+    preset: 'desktop-4k',
+    reserve: 'exact',
+
+    touch: false,
+    viewport: { height: 720, width: 1280 },
+  },
+  {
+    density: 2,
+    engine: 'chromium',
     output: { height: 1080, width: 1920 },
     playwrightName: 'Desktop Chrome HiDPI',
     pointer: 'arrow',
     preset: 'desktop',
+    reserve: 'over-sized',
+
     touch: false,
     viewport: { height: 720, width: 1280 },
   },
@@ -34,6 +48,8 @@ const CURATED_TABLE = [
     playwrightName: 'Desktop Chrome',
     pointer: 'arrow',
     preset: 'desktop-wide',
+    reserve: 'over-sized',
+
     touch: false,
     viewport: { height: 720, width: 1280 },
   },
@@ -44,6 +60,8 @@ const CURATED_TABLE = [
     playwrightName: 'Desktop Safari',
     pointer: 'arrow',
     preset: 'safari',
+    reserve: 'over-sized',
+
     touch: false,
     viewport: { height: 720, width: 1280 },
   },
@@ -54,6 +72,8 @@ const CURATED_TABLE = [
     playwrightName: 'iPhone 15 Pro',
     pointer: 'touch',
     preset: 'iphone',
+    reserve: 'exact',
+
     touch: true,
     viewport: { height: 659, width: 393 },
   },
@@ -64,6 +84,8 @@ const CURATED_TABLE = [
     playwrightName: 'iPhone 15 Pro Max',
     pointer: 'touch',
     preset: 'iphone-max',
+    reserve: 'exact',
+
     touch: true,
     viewport: { height: 739, width: 430 },
   },
@@ -74,6 +96,8 @@ const CURATED_TABLE = [
     playwrightName: 'iPhone SE',
     pointer: 'touch',
     preset: 'iphone-small',
+    reserve: 'exact',
+
     touch: true,
     viewport: { height: 568, width: 320 },
   },
@@ -84,6 +108,8 @@ const CURATED_TABLE = [
     playwrightName: 'iPhone 15 Pro landscape',
     pointer: 'touch',
     preset: 'iphone-quer',
+    reserve: 'exact',
+
     touch: true,
     viewport: { height: 343, width: 734 },
   },
@@ -94,6 +120,8 @@ const CURATED_TABLE = [
     playwrightName: 'Pixel 7',
     pointer: 'touch',
     preset: 'android',
+    reserve: 'exact',
+
     touch: true,
     viewport: { height: 839, width: 412 },
   },
@@ -104,6 +132,8 @@ const CURATED_TABLE = [
     playwrightName: 'Galaxy S24',
     pointer: 'touch',
     preset: 'android-small',
+    reserve: 'exact',
+
     touch: true,
     viewport: { height: 780, width: 360 },
   },
@@ -114,6 +144,8 @@ const CURATED_TABLE = [
     playwrightName: 'iPad Pro 11',
     pointer: 'touch',
     preset: 'tablet',
+    reserve: 'exact',
+
     touch: true,
     viewport: { height: 1194, width: 834 },
   },
@@ -124,13 +156,15 @@ const CURATED_TABLE = [
     playwrightName: 'iPad Mini',
     pointer: 'touch',
     preset: 'tablet-small',
+    reserve: 'exact',
+
     touch: true,
     viewport: { height: 1024, width: 768 },
   },
 ] as const
 
 describe('curated presets', () => {
-  it('offers exactly the eleven names from docs/DEVICES.md', () => {
+  it('offers exactly the twelve names from docs/DEVICES.md', () => {
     expect(listPresetNames()).toEqual(
       [...CURATED_TABLE].map((row) => row.preset).sort(),
     )
@@ -152,34 +186,34 @@ describe('curated presets', () => {
     },
   )
 
-  it('records desktop over-sized and mobile at its exact output size', () => {
-    // Every desktop preset records the same over-sized area, and every one of
-    // them records more than it outputs: that margin is what M4 cuts its
-    // second and third format out of, and what the zoom spring pans inside.
-    // A preset whose capture equalled its output would have neither.
-    for (const row of CURATED_TABLE.filter((candidate) => !candidate.touch)) {
+  it('records each preset with the reserve its row declares', () => {
+    // Two rules, and the second one is new. Most desktop presets record more
+    // than they output: that margin is what M4 cuts its second and third
+    // format out of, and what the zoom spring pans inside. `desktop-4k` and
+    // every touch preset record exactly what they deliver, and therefore have
+    // no margin at all — the render stage clamps their push-in to 1.00x and
+    // says so. Which class a preset is in is a documented property, so it is
+    // declared in the table rather than inferred here.
+    for (const row of CURATED_TABLE) {
       const resolved = resolveDevice(row.preset)
-      expect(resolved.capture).toEqual({
-        fps: 60,
-        height: 1600,
-        quality: 90,
-        status: 'decided',
-        strategy: 'screencast',
-        width: 2560,
-      })
-      expect(resolved.capture).toMatchObject({ status: 'decided' })
-      if (resolved.capture.status !== 'decided') throw new Error('unreachable')
-      expect(resolved.capture.width).toBeGreaterThan(resolved.output.width)
-      expect(resolved.capture.height).toBeGreaterThan(resolved.output.height)
-    }
-    for (const row of CURATED_TABLE.filter((candidate) => candidate.touch)) {
-      const resolved = resolveDevice(row.preset)
-      // The mobile counterpart of the desktop rule above, and its mirror
-      // image: no reserve at all, because the frame already holds the whole
-      // device and the reserve would cost half the frame rate.
-      expect(resolved.capture).toMatchObject({ strategy: 'framed-scale' })
+      if (row.reserve === 'over-sized') {
+        expect(resolved.capture).toEqual({
+          fps: 60,
+          height: 1600,
+          quality: 90,
+          status: 'decided',
+          strategy: 'screencast',
+          width: 2560,
+        })
+        expect(resolved.capture.width).toBeGreaterThan(resolved.output.width)
+        expect(resolved.capture.height).toBeGreaterThan(resolved.output.height)
+        continue
+      }
       expect(resolved.capture.width).toBe(resolved.output.width)
       expect(resolved.capture.height).toBe(resolved.output.height)
+      expect(resolved.capture).toMatchObject({
+        strategy: row.touch ? 'framed-scale' : 'screencast',
+      })
     }
   })
 })

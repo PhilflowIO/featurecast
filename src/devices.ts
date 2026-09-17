@@ -232,16 +232,42 @@ type Preset = {
  */
 const DESKTOP_CAPTURE_SIZE = { height: 1600, width: 2560 }
 
-function desktopCapture(): CaptureSettings {
+function desktopCapture(
+  size: { height: number; width: number } = DESKTOP_CAPTURE_SIZE,
+): CaptureSettings {
   return {
     fps: FRAME_RATE,
-    height: DESKTOP_CAPTURE_SIZE.height,
+    height: size.height,
     quality: CAPTURE_QUALITY,
     status: 'decided',
     strategy: 'screencast',
-    width: DESKTOP_CAPTURE_SIZE.width,
+    width: size.width,
   }
 }
+
+/**
+ * The one desktop area that is not 2560x1600, and what it buys and costs.
+ *
+ * Measured 2026-09-17 on the benchmark machine: capture yield 98.60 %
+ * (282 of 286 presented frames), clearing the 95 % gate, with intact and sharp
+ * frames — recording at this size is not the problem it was assumed to be.
+ *
+ * What it costs is the cadence, and that is stated rather than buried. At
+ * 2560x1600 the browser presents a frame every 16.76 ms in the median, which
+ * is 60 a second; at 3840x2160 it is 20.52 ms, and only half the gaps are a
+ * single full interval against 84.8 % at the smaller size. So this preset
+ * delivers 4K, and it does not deliver 4K at 60 frames a second. Anything
+ * claiming otherwise is claiming more than was measured.
+ *
+ * It also costs the camera. The output is the capture area, so there is no
+ * reserve to crop into and the render stage clamps every push-in to 1.00x —
+ * the same trade the mobile presets make, for the same reason. A run that
+ * wants both a large picture and a moving camera asks for the area and the
+ * delivery separately, which the device layer takes:
+ * `{ extends: 'desktop', capture: { width: 3840, height: 2160 } }` keeps the
+ * preset's own 1920x1080 output and leaves a 2x reserve.
+ */
+const DESKTOP_4K_SIZE = { height: 2160, width: 3840 }
 
 /**
  * What every touch profile records, and why it is exactly the output size.
@@ -276,8 +302,8 @@ function mobileCapture(output: {
 }
 
 /**
- * The eleven curated presets from docs/DEVICES.md. They exist so a later
- * dropdown has eleven sensible entries instead of 207; every Playwright name
+ * The twelve curated presets from docs/DEVICES.md. They exist so a later
+ * dropdown has twelve sensible entries instead of 207; every Playwright name
  * resolves too, without a preset.
  *
  * `safari` records under WebKit, where the screencast interface is untested
@@ -299,6 +325,11 @@ const PRESETS: Readonly<Record<string, Preset>> = {
   desktop: {
     capture: desktopCapture(),
     output: { height: 1080, width: 1920 },
+    playwrightName: 'Desktop Chrome HiDPI',
+  },
+  'desktop-4k': {
+    capture: desktopCapture(DESKTOP_4K_SIZE),
+    output: { height: DESKTOP_4K_SIZE.height, width: DESKTOP_4K_SIZE.width },
     playwrightName: 'Desktop Chrome HiDPI',
   },
   'desktop-wide': {
@@ -343,7 +374,7 @@ const PRESETS: Readonly<Record<string, Preset>> = {
   },
 }
 
-/** The eleven curated preset names, sorted. */
+/** The twelve curated preset names, sorted. */
 export function listPresetNames(): string[] {
   return Object.keys(PRESETS).sort()
 }
