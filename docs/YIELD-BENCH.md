@@ -22,16 +22,17 @@ flatter itself.
 
 ## Options
 
-| Option               | Default                | What it does                                    |
-| -------------------- | ---------------------- | ----------------------------------------------- |
-| _(positional)_       | `demo/fixture-tour.ts` | the recording script to drive                   |
-| `--device NAME`      | `desktop`              | any preset or Playwright device name            |
-| `--capture WxH`      | `2560x1600`            | the area to record                              |
-| `--passes N`         | `1`                    | drive the script N times inside **one** capture |
-| `--windowMs N`       | `1000`                 | width of the tiled windows                      |
-| `--framesInFlight N` | `12`                   | frames the browser may have outstanding         |
-| `--out DIR`          | `artifacts/yield`      | where capture and video land                    |
-| `--render WxH`       | _(off)_                | also render a video afterwards                  |
+| Option                             | Default                | What it does                                    |
+| ---------------------------------- | ---------------------- | ----------------------------------------------- |
+| _(positional)_                     | `demo/fixture-tour.ts` | the recording script to drive                   |
+| `--device NAME`                    | `desktop`              | any preset or Playwright device name            |
+| `--capture WxH`                    | `2560x1600`            | the area to record                              |
+| `--passes N`                       | `1`                    | drive the script N times inside **one** capture |
+| `--windowMs N`                     | `1000`                 | width of the tiled windows                      |
+| `--framesInFlight N`               | `12`                   | frames the browser may have outstanding         |
+| `--framesInFlight browser-default` | —                      | measure whatever the build compiled in          |
+| `--out DIR`                        | `artifacts/yield`      | where capture and video land                    |
+| `--render WxH`                     | _(off)_                | also render a video afterwards                  |
 
 **`--passes` is a requirement, not a convenience.** `resolveRefreshHz`
 (`src/presented.ts`) will not bound the denominator until it has 150 gaps inside
@@ -55,12 +56,23 @@ Playwright.
 CHROME_BIN=/path/to/chrome pnpm yield-bench demo/fixture-tour.ts --passes 2
 ```
 
-**A browser older than Chromium 154 is refused outright.** `maxFramesInFlight`
+**A browser older than Chromium 154 is refused unless you say otherwise.** `maxFramesInFlight`
 does not exist there, so the bound in force is whatever that build compiled in —
 worth eleven points, i.e. more than most differences anyone comes here to look
 for. Recording on such a browser is fine and the product does it; reporting a
 yield number from one as though the regime were known is not, so the harness
 stops before it prints anything.
+
+`--framesInFlight browser-default` lifts that refusal, and the run then carries
+`framesInFlight=browser-default` in its `RESULT` line together with the first
+twelve characters of the running binary's SHA-256. Both are needed: the word
+names the _kind_ of regime, the hash names _which_ one — a patched and an
+unpatched build compile in different bounds and report the same version string.
+
+The switch exists because a self-built browser is the only way to reach some
+questions at all: the animated-content lock-in has no switch outside a patched
+build, and such a build has no `maxFramesInFlight` parameter to satisfy the
+guard with. The guard is against a _silent_ unknown regime, not a named one.
 
 This matters more than it looks. `src/browser.ts` verifies through
 `/proc/<pid>/exe` which binary actually started, and writes its path, version

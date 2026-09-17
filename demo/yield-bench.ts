@@ -76,10 +76,26 @@ const scriptPath = positionals[0] ?? 'demo/fixture-tour.ts'
 const outRoot = values.out ?? 'artifacts/yield'
 const windowMs = Number(values.windowMs ?? '1000')
 const passes = Number(values.passes ?? '1')
+/**
+ * `--framesInFlight browser-default` says: measure this browser at whatever
+ * bound it compiled in, and I know that is what I am doing.
+ *
+ * The refusal further down exists against a *silent* unknown regime, not
+ * against a named one. A self-built browser is the only way to reach some
+ * questions at all - the animated-content lock-in has no switch outside a
+ * patched build - and those runs would otherwise be locked out by a guard
+ * meant to protect them.
+ */
+const acceptBrowserDefault = values.framesInFlight === 'browser-default'
 const framesInFlight =
-  values.framesInFlight === undefined
+  values.framesInFlight === undefined || acceptBrowserDefault
     ? undefined
     : Number(values.framesInFlight)
+if (framesInFlight !== undefined && !Number.isInteger(framesInFlight)) {
+  throw new Error(
+    `--framesInFlight wants a positive integer or "browser-default", got "${values.framesInFlight ?? ''}"`,
+  )
+}
 const [width, height] = (values.capture ?? '2560x1600').split('x').map(Number)
 if (!Number.isInteger(width) || !Number.isInteger(height)) {
   throw new Error(`--capture wants WIDTHxHEIGHT, got "${values.capture ?? ''}"`)
@@ -237,7 +253,7 @@ try {
   console.log(
     `DIAG presentedInstants=${String(presentedTimestamps.length)} capturedFrames=${String(manifest.frames.length)} sessionMs=${String(manifest.session.duration)} paintTicks=${String(paintTimestamps.length)}`,
   )
-  if (captureResult.framesInFlight === null) {
+  if (captureResult.framesInFlight === null && !acceptBrowserDefault) {
     // A yield number is only worth reading when it is known which regime
     // produced it. This browser has no `maxFramesInFlight` at all, so the
     // bound in force is whatever the build compiled in - measured to be worth
@@ -245,7 +261,7 @@ try {
     // here to look for. Recording on such a browser is fine; reporting a
     // number from it as if the regime were known is not.
     throw new Error(
-      'This browser has no maxFramesInFlight parameter (Chromium 154 or newer has it), so the frames-in-flight bound is whatever the build compiled in. Point CHROME_BIN at a browser that has it, or measure something other than yield.',
+      'This browser has no maxFramesInFlight parameter (Chromium 154 or newer has it), so the frames-in-flight bound is whatever the build compiled in. Point CHROME_BIN at a browser that has it, or pass --framesInFlight browser-default to say that is what you meant.',
     )
   }
 
@@ -265,7 +281,12 @@ try {
       `recordSeconds=${recordSeconds.toFixed(1)} ` +
       `framesOnDisk=${String(manifest.frames.length)} ` +
       `droppedDuplicates=${String(captureResult.droppedDuplicateFrameCount)} ` +
-      `framesInFlight=${captureResult.framesInFlight === null ? 'browser-default' : String(captureResult.framesInFlight)}`,
+      `framesInFlight=${captureResult.framesInFlight === null ? 'browser-default' : String(captureResult.framesInFlight)} ` +
+      // `browser-default` names the kind of regime, never which one: a
+      // patched and an unpatched build compile in different bounds and report
+      // the same version string. The content hash is the only witness that
+      // tells two such runs apart afterwards.
+      `browser=${provenance.fingerprint.sha256.slice(0, 12)}`,
   )
   try {
     validateCaptureEfficiencyReport(report)
