@@ -1,3 +1,12 @@
+# The Forgejo-side check.
+#
+# It does not run today: no runner registered on this instance offers the
+# `docker` label this file asks for, and every run since the repository was
+# created has sat on "waiting". Measured 2026-09-17 against the live instance —
+# 26 registered runners, not one of them answering to `docker`, and every
+# runner that is online belongs to an organisation this user-owned repository
+# is not part of. The public check therefore lives in `.github/workflows/`
+# until a runner exists here; see issue #91.
 name: ci
 
 on:
