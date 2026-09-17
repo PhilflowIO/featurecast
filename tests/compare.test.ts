@@ -74,8 +74,17 @@ describe('the comparison picture', () => {
     expect(chain.indexOf('setpts')).toBeLessThan(chain.indexOf('drawtext'))
   })
 
-  it('slows both sides down, by the same factor, five times by default', () => {
+  it('runs at real time unless somebody asks for slow motion', () => {
+    // Slowing a comparison down makes the smooth side look broken: a pointer
+    // path that is even at real speed reads as a stutter at a fifth speed.
+    // A published comparison must not argue against the thing it shows.
     const filter = buildCompareFilter(SIDES, [video(), video()])
+    expect(sideChain(filter, 0)).toContain('setpts=1.0000*PTS')
+    expect(sideChain(filter, 1)).toContain('setpts=1.0000*PTS')
+  })
+
+  it('slows both sides by the same factor when asked to', () => {
+    const filter = buildCompareFilter(SIDES, [video(), video()], { slow: 5 })
     expect(sideChain(filter, 0)).toContain('setpts=5.0000*PTS')
     expect(sideChain(filter, 1)).toContain('setpts=5.0000*PTS')
   })
@@ -489,6 +498,6 @@ describe('running a comparison', () => {
     // The report says what was done to each side, so a reader of the log can
     // tell a frozen tail from a hung encode.
     expect(written).toContain('holds its last frame for 2.00s')
-    expect(written).toContain('5.0x slower')
+    expect(written).toContain('1.0x slower')
   })
 })
