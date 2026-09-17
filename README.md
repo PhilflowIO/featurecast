@@ -10,7 +10,7 @@ One browser run produces two things: clean raw footage and an event log of where
 
 ## One recording, every look
 
-![The same take rendered three ways: no pointer, the default pointer, a bigger pointer](docs/media/one-take-every-look.gif)
+![The same take rendered three ways: no pointer, the default pointer, a bigger pointer](docs/media/one-take-every-look.webp)
 
 Three versions of one browser run. The application behind them is the same
 pixels in all three, at the same instant — only the pointer is different,
@@ -30,7 +30,7 @@ pnpm compare plain/16-9.mp4 default/16-9.mp4 big/16-9.mp4 --out looks.mp4 \
 
 ## Landing page, phone and social post
 
-![One script, three devices: desktop, tablet and phone, each in its own shape](docs/media/every-device-native.gif)
+![One script, three devices: desktop, tablet and phone, each in its own shape](docs/media/every-device-native.webp)
 
 Three videos out of one script. The wide one for the landing page, the tall
 one for the phone, the one in between for a tablet or a post — and each was
@@ -62,7 +62,7 @@ three shapes out of a single take anyway, `--all-formats` still delivers them.
 
 ## The camera goes where you clicked
 
-![The frame pushes in on the button the pointer is about to press, then pulls back out](docs/media/camera-follows-click.gif)
+![The frame pushes in on the button the pointer is about to press, then pulls back out](docs/media/camera-follows-click.webp)
 
 Nobody framed this by hand. The video pushes in on the button that was
 pressed and pulls back out again, because the recording knows which element
@@ -165,7 +165,7 @@ columns of the same table. Left: whole 38.9 px wheel packets, the procedure
 this tool used to have. Right: eased steps, never more than 30 px between two
 frames. Nothing else differs — same script, same page, same browser.
 
-![Wheel packets against eased steps, side by side, on a slice of a table](docs/media/scroll-steps.gif)
+![Wheel packets against eased steps, side by side, on a slice of a table](docs/media/scroll-steps.webp)
 
 ---
 
