@@ -1,79 +1,133 @@
-# Meilensteine
+# Milestones
 
-Jeder Meilenstein hat ein Abnahmekriterium, das man **ausführen** kann. Kein Meilenstein gilt als erreicht, weil der Code existiert — nur, weil das Kriterium nachweislich erfüllt ist. Die ersten beiden klären Risiken, bevor gebaut wird; alles danach ist Aufbau.
-
----
-
-## M0 — Fundament
-
-Repository, TypeScript, Playwright, Formatierung, ein Beispiel-Skript, das nichts tut außer eine Seite zu öffnen.
-
-**Abnahme:** `pnpm demo:hello` öffnet eine Seite und beendet sich mit Code 0.
+Every milestone has an acceptance criterion you can **run**. No milestone
+counts as reached because the code exists — only because the criterion is
+demonstrably met. The first two clear risks before anything is built;
+everything after that is construction.
 
 ---
 
-## M1 — Die Aufnahme steht, und sie sieht gut aus
+## M0 — Foundation
 
-Aufnahme über `page.screencast`, Einzelbilder mit echten Zeitstempeln, Zusammenbau zu konstanten 60 Bildern pro Sekunde über ffmpeg.
+Repository, TypeScript, Playwright, formatting, an example script that does
+nothing but open a page.
 
-Das hier ist der Risiko-Meilenstein: alle bisherigen Qualitätsaussagen sind Messwerte, **niemand hat ein Ergebnis angesehen**. Wenn eine 2560er-Aufnahme nach Verkleinerung auf 1920 nicht überzeugend scharf aussieht, ändert das den ganzen Plan — deshalb steht das vor allem anderen.
-
-**Abnahme:** Aufnahme einer echten, dichten Anwendungsoberfläche (nicht `example.com`), 20 Sekunden mit Scrollen und Übergängen. `ffprobe` meldet 1920×1080, konstant 60 Bilder pro Sekunde, keine doppelten Bilder. Das Ergebnis wird **angesehen** und mit einer Screen-Studio-Aufnahme derselben Oberfläche verglichen. Urteil wird schriftlich festgehalten.
-
----
-
-## M2 — Der Wrapper: weiche Bewegung und Ereignis-Log
-
-Der `demo`-Wrapper um Playwrights Seite: `point`, `click`, `tap`, `type`, `hold`, `scroll`. Jede Bewegung läuft über die übernommene Bewegungsmathematik statt über lineare Interpolation. Parallel entsteht `events.jsonl` mit Zeigerbahn in 60 Hertz, Klicks und der Bounding-Box des getroffenen Elements.
-
-**Abnahme:** zwei Läufe desselben Skripts erzeugen bit-identische `events.jsonl` (Wiederholbarkeit). Die Zeigerbahn hat keinen Sprung über 20 Pixel zwischen zwei Abtastpunkten. Jeder Klick trägt eine Bounding-Box, die zum sichtbaren Element passt.
+**Acceptance:** `pnpm demo:hello` opens a page and exits with code 0.
 
 ---
 
-## M3 — Mobile scharf bekommen
+## M1 — The capture stands, and it looks good
 
-Der Erkundungs-Meilenstein. Die drei in [PLAN.md](PLAN.md) beschriebenen Wege werden gebaut, gemessen und angesehen; einer gewinnt, die anderen werden mit Grund verworfen.
+Capture through `page.screencast`, frames with real timestamps, assembly to a
+constant 60 frames per second through ffmpeg.
 
-Dazu: Touch statt Maus im Wrapper (`page.touchscreen.tap`), Touch-Ripple statt Pfeil im Render, und die Frage, ob die Aufnahme unter WebKit funktioniert oder ob die iPhone-Profile unter Chromium gefahren werden müssen.
+This is the risk milestone: every quality statement so far is a measurement,
+**nobody has watched a result**. If a 2560 capture does not look convincingly
+sharp after being scaled down to 1920, that changes the whole plan — which is
+why it comes before everything else.
 
-**Gemessen und entschieden am 2026-09-15:** der Rahmen-Weg gewinnt; fünf Wege wurden geprüft, vier verworfen, jeder mit seiner Zahl. Die Begründung, die verworfenen Wege und was der Weg kostet stehen in [docs/M3-VERDICT.md](docs/M3-VERDICT.md). Offen bleibt allein WebKit — gemessen wurde unter Chromium mit dem iPhone-Profil.
-
-**Abnahme:** ein Hochformat-Video 1080×1920 einer echten mobilen Oberfläche, angesehen und für Social-Media-tauglich befunden. Text in normaler Fließtextgröße ist lesbar. Kein Mauszeiger im Bild. Die Entscheidung samt verworfener Wege steht schriftlich im Repo.
-
----
-
-## M4 — Nachbearbeitung: Zoom, Zeiger, Tempo
-
-Zoomfeder und Ruhe-Erkennung übernommen und parametrisiert, Zeiger aus dem Ereignis-Log gerendert, Leerlauf-Passagen gerafft. Ausgabe in 16:9, 9:16 und 1:1 aus demselben Rohmaterial.
-
-**Abnahme:** ein Rohvideo ergibt ohne erneuten Browser-Lauf drei Formate. Der Zoom rahmt bei jedem Klick das getroffene Element und nicht einen Punkt daneben. Ein Look-Parameter wird geändert und das Ergebnis liegt in unter zwei Minuten neu vor.
+**Acceptance:** a capture of a real, dense application interface (not
+`example.com`), 20 seconds with scrolling and transitions. `ffprobe` reports
+1920×1080, a constant 60 frames per second, no duplicate frames. The result is
+**watched** and compared with a Screen Studio recording of the same interface.
+The verdict is recorded in writing.
 
 ---
 
-## M5 — Geräte-Ebene und Konfiguration
+## M2 — The wrapper: smooth motion and the event log
 
-Die in [docs/DEVICES.md](docs/DEVICES.md) beschriebene Schichtung: Playwrights Registry zur Laufzeit gelesen, eigene Aufnahme- und Ausgabe-Ebene darüber, elf Presets, Überschreiben einzelner Felder möglich.
+The `demo` wrapper around Playwright's page: `point`, `click`, `tap`, `type`,
+`hold`, `scroll`. Every movement runs through the adopted motion mathematics
+instead of through linear interpolation. Alongside it, `events.jsonl` is
+written with the pointer track at 60 hertz, clicks and the bounding box of the
+element that was hit.
 
-**Abnahme:** dasselbe unveränderte Skript läuft über vier Presets — Desktop, iPhone, Android, Tablet — und erzeugt vier korrekt formatierte Videos. Ein unbekannter Gerätename bricht mit einer Fehlermeldung ab, die die verfügbaren Namen nennt.
-
----
-
-## M6 — Garage-Upload und ein Kommando für alles
-
-Upload in den S3-kompatiblen Speicher, Zugangsdaten aus der Umgebung, Rückgabe einer URL. Ein `featurecast`-Kommando, das Skript, Geräte und Ziel entgegennimmt und die Kette durchläuft. NVENC statt CPU im Encode.
-
-**Abnahme:** `featurecast run demo/feature-xy.ts --devices desktop,iphone --upload` liefert zwei abrufbare URLs. Der Encode läuft auf der 3090-Box; die Laufzeit für 30 Sekunden 1080p60 wird gemessen und notiert.
-
----
-
-## M7 — Benutzbar für andere
-
-Dokumentation, wie ein bestehendes Playwright-Skript zum Aufnahme-Skript wird. Rezepte für die üblichen Stolpersteine: Anmeldung über gespeicherten Sitzungszustand, Cookie-Banner wegblenden, Uhrzeiten und Zufallsdaten einfrieren, damit zwei Aufnahmen identisch aussehen.
-
-**Abnahme:** ein vorhandenes Playwright-Skript aus einem anderen Projekt wird in unter 30 Minuten in eine Aufnahme überführt, ohne dass dabei am Wrapper selbst etwas geändert werden muss.
+**Acceptance:** two runs of the same script produce bit-identical
+`events.jsonl` (repeatability). The pointer track has no jump over 20 pixels
+between two sample points. Every click carries a bounding box that matches the
+visible element.
 
 ---
 
-## Nicht im Plan
+## M3 — Getting mobile sharp
 
-Bewusst weggelassen, damit klar ist, dass es nicht vergessen wurde: eine Bedienoberfläche (das Dropdown ist vorbereitet, wird aber nicht gebaut), Sprachausgabe und Untertitel (macht die bestehende Video-Pipeline), Musik, Mehrsprachigkeit der Aufnahmen, und das automatische Erkennen neuer Features aus Pull Requests — das ist eine eigene Idee für später.
+The exploratory milestone. The three routes described in
+[PLAN.md](PLAN.md) are built, measured and watched; one wins, the others are
+rejected with a reason.
+
+Plus: touch instead of mouse in the wrapper (`page.touchscreen.tap`), a touch
+ripple instead of the arrow in the render, and the question of whether the
+capture works under WebKit or whether the iPhone profiles have to be driven
+under Chromium.
+
+**Measured and decided on 2026-09-15:** the frame route wins; five routes were
+checked, four rejected, each with its number. The reasoning, the rejected
+routes and what the route costs are in
+[docs/M3-VERDICT.md](docs/M3-VERDICT.md). What remains open is WebKit alone —
+the measurements were made under Chromium with the iPhone profile.
+
+**Acceptance:** a 1080×1920 portrait video of a real mobile interface, watched
+and judged fit for social media. Text at normal body size is legible. No mouse
+pointer in the picture. The decision, including the rejected routes, is written
+down in the repository.
+
+---
+
+## M4 — Post-processing: zoom, pointer, pace
+
+Zoom spring and rest detection adopted and parameterised, pointer rendered
+from the event log, idle passages compressed. Output in 16:9, 9:16 and 1:1 out
+of the same raw material.
+
+**Acceptance:** one raw video yields three formats without another browser run.
+The zoom frames the element that was hit on every click and not a point beside
+it. One look parameter is changed and the result is available again in under
+two minutes.
+
+---
+
+## M5 — Device layer and configuration
+
+The layering described in [docs/DEVICES.md](docs/DEVICES.md): Playwright's
+registry read at run time, our own capture and output layer on top, eleven
+presets, individual fields overridable.
+
+**Acceptance:** the same unchanged script runs across four presets — desktop,
+iPhone, Android, tablet — and produces four correctly formatted videos. An
+unknown device name aborts with an error message naming the available names.
+
+---
+
+## M6 — Garage upload and one command for everything
+
+Upload to S3-compatible storage, credentials from the environment, a URL
+returned. One `featurecast` command that takes a script, devices and a target
+and runs the chain through.
+
+**Acceptance:**
+`featurecast run demo/feature-xy.ts --devices desktop,iphone --upload` delivers
+two retrievable URLs. The encode runs on the 3090 box; the run time for 30
+seconds of 1080p60 is measured and recorded.
+
+---
+
+## M7 — Usable by other people
+
+Documentation on how an existing Playwright script becomes a recording script.
+Recipes for the usual stumbling blocks: signing in through a saved session
+state, hiding cookie banners, freezing clocks and random data so that two
+recordings look identical.
+
+**Acceptance:** an existing Playwright script from another project is converted
+into a recording in under 30 minutes, without anything in the wrapper itself
+having to change.
+
+---
+
+## Not in the plan
+
+Deliberately left out, so that it is clear it was not forgotten: a user
+interface (the dropdown is prepared but will not be built), voice-over and
+subtitles (the existing video pipeline does that), music, multilingual
+recordings, and automatically detecting new features from pull requests — that
+is an idea of its own for later.
