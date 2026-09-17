@@ -28,28 +28,26 @@ pnpm compare plain/16-9.mp4 default/16-9.mp4 big/16-9.mp4 --out looks.mp4 \
 
 ---
 
-## Every device is filmed as that device
+## Landing page, phone and social post
 
 ![One script, three devices: desktop, tablet and phone, each in its own shape](docs/media/every-device-native.gif)
 
-Three separate runs of one script. The phone is not a slice cut out of the
-desktop take — it is a phone: its own viewport, its own layout, its own type
-size, and a round fingertip instead of an arrow. The shapes differ in the
-picture because they differ in the device.
+Three videos out of one script. The wide one for the landing page, the tall
+one for the phone, the one in between for a tablet or a post — and each was
+filmed on that device, not cut out of the wide one afterwards.
 
-That is the part a crop cannot fake. A tall video cut out of a wide recording
-shows a desktop layout in a phone-shaped hole; this shows what the application
-does when it believes it is on a phone.
+That is the difference a viewer notices without knowing why. On the phone
+video the application _is_ the phone version: bigger type, one column, a
+fingertip instead of a mouse pointer. A crop out of a desktop take gives you a
+desktop screen squeezed into a phone-shaped hole.
 
 ```bash
 pnpm featurecast run demo/fixture-tour.ts --devices desktop,tablet,iphone
 ```
 
-Eleven presets are curated and every name in Playwright's own device registry
-resolves too — [docs/DEVICES.md](docs/DEVICES.md) lists them. Any one of those
-recordings can still be delivered as 16:9, 9:16 and 1:1 at once
-(`--all-formats`), cropped out of that device's own take, which is what a crop
-is honestly for.
+Eleven devices are ready to name, and every phone and tablet Playwright knows
+works too — [docs/DEVICES.md](docs/DEVICES.md) lists them. If you do want all
+three shapes out of a single take anyway, `--all-formats` still delivers them.
 
 <!--
   Two further comparisons and a full product video exist as full-resolution
@@ -62,24 +60,23 @@ is honestly for.
 
 ---
 
-## The camera goes where the click went
+## The camera goes where you clicked
 
 ![The frame pushes in on the button the pointer is about to press, then pulls back out](docs/media/camera-follows-click.gif)
 
-Nobody framed this by hand. The recording logged which element the click hit,
-and the renderer moved the frame onto that element and back out again
-afterwards. Change your mind about how tight it should sit and it is a
-re-render, not another browser run:
+Nobody framed this by hand. The video pushes in on the button that was
+pressed and pulls back out again, because the recording knows which element
+the click hit. Want it tighter, or calmer? That is a re-render, not another
+take:
 
 ```bash
 pnpm render artifacts/tour/desktop dist/tour --zoom 2.2 --padding 90
 ```
 
-The push-in is a crop of the original, never a magnification. A 2560×1600
-capture delivered as 1920×1080 has 1.33× to spend, so that is as close as the
-camera goes, and the renderer says so instead of inventing pixels. A phone
-recording has no such reserve today — it is captured at exactly the size it is
-delivered — so on a phone the camera holds still.
+It moves in by cropping into the original picture, never by blowing it up, so
+it only goes as close as the recording stays sharp — and it tells you when you
+have asked for more than that. On a phone it stays put: a phone is filmed at
+exactly the size it is delivered, so there is nothing spare to move into.
 
 ---
 
