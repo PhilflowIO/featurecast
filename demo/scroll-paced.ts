@@ -7,7 +7,7 @@ import { benchFixture, pacedSideways, scrollArm } from './scroll-arm.js'
  * pnpm featurecast run demo/scroll-paced.ts --devices desktop
  * ```
  *
- * Same corpus, same choreography and same seed as `demo/scroll-unpaced.ts`.
+ * Same corpus, same choreography and same seed as `demo/scroll-packets.ts`.
  * The only difference between the two files is which function delivers the
  * sideways travel — see `demo/scroll-arm.ts` for why both arms are ours.
  */

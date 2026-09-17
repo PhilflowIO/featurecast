@@ -1,13 +1,22 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  legacySlotDeltas,
   legacyWheelPackets,
+  pacedTravelMs,
+  pacedTravelSlots,
+  packetSidewaysOver,
   pacedSideways,
   scrollArm,
   SIDEWAYS_PX,
-  unpacedSideways,
+  packetSideways,
 } from '../demo/scroll-arm.js'
-import { MAX_SCROLL_STEP_PX } from '../src/record.js'
+import {
+  computeScrollPositions,
+  DEFAULT_SCROLL_SPEED_PX_PER_SECOND,
+  EVENT_LOG_FPS,
+  MAX_SCROLL_STEP_PX,
+} from '../src/record.js'
 import type { Demo, RecordPage } from '../src/record.js'
 
 /**
@@ -54,7 +63,7 @@ describe('the two scroll arms', () => {
     const paced = recorder()
     const unpaced = recorder()
     await scrollArm(pacedSideways)(paced.page, paced.demo)
-    await scrollArm(unpacedSideways)(unpaced.page, unpaced.demo)
+    await scrollArm(packetSideways)(unpaced.page, unpaced.demo)
 
     const shared = (calls: string[]): string[] =>
       calls.filter(
@@ -78,10 +87,12 @@ describe('the two scroll arms', () => {
     expect(calls.filter((call) => call.startsWith('wheel'))).toEqual([])
   })
 
-  it('sends the unpaced arm as raw packets, never through the wrapper', async () => {
+  it('sends the packet arm as raw wheels, never through the wrapper', async () => {
     const { calls, demo, page } = recorder()
-    await scrollArm(unpacedSideways)(page, demo)
+    await scrollArm(packetSideways)(page, demo)
     const wheels = calls.filter((call) => call.startsWith('wheel'))
+    // One round trip per slot, of which eighteen carry pixels: see
+    // `legacySlotDeltas` for why the empty ones are there.
     expect(wheels).toHaveLength(18)
     expect(calls.filter((call) => call.startsWith('scroll'))).toEqual([])
   })
@@ -105,5 +116,86 @@ describe('the two scroll arms', () => {
 
   it('refuses a packet size that carries nothing', () => {
     expect(() => legacyWheelPackets(700, 0)).toThrow(/has to carry something/)
+  })
+})
+
+describe('the two arms take the same time', () => {
+  it('gives the legacy arm the shipped arm\u2019s slot count, not its own', () => {
+    const deltas = legacySlotDeltas()
+    expect(deltas).toHaveLength(pacedTravelSlots())
+    expect(deltas.filter((delta) => delta !== 0)).toHaveLength(18)
+  })
+
+  it('reads the slot count out of the shipped planner rather than restating it', () => {
+    // If the planner ever changes speed or grows its sample count to hold the
+    // per-step cap, the legacy arm follows without anybody remembering to
+    // edit a second number.
+    expect(pacedTravelSlots()).toBe(
+      computeScrollPositions(
+        SIDEWAYS_PX,
+        0,
+        DEFAULT_SCROLL_SPEED_PX_PER_SECOND,
+        EVENT_LOG_FPS,
+      ).length,
+    )
+  })
+
+  it('lands the last lump in the last slot, so both arms arrive together', () => {
+    const deltas = legacySlotDeltas()
+    expect(deltas.at(-1)).not.toBe(0)
+  })
+
+  it('spaces the lumps evenly through the slots', () => {
+    const carrying = legacySlotDeltas()
+      .map((delta, index) => (delta === 0 ? -1 : index))
+      .filter((index) => index >= 0)
+    const gaps = carrying.map((slot, index) =>
+      index === 0 ? slot + 1 : slot - (carrying[index - 1] ?? 0),
+    )
+    for (const gap of gaps)
+      expect(Math.abs(gap - (gaps[0] ?? 0))).toBeLessThanOrEqual(1)
+  })
+
+  it('still moves the whole distance, and still over the cap every lump', () => {
+    // Holding the duration still must not quietly turn the left arm into the
+    // right one: that would leave a comparison whose halves do the same thing.
+    const deltas = legacySlotDeltas()
+    expect(deltas.reduce((sum, delta) => sum + delta, 0)).toBeCloseTo(
+      SIDEWAYS_PX,
+      6,
+    )
+    for (const delta of deltas.filter((one) => one !== 0)) {
+      expect(Math.abs(delta)).toBeGreaterThan(MAX_SCROLL_STEP_PX)
+    }
+  })
+
+  it('sends only the lumps, and stretches them over the time it is given', async () => {
+    const { calls, demo, page } = recorder()
+    const started = Date.now()
+    await scrollArm(packetSidewaysOver(1500))(page, demo)
+    const elapsed = Date.now() - started
+    expect(calls.filter((call) => call.startsWith('wheel'))).toHaveLength(18)
+    expect(elapsed).toBeGreaterThanOrEqual(1500 * 0.9)
+  })
+
+  it('refuses a travel time that is not one', () => {
+    expect(() => packetSidewaysOver(0)).toThrow(/positive travel time/)
+    expect(() => packetSidewaysOver(Number.NaN)).toThrow(/positive travel time/)
+  })
+
+  it('refuses to spread packets that do not fit in the slots', () => {
+    expect(() => legacySlotDeltas(700, 1)).toThrow(/do not fit in the/)
+  })
+
+  it('falls back to the planner\u2019s own travel time when given none', async () => {
+    const { calls, demo, page } = recorder()
+    const started = Date.now()
+    await scrollArm(packetSideways)(page, demo)
+    const elapsed = Date.now() - started
+    expect(calls.filter((call) => call.startsWith('wheel'))).toHaveLength(18)
+    expect(pacedTravelMs()).toBe((pacedTravelSlots() / EVENT_LOG_FPS) * 1000)
+    // The holds in `scrollArm` are stubbed out, so the only time this can
+    // have spent is the schedule's.
+    expect(elapsed).toBeGreaterThanOrEqual(pacedTravelMs() * 0.9)
   })
 })
