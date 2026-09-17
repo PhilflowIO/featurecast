@@ -25,6 +25,20 @@ import { recordWithRecipes } from './recipe-authenticated.js'
  *   (gespeicherte Sitzung, ausgeblendetes Banner, eingefrorene Uhr) schon
  *   am `RecordRuntime`-Nahtpunkt; hier wird nichts davon nachgebaut.
  *
+ * WARUM DIE PERSÖNLICHE-RAUM-KARTE PER SELEKTOR VERSCHWINDET UND NICHT PER
+ * FREISCHALTUNG. Die Karte zeigt in jedem Listenbild die interne
+ * Vorproduktions-Adresse und darf deshalb nicht ins öffentliche Video. Sie
+ * lässt sich für das Aufnahmekonto aber nicht wegschalten: sie hängt nicht
+ * an einer Zuteilung pro Konto, sondern am Not-Schalter der ganzen
+ * Auslieferung (`FEATURE_PERMANENT_ROOMS`,
+ * `api/app/services/personal_room.py:38-55` im Repository `flow.raven`),
+ * und die Aufrufstelle `ui/src/app/meetings/page.tsx:151` rendert sie ohne
+ * jede Feature-Bedingung. Ein Entzug von
+ * `FEATURE_PERMANENT_ROOMS_SURFACE` tut hier nichts — das wurde bereits
+ * erfolglos versucht. Solange das so ist, ist das Ausblenden vor dem ersten
+ * Skript der Seite der einzige Weg, der nicht die Auslieferung für alle
+ * verändert.
+ *
  * WARUM DER ZUSTAND NICHT INS REPOSITORY GEHÖRT. `auth/` ist per
  * `.gitignore` ausgenommen, und das ist kein Formalismus: eine
  * `storageState`-Datei IST der Zugang. Die Zugangsdaten kommen deshalb aus
@@ -148,6 +162,10 @@ async function record(ausgabe: string): Promise<void> {
       // Feste Uhr, damit zwei Aufnahmen dieselben relativen Zeitangaben
       // zeigen ("vor 3 Tagen" wandert sonst zwischen zwei Läufen).
       fixedTime: '2026-09-16T09:00:00Z',
+      // Zwei Flächen, die kein Zuschauer sehen soll: der Cookie-Hinweis
+      // (Lärm) und die Persönliche-Raum-Karte (interne Adresse, siehe
+      // Kopfkommentar).
+      hideSelectors: ['#cookie-banner', '[data-testid="personal-room-card"]'],
       out: ausgabe,
       seed: 1,
       storageStatePath: ZUSTAND,
