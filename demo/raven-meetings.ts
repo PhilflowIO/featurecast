@@ -6,91 +6,88 @@ import { launchChromium, resolveBrowserRequest } from '../src/browser.js'
 import type { Demo, RecordPage } from '../src/record.js'
 
 /**
- * Die erste Aufnahme, die das eigene Produkt filmt statt eines fremden.
+ * The first recording that films our own product rather than someone else's.
  *
- * Zwei Schritte, absichtlich getrennt:
+ * Two steps, deliberately separated:
  *
- *   Die Anmeldung meldet sich einmal an und schreibt den Sitzungszustand
- *   nach `auth/state.json`. Das ist derselbe Zustand, den
- *   `docs/RECORDING-SCRIPTS.md` sonst von Hand über
- *   `playwright codegen --save-storage` erzeugen lässt — nur ohne Hand,
- *   weil dieses Ziel ein Anmeldeformular mit zwei Feldern hat und sich
- *   deshalb niemand vor einen sichtbaren Browser setzen muss. Sie ist kein
- *   Aufnahmeschritt und hat deshalb ihren eigenen Aufruf behalten.
+ *   The sign-in signs in once and writes the session state to
+ *   `auth/state.json`. That is the same state `docs/RECORDING-SCRIPTS.md`
+ *   otherwise has you create by hand through
+ *   `playwright codegen --save-storage` — only without the hand, because this
+ *   target has a sign-in form with two fields and so nobody has to sit down in
+ *   front of a visible browser. It is not a recording step and has therefore
+ *   kept an invocation of its own.
  *
- *   Die Aufnahme selbst ist ein gewöhnliches Skript der Hauptkette. Sie
- *   nennt nur noch, was gelten soll — gespeicherte Sitzung, ausgeblendete
- *   Flächen, feste Uhr —, und `featurecast run` stellt es her, filmt und
- *   rendert. Früher lief sie über ein eigenes Rezept in `demo/`, das seinen
- *   Browser selbst aufmachte: das schrieb ein Ereignis-Protokoll und kein
- *   einziges Bild.
+ *   The recording itself is an ordinary script of the main chain. All it does
+ *   is name what should hold — saved session, hidden areas, fixed clock — and
+ *   `featurecast run` establishes that, films and renders. It used to run
+ *   through a recipe of its own in `demo/` that opened its own browser: that
+ *   wrote an event log and not a single frame.
  *
- * WARUM DIE PERSÖNLICHE-RAUM-KARTE PER SELEKTOR VERSCHWINDET UND NICHT PER
- * FREISCHALTUNG. Die Karte zeigt in jedem Listenbild die interne
- * Vorproduktions-Adresse und darf deshalb nicht ins öffentliche Video. Sie
- * lässt sich für das Aufnahmekonto aber nicht wegschalten: sie hängt nicht
- * an einer Zuteilung pro Konto, sondern am Not-Schalter der ganzen
- * Auslieferung (`FEATURE_PERMANENT_ROOMS`,
- * `api/app/services/personal_room.py:38-55` im Repository `flow.raven`),
- * und die Aufrufstelle `ui/src/app/meetings/page.tsx:151` rendert sie ohne
- * jede Feature-Bedingung. Ein Entzug von
- * `FEATURE_PERMANENT_ROOMS_SURFACE` tut hier nichts — das wurde bereits
- * erfolglos versucht. Solange das so ist, ist das Ausblenden vor dem ersten
- * Skript der Seite der einzige Weg, der nicht die Auslieferung für alle
- * verändert.
+ * WHY THE PERSONAL-ROOM CARD DISAPPEARS BY SELECTOR AND NOT BY FEATURE FLAG.
+ * The card shows the internal pre-production address in every frame of the
+ * list and therefore must not reach the public video. It cannot be switched
+ * off for the recording account, though: it does not hang on a per-account
+ * assignment but on the kill switch for the whole deployment
+ * (`FEATURE_PERMANENT_ROOMS`,
+ * `api/app/services/personal_room.py:38-55` in the `flow.raven` repository),
+ * and the call site `ui/src/app/meetings/page.tsx:151` renders it without any
+ * feature condition at all. Withdrawing `FEATURE_PERMANENT_ROOMS_SURFACE`
+ * does nothing here — that has already been tried, without success. As long as
+ * that is the case, hiding it before the page's first script is the only route
+ * that does not change the deployment for everyone.
  *
- * WARUM DER ZUSTAND NICHT INS REPOSITORY GEHÖRT. `auth/` ist per
- * `.gitignore` ausgenommen, und das ist kein Formalismus: eine
- * `storageState`-Datei IST der Zugang. Die Zugangsdaten kommen deshalb aus
- * der Umgebung und stehen in keiner Zeile dieser Datei. Die Hauptkette
- * bekommt den Pfad und nie den Inhalt (`src/pipeline.ts`, `LoadedScript`).
+ * WHY THE STATE DOES NOT BELONG IN THE REPOSITORY. `auth/` is excluded by
+ * `.gitignore`, and that is not formalism: a `storageState` file IS the
+ * access. The credentials therefore come from the environment and appear in no
+ * line of this file. The main chain receives the path and never the contents
+ * (`src/pipeline.ts`, `LoadedScript`).
  *
- * AUFRUF::
+ * INVOCATION::
  *
  *     RAVEN_DEMO_EMAIL=… RAVEN_DEMO_PW=… \
  *         pnpm exec tsx demo/raven-meetings.ts anmelden
  *     pnpm featurecast run demo/raven-meetings.ts --devices desktop-wide
  *
- * Läuft die Sitzung ab, filmt die Aufnahme die Anmeldeseite statt der
- * Liste. Dann ist nicht das Skript kaputt, sondern die Datei alt: die
- * Anmeldung noch einmal.
+ * If the session expires, the recording films the sign-in page instead of the
+ * list. It is then not the script that is broken but the file that is old: run
+ * the sign-in again.
  */
 
 const BASIS = process.env.RAVEN_DEMO_URL ?? 'https://staging.raven.ceo'
 const ZUSTAND = process.env.RAVEN_DEMO_STATE ?? 'auth/state.json'
 
-/** Das Wort, auf das die Liste im Video zusammenschnurrt. */
+/** The word the list shrinks down to in the video. */
 const SUCHWORT = 'Steinkauz'
 
 /**
- * Die erste Zeile der Liste.
+ * The first row of the list.
  *
- * Das `nth=0` ist nicht Kosmetik: `a[href^="/meetings/"]` trifft jede
- * sichtbare Zeile, und Playwright verweigert einem mehrdeutigen Locator die
- * Auskunft über Geometrie. Der Rekorder braucht aber genau die, um den
- * Zeiger dorthin zu fahren — ohne die Einschränkung bricht die Aufnahme mit
- * einer Zeitüberschreitung ab, die wie ein Ladeproblem aussieht und keines
- * ist.
+ * The `nth=0` is not cosmetic: `a[href^="/meetings/"]` matches every visible
+ * row, and Playwright refuses to report geometry for an ambiguous locator. But
+ * that is exactly what the recorder needs in order to travel the pointer
+ * there — without the restriction the recording aborts with a timeout that
+ * looks like a loading problem and is not one.
  */
 const ERSTE_ZEILE = 'a[href^="/meetings/"] >> nth=0'
 
-/** Die Anwendung, die gefilmt wird. */
+/** The application that is filmed. */
 export const url = BASIS
 
 /**
- * Der Pfad zur gespeicherten Sitzung — nie ihr Inhalt.
+ * The path to the saved session — never its contents.
  *
- * Was hier steht, ist ein Dateiname; gelesen wird die Datei erst vom
- * Browser. Eine `storageState`-Datei enthält Cookies und lokalen Speicher
- * eines angemeldeten Kontos und ist damit der Zugang selbst. Deshalb liegt
- * sie unter `auth/`, das `.gitignore` ausnimmt, und deshalb steht in dieser
- * Datei kein einziges Zugangsdatum.
+ * What is written here is a file name; the file itself is read only by the
+ * browser. A `storageState` file contains the cookies and local storage of a
+ * signed-in account and is therefore the access itself. That is why it lives
+ * under `auth/`, which `.gitignore` excludes, and why this file contains not a
+ * single credential.
  */
 export const storageStatePath = ZUSTAND
 
 /**
- * Zwei Flächen, die kein Zuschauer sehen soll: der Cookie-Hinweis (Lärm)
- * und die Persönliche-Raum-Karte (interne Adresse, siehe Kopfkommentar).
+ * Two areas no viewer should see: the cookie notice (noise) and the
+ * personal-room card (internal address, see the header comment).
  */
 export const hideSelectors = [
   '#cookie-banner',
@@ -98,20 +95,19 @@ export const hideSelectors = [
 ]
 
 /**
- * Feste Uhr, damit zwei Aufnahmen dieselben relativen Zeitangaben zeigen
- * („vor 3 Tagen" wandert sonst zwischen zwei Läufen).
+ * A fixed clock, so that two recordings show the same relative times
+ * ("3 days ago" otherwise moves between two runs).
  */
 export const fixedTime = '2026-09-16T09:00:00Z'
 
 /**
- * Wartet, bis ein Knoten wirklich Fläche hat.
+ * Waits until a node genuinely has an area.
  *
- * `RecordPage` ist absichtlich eine schmale Oberfläche und kennt kein
- * `waitFor` — sie reicht genau so weit, wie der Rekorder sie braucht. Ein
- * `boundingBox()`, das nicht mehr `null` liefert, beantwortet hier aber
- * ohnehin die bessere Frage: nicht "ist der Knoten im Dokument", sondern
- * "ist er sichtbar" — und nur ein sichtbarer Knoten kann angeklickt oder
- * angezeigt werden.
+ * `RecordPage` is deliberately a narrow surface and has no `waitFor` — it
+ * reaches exactly as far as the recorder needs it to. A `boundingBox()` that
+ * no longer returns `null` answers the better question here anyway: not "is
+ * the node in the document" but "is it visible" — and only a visible node can
+ * be clicked or pointed at.
  */
 async function warteAuf(
   page: RecordPage,
@@ -124,7 +120,7 @@ async function warteAuf(
     if (box !== null) return
     if (Date.now() > ende) {
       throw new Error(
-        `Nicht sichtbar geworden binnen ${fristMs} ms: ${selector}`,
+        `Did not become visible within ${fristMs} ms: ${selector}`,
       )
     }
     await new Promise((fertig) => setTimeout(fertig, 250))
@@ -132,37 +128,36 @@ async function warteAuf(
 }
 
 /**
- * Meldet sich am Formular an und schreibt den Sitzungszustand.
+ * Signs in through the form and writes the session state.
  *
- * Über das Formular und nicht über die Anmelde-Schnittstelle: Better-Auth
- * setzt seine Sitzungs-Cookies auf demselben Weg, aber die Oberfläche legt
- * zusätzlich Zustand im Browser ab (zuletzt gewählter Bereich, Hinweise,
- * die einmal weggeklickt wurden). Wer nur das Cookie holt, filmt beim
- * ersten Lauf einen Zustand, den ein Mensch so nie sieht.
+ * Through the form and not through the sign-in API: Better-Auth sets its
+ * session cookies the same way either route, but the interface also lays down
+ * state in the browser (the section last chosen, notices that have been
+ * dismissed once). Anyone who only fetches the cookie films, on the first run,
+ * a state no human ever sees.
  *
- * Absichtlich kein `prepare`-Export: die Hauptkette kennt einen Schritt
- * dieses Namens, der gegen die schon geöffnete Seite läuft — dieser hier
- * ist ein eigener Vorgang mit eigenem Browser, der Wochen vor einer
- * Aufnahme laufen darf und dessen Ergebnis eine Datei ist.
+ * Deliberately not a `prepare` export: the main chain knows a step of that
+ * name which runs against the already-opened page — this one is an operation
+ * of its own with its own browser, which may run weeks before a recording and
+ * whose result is a file.
  */
 async function anmelden(): Promise<void> {
   const email = process.env.RAVEN_DEMO_EMAIL
   const passwort = process.env.RAVEN_DEMO_PW
   if (email === undefined || passwort === undefined) {
     throw new Error(
-      'RAVEN_DEMO_EMAIL und RAVEN_DEMO_PW müssen gesetzt sein. Sie stehen ' +
-        'im Secret-Store, nicht in diesem Repository.',
+      'RAVEN_DEMO_EMAIL and RAVEN_DEMO_PW have to be set. They are in the ' +
+        'secret store, not in this repository.',
     )
   }
 
-  // Derselbe Browser, den die Aufnahme später fährt (`CHROME_BIN`, sonst
-  // der mitgelieferte). Nicht Geschmack: auf der Messbox ist der gepatchte
-  // Build der einzige, der die Oberfläche überhaupt darstellt — ein
-  // `chromium.launch()` ohne diese Auflösung startet einen anderen Browser,
-  // der die Anmeldemaske nie aufbaut und nach 30 Sekunden mit einer
-  // Zeitüberschreitung auf `#email` abbricht, die wie ein Netzproblem
-  // aussieht. Und grundsätzlich: eine Sitzung soll von dem Browser stammen,
-  // der sie danach wieder einspielt.
+  // The same browser the recording drives later (`CHROME_BIN`, otherwise the
+  // bundled one). Not taste: on the measurement box the patched build is the
+  // only one that renders the interface at all — a `chromium.launch()` without
+  // this resolution starts a different browser that never builds the sign-in
+  // form and aborts after 30 seconds with a timeout on `#email` that looks
+  // like a network problem. And as a matter of principle: a session should
+  // come from the browser that replays it afterwards.
   const { browser } = await launchChromium(
     { headless: true },
     resolveBrowserRequest(process.env),
@@ -177,10 +172,9 @@ async function anmelden(): Promise<void> {
     await page.locator('#password').fill(passwort)
     await page.getByRole('button', { exact: true, name: 'Anmelden' }).click()
     await page.waitForURL('**/meetings', { timeout: 60_000 })
-    // Die Überschrift, nicht die Adresse, ist der Beweis: die Adresse
-    // wechselt, bevor die Liste geladen hat, und ein Zustand, der vor dem
-    // ersten gelungenen Abruf gespeichert wird, kann einen halben Login
-    // enthalten.
+    // The heading, not the address, is the proof: the address changes before
+    // the list has loaded, and a state saved before the first successful fetch
+    // can contain half a login.
     await page
       .getByRole('heading', { name: 'Meetings' })
       .waitFor({ timeout: 30_000 })
@@ -192,40 +186,39 @@ async function anmelden(): Promise<void> {
   } finally {
     await browser.close()
   }
-  console.log(`Sitzungszustand geschrieben: ${ZUSTAND}`)
+  console.log(`Session state written: ${ZUSTAND}`)
 }
 
 /**
- * Nimmt die Liste auf: ankommen, lesen lassen, suchen, das Ergebnis öffnen.
+ * Records the list: arrive, let it be read, search, open the result.
  *
- * Die Zustandsänderung IST der Inhalt — die Kopfzeile zählt von "N Meetings"
- * auf "N Treffer" um. Deshalb steht vor dem Tippen ein `hold`: wer die Zahl
- * vorher nicht gelesen hat, sieht nachher keine Änderung.
+ * The change of state IS the content — the header line counts over from
+ * "N meetings" to "N hits". That is why a `hold` comes before the typing:
+ * anyone who has not read the number beforehand sees no change afterwards.
  *
- * Was hier NICHT passiert, und zwar aus Datenschutzgründen: das Benutzer-
- * menü wird nicht aufgeklappt (aufgeklappt zeigt es die echte
- * Konto-Adresse), und die Kontaktkarte der Teilnehmerin „Marlene Ostwald"
- * wird nicht angeklickt (dort greift eine Selbsterkennung über
- * Namensgleichheit und liefert die Adresse des angemeldeten Kontos statt
- * der erfundenen).
+ * What does NOT happen here, for data-protection reasons: the user menu is not
+ * opened (opened, it shows the real account address), and the contact card of
+ * the participant "Marlene Ostwald" is not clicked (self-recognition by
+ * matching name takes effect there and returns the address of the signed-in
+ * account instead of the invented one).
  */
 export default async function aufnahme(
   page: RecordPage,
   demo: Demo,
 ): Promise<void> {
   await page.goto(`${BASIS}/meetings`)
-  // Auf die erste Zeile warten, nicht auf die Kopfzeile: die Kopfzeile
-  // steht sofort im Dokument und sagt eine Sekunde lang "0 Meetings",
-  // weil die Liste ihre Zahl erst vom Server holt. Wer auf sie wartet,
-  // filmt die Null.
+  // Wait for the first row, not for the header line: the header line is in the
+  // document immediately and says "0 meetings" for a second, because the list
+  // only fetches its number from the server afterwards. Anyone who waits for
+  // it films the zero.
   await warteAuf(page, ERSTE_ZEILE)
   await demo.point('[data-testid="meeting-count"]')
   await demo.hold(1400)
 
   await demo.type('input[placeholder*="durchsuchen"]', SUCHWORT)
-  // Die Liste holt das Ergebnis erst 300 ms nach dem letzten Anschlag
-  // vom Server (`useDebounce` in der Oberfläche). Ein kürzeres Halten
-  // filmt die alte Zahl.
+  // The list only fetches the result from the server 300 ms after the last
+  // keystroke (`useDebounce` in the interface). A shorter hold films the old
+  // number.
   await demo.hold(1800)
   await demo.point('[data-testid="meeting-count"]')
   await demo.hold(1200)
@@ -239,17 +232,17 @@ export default async function aufnahme(
   await demo.hold(1200)
 }
 
-// Nur die Anmeldung. Die Aufnahme läuft über `featurecast run` — ein Skript,
-// das sich selbst aufnimmt, öffnet beim bloßen Import einen zweiten,
-// ungefilmten Browser (siehe `importScript` in `src/pipeline.ts`).
+// The sign-in only. The recording runs through `featurecast run` — a script
+// that records itself opens a second, unfilmed browser on mere import (see
+// `importScript` in `src/pipeline.ts`).
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [schritt] = process.argv.slice(2)
   if (schritt === 'anmelden' || schritt === 'prepare') {
     await anmelden()
   } else {
     throw new Error(
-      'Aufruf: tsx demo/raven-meetings.ts anmelden — die Aufnahme läuft über ' +
-        'featurecast run demo/raven-meetings.ts --devices desktop-wide',
+      'Usage: tsx demo/raven-meetings.ts anmelden — the recording runs ' +
+        'through featurecast run demo/raven-meetings.ts --devices desktop-wide',
     )
   }
 }

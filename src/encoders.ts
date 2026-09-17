@@ -46,8 +46,8 @@ export type EncoderProfile = {
  * because the measured CPU cost is the problem, not a convenience: PLAN.md
  * records 1 minute 45 for 8 seconds of 1080p60 through the post-processing
  * chain on CPU. It is nonetheless *not* the default, and deliberately so —
- * nobody has yet run M6's acceptance measurement ("die Laufzeit fuer 30
- * Sekunden 1080p60 wird gemessen und notiert") or looked at an NVENC-encoded
+ * nobody has yet run M6's acceptance measurement ("the run time for 30 seconds
+ * of 1080p60 is measured and recorded") or looked at an NVENC-encoded
  * result next to an x264 one. Until that has happened, the path whose output
  * has actually been seen is the one that runs unless a caller asks for the
  * other.
