@@ -1,7 +1,7 @@
 import { chromium, type Browser } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { hideOverlay } from '../demo/recipe-authenticated.js'
+import { hideOverlay } from '../src/recipes.js'
 
 /**
  * What `hideOverlay` has to do, measured in a real browser rather than read
