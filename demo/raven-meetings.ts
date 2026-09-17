@@ -2,8 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { chromium } from 'playwright'
-
+import { launchChromium, resolveBrowserRequest } from '../src/browser.js'
 import type { Demo, RecordPage } from '../src/record.js'
 
 /**
@@ -156,7 +155,18 @@ async function anmelden(): Promise<void> {
     )
   }
 
-  const browser = await chromium.launch({ headless: true })
+  // Derselbe Browser, den die Aufnahme später fährt (`CHROME_BIN`, sonst
+  // der mitgelieferte). Nicht Geschmack: auf der Messbox ist der gepatchte
+  // Build der einzige, der die Oberfläche überhaupt darstellt — ein
+  // `chromium.launch()` ohne diese Auflösung startet einen anderen Browser,
+  // der die Anmeldemaske nie aufbaut und nach 30 Sekunden mit einer
+  // Zeitüberschreitung auf `#email` abbricht, die wie ein Netzproblem
+  // aussieht. Und grundsätzlich: eine Sitzung soll von dem Browser stammen,
+  // der sie danach wieder einspielt.
+  const { browser } = await launchChromium(
+    { headless: true },
+    resolveBrowserRequest(process.env),
+  )
   try {
     const context = await browser.newContext({
       viewport: { height: 720, width: 1280 },
