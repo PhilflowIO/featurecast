@@ -541,6 +541,92 @@ describe('importScript', () => {
     expect(recordMock.mock.calls[0]?.[2]).toEqual({ prepare, recording })
   })
 
+  it('carries the three facts about the context a script cannot set itself', async () => {
+    const directory = await temporaryDirectory()
+    const path = join(directory, 'recording-authenticated.mjs')
+    await writeFile(
+      path,
+      "export const storageStatePath = 'auth/state.json'\n" +
+        "export const hideSelectors = ['#cookie-banner', '#room-card']\n" +
+        "export const fixedTime = '2026-01-15T09:00:00Z'\n" +
+        'export default async () => undefined\n',
+    )
+    const loaded = await importScript(path)
+    // The path, and nothing read from the file it names: the chain never
+    // holds the session, the browser opens it.
+    expect(loaded.storageStatePath).toBe('auth/state.json')
+    expect(loaded.hideSelectors).toEqual(['#cookie-banner', '#room-card'])
+    expect(loaded.fixedTime).toBe('2026-01-15T09:00:00Z')
+  })
+
+  it('refuses a session handed over as state instead of as a path', async () => {
+    // The one mistake with a real cost. An inlined `storageState` object is
+    // a set of live cookies in a versioned file; Playwright would even
+    // accept it. The refusal is what keeps the access on disk, under
+    // `auth/`, where git does not look.
+    const directory = await temporaryDirectory()
+    const path = join(directory, 'recording-inline-state.mjs')
+    await writeFile(
+      path,
+      'export const storageStatePath = { cookies: [] }\n' +
+        'export default async () => undefined\n',
+    )
+    await expect(importScript(path)).rejects.toThrow(
+      /storageStatePath.*path of a Playwright storageState file/s,
+    )
+  })
+
+  it('refuses a single selector where a list of them belongs', async () => {
+    // Silent otherwise, and invisibly so: a string reaches the browser as a
+    // context option, hides nothing, and the recording that comes out is
+    // perfect except for the surface that had to go.
+    const directory = await temporaryDirectory()
+    const path = join(directory, 'recording-one-selector.mjs')
+    await writeFile(
+      path,
+      "export const hideSelectors = '#cookie-banner'\n" +
+        'export default async () => undefined\n',
+    )
+    await expect(importScript(path)).rejects.toThrow(
+      /hideSelectors.*list of CSS selectors/s,
+    )
+  })
+
+  it('refuses an instant no Date can read', async () => {
+    const directory = await temporaryDirectory()
+    const path = join(directory, 'recording-bad-time.mjs')
+    await writeFile(
+      path,
+      "export const fixedTime = 'yesterday morning'\n" +
+        'export default async () => undefined\n',
+    )
+    await expect(importScript(path)).rejects.toThrow(/fixedTime.*an instant/s)
+  })
+
+  it('hands the context settings to the browser leg intact', async () => {
+    const recording = async (): Promise<void> => undefined
+    const script = {
+      fixedTime: '2026-01-15T09:00:00Z',
+      hideSelectors: ['#room-card'],
+      recording,
+      storageStatePath: 'auth/state.json',
+    }
+    const deps = stubs({ loadScript: vi.fn(async () => script) })
+    await runPipeline(
+      {
+        devices: ['desktop-wide'],
+        out: 'artifacts/authenticated',
+        script: 'demo/raven-meetings.ts',
+        upload: false,
+      },
+      deps,
+    )
+    const recordMock = deps.record as unknown as {
+      mock: { calls: unknown[][] }
+    }
+    expect(recordMock.mock.calls[0]?.[2]).toEqual(script)
+  })
+
   it('says what a script has to export when it exports nothing usable', async () => {
     // The contract is not obvious — scripts in docs/RECORDING-SCRIPTS.md
     // call record() themselves — so the failure has to teach it.

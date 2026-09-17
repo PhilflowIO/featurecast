@@ -44,10 +44,52 @@ export const SCRIPT_EXPORT_NAMES = ['default', 'recording'] as const
  * sign-in, a navigation or a dismissed banner does not open the video — nor
  * does the pointer travel of those clicks, which is the part that actually
  * ruins a recording of a real application.
+ *
+ * Next to it stand three exports that describe the *browser context* rather
+ * than the recording: `storageStatePath`, `hideSelectors` and `fixedTime`.
+ * They are here rather than in a script's own hands because a script cannot
+ * reach them — it is handed a page, and all three have to be true before
+ * that page exists. Until they were part of this contract there was a
+ * second, cameraless recording path in `demo/` that owned its own browser
+ * just to set them, and the one script that films this product ran on it
+ * and produced an event log instead of a video.
  */
 export type LoadedScript = {
+  /**
+   * `fixedTime`: the wall clock the recording claims, as an ISO instant.
+   *
+   * It is part of the contract rather than something a script does for
+   * itself because it cannot be done from a script at all: Playwright's
+   * clock is a property of the browser context, and a script is handed a
+   * page that is already open. By then "3 days ago" has been rendered
+   * against today's date, and two runs a week apart no longer show the same
+   * list. The same init script also pins the page's own `Math.random`.
+   */
+  fixedTime?: string
+  /**
+   * `hideSelectors`: CSS selectors of surfaces that are gone before the
+   * page's own scripts run.
+   *
+   * Also context-level, and for a stronger reason than convenience: a node
+   * a script removes after the first paint has already been on screen, and
+   * the screencast has the frames. A consent banner is noise; a card
+   * showing an internal address is a leak that no later edit can take back.
+   */
+  hideSelectors?: readonly string[]
   prepare?: PrepareStep
   recording: RecordingScript
+  /**
+   * `storageStatePath`: the saved sign-in to record under — a **path**, and
+   * deliberately never the state itself.
+   *
+   * A `storageState` file is cookies and local storage of a signed-in
+   * account: it is the access, not a configuration artifact. Taking a path
+   * keeps it out of every value this process handles; the browser opens the
+   * file. `auth/` is git-ignored for that reason, and the credentials that
+   * produce it belong in a secret store — never in a file of this
+   * repository (`CONTRIBUTING.md`, "Things that must never be committed").
+   */
+  storageStatePath?: string
   /**
    * The application the script films, as a third optional export named
    * `url`. A direct capture does not need it — the script navigates there
@@ -167,6 +209,7 @@ export const importScript: ScriptLoader = async (path) => {
     if (typeof candidate !== 'function') continue
     return {
       recording: candidate as RecordingScript,
+      ...readContextSettings(module_, path),
       ...(typeof prepare === 'function'
         ? { prepare: prepare as PrepareStep }
         : {}),
@@ -178,6 +221,75 @@ export const importScript: ScriptLoader = async (path) => {
       '`export default async (page, demo) => { await page.goto(url); await demo.click("#x") }`. ' +
       'It must not call record() itself — featurecast run opens the browser and the capture around it.',
   )
+}
+
+/**
+ * The three exports that describe the browser context rather than the
+ * recording, read and checked one by one.
+ *
+ * Checked here and not where they are used, because here is the only place
+ * that still knows the file they came from. A `hideSelectors` that is
+ * secretly a string reaches the browser as a context option, is accepted,
+ * hides nothing, and the recording that follows is fine except for the card
+ * that should not be in it — which is the one failure mode this whole
+ * contract exists to prevent. A message that names the file and the export
+ * costs a browser launch; a silent pass costs the recording and nobody
+ * notices until the video is watched.
+ */
+export function readContextSettings(
+  module_: Record<string, unknown>,
+  path = 'the script',
+): Pick<LoadedScript, 'fixedTime' | 'hideSelectors' | 'storageStatePath'> {
+  const settings: {
+    fixedTime?: string
+    hideSelectors?: readonly string[]
+    storageStatePath?: string
+  } = {}
+
+  const storageStatePath = module_['storageStatePath']
+  if (storageStatePath !== undefined) {
+    if (typeof storageStatePath !== 'string' || storageStatePath === '') {
+      throw new Error(
+        `"${path}" exports \`storageStatePath\`, which has to be the path of a Playwright ` +
+          "storageState file: `export const storageStatePath = 'auth/state.json'`. " +
+          'It is a path and never the state itself — that file is the access, and ' +
+          '`auth/` is ignored by git for exactly that reason.',
+      )
+    }
+    settings.storageStatePath = storageStatePath
+  }
+
+  const hideSelectors = module_['hideSelectors']
+  if (hideSelectors !== undefined) {
+    if (
+      !Array.isArray(hideSelectors) ||
+      hideSelectors.some(
+        (selector) => typeof selector !== 'string' || selector === '',
+      )
+    ) {
+      throw new Error(
+        `"${path}" exports \`hideSelectors\`, which has to be a list of CSS selectors: ` +
+          "`export const hideSelectors = ['#cookie-banner']`.",
+      )
+    }
+    settings.hideSelectors = hideSelectors as readonly string[]
+  }
+
+  const fixedTime = module_['fixedTime']
+  if (fixedTime !== undefined) {
+    if (
+      typeof fixedTime !== 'string' ||
+      Number.isNaN(new Date(fixedTime).getTime())
+    ) {
+      throw new Error(
+        `"${path}" exports \`fixedTime\`, which has to be an instant a Date can read: ` +
+          "`export const fixedTime = '2026-01-15T09:00:00Z'`.",
+      )
+    }
+    settings.fixedTime = fixedTime
+  }
+
+  return settings
 }
 
 /**
@@ -219,7 +331,16 @@ const DEFAULT_DEPENDENCIES: PipelineDependencies = {
       outputDirectory,
       recording: script.recording,
       seed,
+      ...(script.fixedTime === undefined
+        ? {}
+        : { fixedTime: script.fixedTime }),
+      ...(script.hideSelectors === undefined
+        ? {}
+        : { hideSelectors: script.hideSelectors }),
       ...(script.prepare === undefined ? {} : { prepare: script.prepare }),
+      ...(script.storageStatePath === undefined
+        ? {}
+        : { storageStatePath: script.storageStatePath }),
       ...(script.url === undefined ? {} : { appUrl: script.url }),
     })
     return { capture, captureDirectory: session.captureDirectory }

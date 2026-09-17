@@ -4,26 +4,27 @@ import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
 
-import type { RecordPage } from '../src/record.js'
-
-import { recordWithRecipes } from './recipe-authenticated.js'
+import type { Demo, RecordPage } from '../src/record.js'
 
 /**
  * Die erste Aufnahme, die das eigene Produkt filmt statt eines fremden.
  *
  * Zwei Schritte, absichtlich getrennt:
  *
- *   `prepare` meldet sich einmal an und schreibt den Sitzungszustand nach
- *   `auth/state.json`. Das ist derselbe Zustand, den
+ *   Die Anmeldung meldet sich einmal an und schreibt den Sitzungszustand
+ *   nach `auth/state.json`. Das ist derselbe Zustand, den
  *   `docs/RECORDING-SCRIPTS.md` sonst von Hand über
  *   `playwright codegen --save-storage` erzeugen lässt — nur ohne Hand,
  *   weil dieses Ziel ein Anmeldeformular mit zwei Feldern hat und sich
- *   deshalb niemand vor einen sichtbaren Browser setzen muss.
+ *   deshalb niemand vor einen sichtbaren Browser setzen muss. Sie ist kein
+ *   Aufnahmeschritt und hat deshalb ihren eigenen Aufruf behalten.
  *
- *   `record` fährt die Aufnahme über `recordWithRecipes` aus
- *   `demo/recipe-authenticated.ts`. Dort hängen die drei Rezepte
- *   (gespeicherte Sitzung, ausgeblendetes Banner, eingefrorene Uhr) schon
- *   am `RecordRuntime`-Nahtpunkt; hier wird nichts davon nachgebaut.
+ *   Die Aufnahme selbst ist ein gewöhnliches Skript der Hauptkette. Sie
+ *   nennt nur noch, was gelten soll — gespeicherte Sitzung, ausgeblendete
+ *   Flächen, feste Uhr —, und `featurecast run` stellt es her, filmt und
+ *   rendert. Früher lief sie über ein eigenes Rezept in `demo/`, das seinen
+ *   Browser selbst aufmachte: das schrieb ein Ereignis-Protokoll und kein
+ *   einziges Bild.
  *
  * WARUM DIE PERSÖNLICHE-RAUM-KARTE PER SELEKTOR VERSCHWINDET UND NICHT PER
  * FREISCHALTUNG. Die Karte zeigt in jedem Listenbild die interne
@@ -42,17 +43,18 @@ import { recordWithRecipes } from './recipe-authenticated.js'
  * WARUM DER ZUSTAND NICHT INS REPOSITORY GEHÖRT. `auth/` ist per
  * `.gitignore` ausgenommen, und das ist kein Formalismus: eine
  * `storageState`-Datei IST der Zugang. Die Zugangsdaten kommen deshalb aus
- * der Umgebung und stehen in keiner Zeile dieser Datei.
+ * der Umgebung und stehen in keiner Zeile dieser Datei. Die Hauptkette
+ * bekommt den Pfad und nie den Inhalt (`src/pipeline.ts`, `LoadedScript`).
  *
  * AUFRUF::
  *
  *     RAVEN_DEMO_EMAIL=… RAVEN_DEMO_PW=… \
- *         pnpm exec tsx demo/raven-meetings.ts prepare
- *     pnpm exec tsx demo/raven-meetings.ts record
+ *         pnpm exec tsx demo/raven-meetings.ts anmelden
+ *     pnpm featurecast run demo/raven-meetings.ts --devices desktop-wide
  *
  * Läuft die Sitzung ab, filmt die Aufnahme die Anmeldeseite statt der
- * Liste. Dann ist nicht das Skript kaputt, sondern die Datei alt: `prepare`
- * noch einmal.
+ * Liste. Dann ist nicht das Skript kaputt, sondern die Datei alt: die
+ * Anmeldung noch einmal.
  */
 
 const BASIS = process.env.RAVEN_DEMO_URL ?? 'https://staging.raven.ceo'
@@ -72,6 +74,35 @@ const SUCHWORT = 'Steinkauz'
  * ist.
  */
 const ERSTE_ZEILE = 'a[href^="/meetings/"] >> nth=0'
+
+/** Die Anwendung, die gefilmt wird. */
+export const url = BASIS
+
+/**
+ * Der Pfad zur gespeicherten Sitzung — nie ihr Inhalt.
+ *
+ * Was hier steht, ist ein Dateiname; gelesen wird die Datei erst vom
+ * Browser. Eine `storageState`-Datei enthält Cookies und lokalen Speicher
+ * eines angemeldeten Kontos und ist damit der Zugang selbst. Deshalb liegt
+ * sie unter `auth/`, das `.gitignore` ausnimmt, und deshalb steht in dieser
+ * Datei kein einziges Zugangsdatum.
+ */
+export const storageStatePath = ZUSTAND
+
+/**
+ * Zwei Flächen, die kein Zuschauer sehen soll: der Cookie-Hinweis (Lärm)
+ * und die Persönliche-Raum-Karte (interne Adresse, siehe Kopfkommentar).
+ */
+export const hideSelectors = [
+  '#cookie-banner',
+  '[data-testid="personal-room-card"]',
+]
+
+/**
+ * Feste Uhr, damit zwei Aufnahmen dieselben relativen Zeitangaben zeigen
+ * („vor 3 Tagen" wandert sonst zwischen zwei Läufen).
+ */
+export const fixedTime = '2026-09-16T09:00:00Z'
 
 /**
  * Wartet, bis ein Knoten wirklich Fläche hat.
@@ -109,8 +140,13 @@ async function warteAuf(
  * zusätzlich Zustand im Browser ab (zuletzt gewählter Bereich, Hinweise,
  * die einmal weggeklickt wurden). Wer nur das Cookie holt, filmt beim
  * ersten Lauf einen Zustand, den ein Mensch so nie sieht.
+ *
+ * Absichtlich kein `prepare`-Export: die Hauptkette kennt einen Schritt
+ * dieses Namens, der gegen die schon geöffnete Seite läuft — dieser hier
+ * ist ein eigener Vorgang mit eigenem Browser, der Wochen vor einer
+ * Aufnahme laufen darf und dessen Ergebnis eine Datei ist.
  */
-async function prepare(): Promise<void> {
+async function anmelden(): Promise<void> {
   const email = process.env.RAVEN_DEMO_EMAIL
   const passwort = process.env.RAVEN_DEMO_PW
   if (email === undefined || passwort === undefined) {
@@ -155,60 +191,55 @@ async function prepare(): Promise<void> {
  * Die Zustandsänderung IST der Inhalt — die Kopfzeile zählt von "N Meetings"
  * auf "N Treffer" um. Deshalb steht vor dem Tippen ein `hold`: wer die Zahl
  * vorher nicht gelesen hat, sieht nachher keine Änderung.
+ *
+ * Was hier NICHT passiert, und zwar aus Datenschutzgründen: das Benutzer-
+ * menü wird nicht aufgeklappt (aufgeklappt zeigt es die echte
+ * Konto-Adresse), und die Kontaktkarte der Teilnehmerin „Marlene Ostwald"
+ * wird nicht angeklickt (dort greift eine Selbsterkennung über
+ * Namensgleichheit und liefert die Adresse des angemeldeten Kontos statt
+ * der erfundenen).
  */
-async function record(ausgabe: string): Promise<void> {
-  await recordWithRecipes(
-    {
-      // Feste Uhr, damit zwei Aufnahmen dieselben relativen Zeitangaben
-      // zeigen ("vor 3 Tagen" wandert sonst zwischen zwei Läufen).
-      fixedTime: '2026-09-16T09:00:00Z',
-      // Zwei Flächen, die kein Zuschauer sehen soll: der Cookie-Hinweis
-      // (Lärm) und die Persönliche-Raum-Karte (interne Adresse, siehe
-      // Kopfkommentar).
-      hideSelectors: ['#cookie-banner', '[data-testid="personal-room-card"]'],
-      out: ausgabe,
-      seed: 1,
-      storageStatePath: ZUSTAND,
-    },
-    async (page, demo) => {
-      await page.goto(`${BASIS}/meetings`)
-      // Auf die erste Zeile warten, nicht auf die Kopfzeile: die Kopfzeile
-      // steht sofort im Dokument und sagt eine Sekunde lang "0 Meetings",
-      // weil die Liste ihre Zahl erst vom Server holt. Wer auf sie wartet,
-      // filmt die Null.
-      await warteAuf(page, ERSTE_ZEILE)
-      await demo.point('[data-testid="meeting-count"]')
-      await demo.hold(1400)
+export default async function aufnahme(
+  page: RecordPage,
+  demo: Demo,
+): Promise<void> {
+  await page.goto(`${BASIS}/meetings`)
+  // Auf die erste Zeile warten, nicht auf die Kopfzeile: die Kopfzeile
+  // steht sofort im Dokument und sagt eine Sekunde lang "0 Meetings",
+  // weil die Liste ihre Zahl erst vom Server holt. Wer auf sie wartet,
+  // filmt die Null.
+  await warteAuf(page, ERSTE_ZEILE)
+  await demo.point('[data-testid="meeting-count"]')
+  await demo.hold(1400)
 
-      await demo.type('input[placeholder*="durchsuchen"]', SUCHWORT)
-      // Die Liste holt das Ergebnis erst 300 ms nach dem letzten Anschlag
-      // vom Server (`useDebounce` in der Oberfläche). Ein kürzeres Halten
-      // filmt die alte Zahl.
-      await demo.hold(1800)
-      await demo.point('[data-testid="meeting-count"]')
-      await demo.hold(1200)
+  await demo.type('input[placeholder*="durchsuchen"]', SUCHWORT)
+  // Die Liste holt das Ergebnis erst 300 ms nach dem letzten Anschlag
+  // vom Server (`useDebounce` in der Oberfläche). Ein kürzeres Halten
+  // filmt die alte Zahl.
+  await demo.hold(1800)
+  await demo.point('[data-testid="meeting-count"]')
+  await demo.hold(1200)
 
-      await demo.click(ERSTE_ZEILE)
-      await warteAuf(page, 'h1')
-      await demo.hold(1200)
-      await demo.scroll(0, 900)
-      await demo.hold(900)
-      await demo.scroll(0, 900)
-      await demo.hold(1200)
-    },
-  )
-  console.log(`Aufnahme geschrieben: ${ausgabe}`)
+  await demo.click(ERSTE_ZEILE)
+  await warteAuf(page, 'h1')
+  await demo.hold(1200)
+  await demo.scroll(0, 900)
+  await demo.hold(900)
+  await demo.scroll(0, 900)
+  await demo.hold(1200)
 }
 
+// Nur die Anmeldung. Die Aufnahme läuft über `featurecast run` — ein Skript,
+// das sich selbst aufnimmt, öffnet beim bloßen Import einen zweiten,
+// ungefilmten Browser (siehe `importScript` in `src/pipeline.ts`).
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const [schritt, ausgabe] = process.argv.slice(2)
-  if (schritt === 'prepare') {
-    await prepare()
-  } else if (schritt === 'record') {
-    await record(ausgabe ?? 'artifacts/raven-meetings')
+  const [schritt] = process.argv.slice(2)
+  if (schritt === 'anmelden' || schritt === 'prepare') {
+    await anmelden()
   } else {
     throw new Error(
-      'Aufruf: tsx demo/raven-meetings.ts prepare | record [ausgabe-verzeichnis]',
+      'Aufruf: tsx demo/raven-meetings.ts anmelden — die Aufnahme läuft über ' +
+        'featurecast run demo/raven-meetings.ts --devices desktop-wide',
     )
   }
 }

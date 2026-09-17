@@ -86,8 +86,8 @@ Alles andere — `waitForSelector`, `waitForResponse`, `expect`, `route`,
 `screenshot` — steht dort nicht zur Verfügung. Ein Testskript, das solche
 Aufrufe enthält, hat zwei Wege: sie vor den Aufruf von `record()` ziehen
 (Einrichten, Aufräumen, Zusicherungen gehören ohnehin nicht ins Video), oder
-die echte Seite über eine eigene Laufzeitumgebung mitgeben — genau das tut
-das Rezept unten.
+— unter `featurecast run` — in einen `prepare`-Schritt, der die volle
+Playwright-Seite bekommt und außerhalb des Aufnahmefensters läuft.
 
 Und eine Eigenheit, die schnell beißt: `page.evaluate` nimmt hier eine
 Funktion **ohne Argumente**. Werte aus dem Skript kommen nicht als Parameter
@@ -133,6 +133,46 @@ Anwendung gefilmt wird, von deren eigenem Ursprung ausgeliefert wird
 ([`src/framed.ts`](../src/framed.ts)). Fehlt sie, bricht die Kette ab, bevor
 ein Browser startet.
 
+### Was ein Skript über den Browser-Kontext sagen darf
+
+Drei weitere Exporte beschreiben nicht die Aufnahme, sondern den Kontext,
+in dem sie stattfindet. Sie stehen im Vertrag, weil ein Skript sie gar
+nicht selbst setzen _kann_: es bekommt eine bereits geöffnete Seite, und
+alle drei müssen gelten, bevor diese Seite existiert.
+
+| Export             | Typ        | Bedeutung                                                                   |
+| ------------------ | ---------- | --------------------------------------------------------------------------- |
+| `storageStatePath` | `string`   | Pfad zu einer gespeicherten Anmeldung (`storageState`) — nie ihr Inhalt     |
+| `hideSelectors`    | `string[]` | Flächen, die verschwinden, bevor die Seite ihre eigenen Skripte fährt       |
+| `fixedTime`        | `string`   | Zeitpunkt, den jede Aufnahme behauptet; friert zusätzlich `Math.random` ein |
+
+```ts
+import type { Demo, RecordPage } from '../src/record.js'
+
+export const url = 'https://app.example.com'
+export const storageStatePath = 'auth/state.json'
+export const hideSelectors = ['#cookie-banner', '#internal-address-card']
+export const fixedTime = '2026-01-15T09:00:00Z'
+
+export default async function liste(page: RecordPage, demo: Demo) {
+  await page.goto('https://app.example.com/meetings')
+  await demo.click('#row-3')
+}
+```
+
+```sh
+pnpm featurecast run demo/meine-aufnahme.ts --devices desktop-wide
+```
+
+Falsch geschriebene Werte werden abgelehnt, bevor ein Browser startet, und
+die Meldung nennt Datei und Export. Das ist kein Formalismus: ein
+`hideSelectors`, das versehentlich eine einzelne Zeichenkette ist, würde im
+Browser anstandslos angenommen, nichts ausblenden — und die Aufnahme wäre
+tadellos bis auf die Karte, die nicht hinein durfte.
+
+Ein vollständiges Beispiel, das gegen die echte Anwendung läuft, ist
+[`demo/raven-meetings.ts`](../demo/raven-meetings.ts).
+
 | Schalter    | Bedeutung                                                                  |
 | ----------- | -------------------------------------------------------------------------- |
 | `--devices` | Kommaliste aus Presets und Playwright-Namen. Pflichtangabe.                |
@@ -163,34 +203,26 @@ Konflikt, statt still eine der beiden Zahlen zu wählen. Das M6-Abnahmebeispiel
 
 ## Rezept: angemeldet aufnehmen
 
-`record()` baut seinen Browser-Kontext selbst und bietet dafür keinen
-Parameter an. Eine gespeicherte Sitzung, ein Init-Skript oder eine
-eingefrorene Uhr kommen deshalb über die dokumentierte Naht darunter:
-`createRecorder(runtime)` nimmt eine eigene Laufzeitumgebung entgegen, die
-den Kontext baut und dem Wrapper eine fertige Seite reicht. Dieselbe Naht
-benutzt `demo/m1-capture.ts`, um den Wrapper an die Seite zu hängen, die
-gerade aufgenommen wird.
-
-Fertig verdrahtet liegt das in
-[`demo/recipe-authenticated.ts`](../demo/recipe-authenticated.ts) — Sitzung,
-Banner und Uhr in einer Datei, zum Kopieren gedacht:
+Eine angemeldete Aufnahme ist ein gewöhnliches Skript der Hauptkette: es
+nennt die gespeicherte Sitzung, und `featurecast run` stellt den Kontext
+her, filmt und rendert.
 
 ```ts
-import { recordWithRecipes } from './recipe-authenticated.js'
+export const storageStatePath = 'auth/state.json'
+export const hideSelectors = ['#cookie-banner', '#internal-address-card']
+export const fixedTime = '2026-01-15T09:00:00Z'
 
-await recordWithRecipes(
-  {
-    hideSelectors: ['#cookie-banner', '#internal-address-card'],
-    fixedTime: '2026-01-15T09:00:00Z',
-    out: 'artifacts/feature-xy',
-    storageStatePath: 'auth/state.json',
-  },
-  async (page, demo) => {
-    await page.goto('https://app.example.com/feature')
-    await demo.click('#nav-settings')
-  },
-)
+export default async function featureXy(page: RecordPage, demo: Demo) {
+  await page.goto('https://app.example.com/feature')
+  await demo.click('#nav-settings')
+}
 ```
+
+Bis diese drei Exporte zum Vertrag gehörten, lag daneben ein zweiter
+Aufnahmeweg in `demo/`, der seinen Browser selbst aufmachte, um sie zu
+setzen — und der schrieb ein Ereignis-Log und kein einziges Bild. Es gibt
+ihn nicht mehr; für eine angemeldete Aufnahme gibt es keinen Grund mehr, an
+der Hauptkette vorbeizuarbeiten.
 
 ### Die Sitzung einmal aufnehmen
 
@@ -216,17 +248,23 @@ Sitzungen laufen ab. Wenn eine Aufnahme plötzlich die Anmeldeseite filmt,
 ist nicht das Skript kaputt, sondern die Datei alt: den Befehl oben
 wiederholen.
 
-### Oder die Sitzung in einem `prepare`-Schritt
+### Oder die Sitzung in einem eigenen Anmeldeschritt
 
 Ein Ziel mit einem gewöhnlichen Anmeldeformular braucht dafür keinen
-Menschen. `demo/raven-meetings.ts` trennt das in zwei Aufrufe: `prepare`
-meldet sich kopflos an und schreibt `auth/state.json`, `record` fährt die
-Aufnahme darüber.
+Menschen. `demo/raven-meetings.ts` trennt das in zwei Aufrufe: die
+Anmeldung meldet sich kopflos an und schreibt `auth/state.json`, danach
+läuft die Aufnahme wie jede andere über `featurecast run`.
 
 ```sh
-RAVEN_DEMO_EMAIL=… RAVEN_DEMO_PW=… pnpm exec tsx demo/raven-meetings.ts prepare
-pnpm exec tsx demo/raven-meetings.ts record
+RAVEN_DEMO_EMAIL=… RAVEN_DEMO_PW=… pnpm exec tsx demo/raven-meetings.ts anmelden
+pnpm featurecast run demo/raven-meetings.ts --devices desktop-wide
 ```
+
+Die Anmeldung ist bewusst **kein** `prepare`-Export. Der Vertrag kennt
+einen Schritt dieses Namens, aber der läuft gegen die schon geöffnete Seite
+kurz vor der Aufnahme; die Anmeldung hier ist ein eigener Vorgang mit
+eigenem Browser, der Wochen vorher laufen darf und dessen Ergebnis eine
+Datei ist.
 
 Zwei Entscheidungen darin sind Absicht und nicht Geschmack.
 
@@ -255,9 +293,10 @@ dann gar nicht erst — nichts muss unterdrückt werden, weil nichts da ist.
 
 **Über ein Init-Skript.** Wenn das nicht greift (Zustimmung serverseitig,
 neue Domain, Banner in einem Frame), blendet ein Init-Skript den Knoten aus,
-bevor die Seite ihre eigenen Skripte ausführt. `hideOverlay` im Rezept oben
-tut genau das: es hängt ein `<style>` an jedes Dokument des Kontexts, mit
-einer eigenen `display:none !important`-Regel je übergebenem Selektor.
+bevor die Seite ihre eigenen Skripte ausführt. Genau das tut der Export
+`hideSelectors`: die Kette hängt daraufhin ein `<style>` an jedes Dokument
+des Kontexts (`hideOverlay` in [`src/recipes.ts`](../src/recipes.ts)), mit
+einer eigenen `display:none !important`-Regel je Selektor.
 
 `hideSelectors` nimmt beliebig viele Selektoren, weil selten nur das Banner
 stört — die Produktkarte mit der internen Adresse muss genauso weg. Jeder
@@ -275,9 +314,10 @@ Aufnahme zwei Sekunden Zeigerbewegung kostet, die niemand sehen will.
 Zwei Aufnahmen sehen nur dann identisch aus, wenn die Oberfläche identisch
 aussieht. Zwei Dinge sorgen dafür, dass sie es nicht tut: relative
 Zeitangaben („vor 3 Minuten“) und alles, was aus `Math.random()` kommt.
-`freezeTimeAndRandomness` im Rezept oben nagelt beides fest — die Uhr über
-Playwrights `clock.setFixedTime`, den Zufall über einen Ersatz für
-`Math.random` mit festem Startwert.
+Der Export `fixedTime` nagelt beides fest — die Uhr über Playwrights
+`clock.setFixedTime`, den Zufall über einen Ersatz für `Math.random` mit
+festem Startwert (`freezeTimeAndRandomness` in
+[`src/recipes.ts`](../src/recipes.ts)).
 
 **Nicht `clock.install()` verwenden.** Das fälscht laut Playwrights eigener
 Beschreibung neben `Date` auch `requestAnimationFrame` und `performance` —
@@ -313,7 +353,7 @@ Für eigene Nutzlasten heißt das:
   Form, die die Namensableitung nicht erfasst — `Math.random = () => …` ist
   deshalb sicher, und `src/record.ts` nutzt denselben Kniff.
 - Am sichersten ist eine Nutzlast als Zeichenkette: die wird nie
-  kompiliert. So macht es `hideOverlay`.
+  kompiliert. So macht es `hideOverlay` in `src/recipes.ts`.
 
 ## Wenn es abbricht
 

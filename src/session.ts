@@ -20,6 +20,7 @@ import {
   type RecordPage,
   type RecordRuntime,
 } from './record.js'
+import { freezeTimeAndRandomness, hideOverlay } from './recipes.js'
 import { recordPageFor } from './surface.js'
 
 /**
@@ -66,6 +67,21 @@ export type SessionRequest = {
   /** The capture settings `assertCaptureSupported` already approved. */
   capture: CaptureSettings
   device: ResolvedDevice
+  /**
+   * The wall clock every document of this recording claims, e.g.
+   * `2026-01-15T09:00:00Z`; it also seeds the page's own `Math.random`.
+   *
+   * Context-level, like `hideSelectors` and `storageStatePath`, and for the
+   * same reason: by the time a recording script is handed a page, the first
+   * render has happened and the relative timestamps on it are already
+   * whatever today happened to be.
+   */
+  fixedTime?: string
+  /**
+   * CSS selectors of surfaces that are gone before the page's own scripts
+   * run — a consent banner, a card that shows an internal address.
+   */
+  hideSelectors?: readonly string[]
   /** Directory that receives `frames/`, `timestamps.json`, `browser.json`. */
   outputDirectory: string
   /**
@@ -88,6 +104,18 @@ export type SessionRequest = {
   recording: RecordingScript
   seed: number
   settleTimeoutMs?: number
+  /**
+   * The signed-in session to record under — **a path, never the contents.**
+   *
+   * A Playwright `storageState` file *is* the access: it holds the cookies
+   * and the local storage of a signed-in account. It therefore enters as a
+   * file name and is opened by the browser itself at the last possible
+   * moment; nothing in this process ever reads it, so no log line, no error
+   * message and no artifact can carry it out. `auth/` is git-ignored for
+   * the same reason (`CONTRIBUTING.md`), and the credentials that produce
+   * the file belong in a secret store, not in any file of this repository.
+   */
+  storageStatePath?: string
 }
 
 export type SessionResult = {
@@ -188,15 +216,23 @@ function capturedPageRuntime(recordPage: RecordPage): RecordRuntime {
  * that is what a layout responds to. What stays is the part that makes the
  * application behave like a phone: the user agent and `hasTouch`.
  */
-function contextOptionsFor(
+export function contextOptionsFor(
   device: ResolvedDevice,
   captureArea: { height: number; width: number },
+  storageStatePath?: string,
 ): BrowserContextOptions {
+  // The saved session is the one option here that does not come from the
+  // device: it says *who* is being filmed, not *on what*. It is passed
+  // through as a file name — Playwright opens it — so this process never
+  // holds a cookie of it.
+  const session =
+    storageStatePath === undefined ? {} : { storageState: storageStatePath }
   if (device.capture.strategy === 'screencast') {
-    return { ...device.device, viewport: captureArea }
+    return { ...device.device, ...session, viewport: captureArea }
   }
   return {
     ...device.device,
+    ...session,
     deviceScaleFactor: 1,
     isMobile: false,
     viewport: captureArea,
@@ -246,9 +282,20 @@ export async function recordSession(
   }
   try {
     const context = await browser.newContext(
-      contextOptionsFor(request.device, captureArea),
+      contextOptionsFor(request.device, captureArea, request.storageStatePath),
     )
     try {
+      // Before the first page, not after it. An init script only reaches
+      // documents that are opened afterwards, and the whole point of hiding
+      // a surface this way is that it is gone *before* the page's own
+      // scripts run — a node removed after the first paint has already been
+      // on screen, and the screencast would have it.
+      if (request.hideSelectors !== undefined) {
+        await hideOverlay(context, request.hideSelectors)
+      }
+      if (request.fixedTime !== undefined) {
+        await freezeTimeAndRandomness(context, request.fixedTime)
+      }
       const page = await context.newPage()
       const { app, scale } = await openSurface(
         context,

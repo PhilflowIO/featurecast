@@ -45,6 +45,17 @@ const USAGE = `featurecast run <script> [options]
   a touch one: a mobile recording films the application inside a shell served
   from its own origin, and that origin has to be known before the first frame.
 
+  Three more exports describe the browser context, which a script cannot
+  reach itself — it is handed a page that is already open:
+
+    export const storageStatePath = 'auth/state.json'
+    export const hideSelectors = ['#cookie-banner', '#internal-card']
+    export const fixedTime = '2026-01-15T09:00:00Z'
+
+  That is how a signed-in application is filmed. \`storageStatePath\` is the
+  path of a Playwright storage state and never the state itself: the file is
+  the access, it stays under \`auth/\`, which git ignores.
+
 Options
   --devices <a,b>   Comma-separated device or preset names. Required.
   --all-formats     Deliver 16:9, 9:16 and 1:1 instead of the one size the
