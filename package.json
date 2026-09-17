@@ -42,7 +42,8 @@
     "prepare": "simple-git-hooks",
     "render": "tsx src/render/cli.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "yield-bench": "tsx demo/yield-bench.ts"
   },
   "simple-git-hooks": {
     "pre-commit": "pnpm exec lint-staged && pnpm typecheck"
