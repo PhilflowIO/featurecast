@@ -139,3 +139,63 @@ function runCommandOutput(
     })
   })
 }
+
+/**
+ * What a finished video *is*, as opposed to whether it is the one M1 expected.
+ *
+ * `validateOutputProbe` above answers a yes/no question about one particular
+ * deliverable — 1920x1080, 60 fps, this many seconds. The comparison command
+ * has a different need: it takes two arbitrary videos and has to lay them out
+ * next to each other, which means it has to *read* their size and length
+ * rather than assert one. Same ffprobe invocation, same parsing, different
+ * question — so it lives here next to the other one instead of growing a
+ * second spelling of `ffprobe -show_entries` somewhere else.
+ */
+export type VideoInfo = {
+  durationSeconds: number
+  height: number
+  /** Echoed back so an error message can name the file it is about. */
+  path: string
+  width: number
+}
+
+export function parseVideoInfo(json: string, path: string): VideoInfo {
+  let probe: OutputProbe
+  try {
+    probe = JSON.parse(json) as OutputProbe
+  } catch {
+    throw new Error(`ffprobe did not emit valid JSON for ${path}`)
+  }
+  const stream = probe.streams?.[0]
+  if (stream === undefined) {
+    throw new Error(`${path} contains no video stream`)
+  }
+  const width = Number(stream.width)
+  const height = Number(stream.height)
+  const durationSeconds = Number(stream.duration)
+  if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    throw new Error(`${path} reports no picture size`)
+  }
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    // A missing duration is the interesting case: it is what a stream copy
+    // out of a container without a length leaves behind, and a comparison
+    // built on it would freeze one side for a computed NaN seconds and
+    // produce a clip that looks fine until somebody watches the end of it.
+    throw new Error(
+      `${path} reports no usable duration. Re-encode it, or the side-by-side ` +
+        'cannot know which of the two clips is the longer one.',
+    )
+  }
+  return { durationSeconds, height, path, width }
+}
+
+/** Reads one video's size and length with the same ffprobe call M1 uses. */
+export async function readVideoInfo(
+  videoPath: string,
+  runner: CommandOutputRunner = runCommandOutput,
+): Promise<VideoInfo> {
+  return parseVideoInfo(
+    await runner('ffprobe', buildFfprobeArguments(videoPath)),
+    videoPath,
+  )
+}
