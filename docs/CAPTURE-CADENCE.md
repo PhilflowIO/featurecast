@@ -927,3 +927,79 @@ recognises this one. A capture reports what it resolved to, and
 `demo/yield-bench.ts` refuses to print a yield number when the answer is "the
 browser has no such parameter" — the recording is fine, a number from an
 unknown regime is not.
+
+## The lock-in patch earns nothing, at any queue depth (added 2026-09-17)
+
+**This section corrects "Mechanism 3" above, and the correction is to its
+attribution rather than to its mechanics.** The lock-in was really observed in
+those traces. What does not survive is the claim that switching it off buys
+anything.
+
+The other half of the browser patch calls `SetAnimationFpsLockIn(false, 1.0f)`
+so that `AnimatedContentSampler` cannot lock onto one damage region. Measured
+against three instruments, on the benchmark machine, with the two builds
+distinguished by the SHA-256 of the running binary rather than by a version
+string — both report `153.0.8010.12`.
+
+### The condition is present, and nothing is refused
+
+Six runs of `demo/m1-benchmark`'s motion, three per arm, interleaved, both arms
+at twelve frames in flight so the lock-in is the only difference.
+
+Every precondition the lock-in needs is demonstrably met. `tasks:scroll-up:1`
+runs **2.02 s at a median 16.76 ms** — sustained 60 fps, well past the ≥1 s at
+≥12 fps the sampler needs before it locks — and the sideways leg that damages a
+different region begins **14 to 27 ms later** in all sixteen transitions, far
+inside the 250 ms the lock holds after its rect's last damage.
+
+And every sideways window captured **150 of 150 presented frames, in all six
+runs, with the lock-in active**. Overall 3595 of 3609-3610 in every run, with it
+and without it.
+
+### Nor does it earn anything with the queue starved
+
+The obvious follow-up: the traces that found Mechanism 3 all ran at the
+compiled-in limit of two frames in flight. Four further runs at that limit, two
+per arm:
+
+|     | lock-in active | lock-in off |
+| --- | -------------- | ----------- |
+| r1  | 90.33 %        | 90.61 %     |
+| r2  | 90.25 %        | 92.58 %     |
+
+Window by window the sideways legs scatter 121-147 of 150 in both arms with no
+direction — `tasks:scroll-right:1` loses more with the lock-in active,
+`expenses:scroll-right:1` loses more without it. And the loss is spread over the
+vertical legs too (89 of 103, 63 of 70, 36 of 40), which is not the lock-in's
+signature at all: that would concentrate at the start of a sideways leg
+following a vertical one.
+
+### Nor in the finished picture
+
+The yield instruments cannot see judder, which is what the patch was built
+against, so the finished MP4s were measured with `tools/smoothness` and
+`--lauf`, 32 windows judged in every run:
+
+| arm            | largest step, in even steps | hitches       | teleports |
+| -------------- | --------------------------- | ------------- | --------- |
+| lock-in active | 4.84 / 4.88 / 4.62          | 33 / 117 / 69 | 0 / 0 / 0 |
+| lock-in off    | 4.59 / 4.79 / 4.70          | 148 / 61 / 48 | 0 / 0 / 0 |
+
+The two ranges overlap completely, and the spread _within_ an arm is as wide as
+the difference between them. The hitch count is pure noise in both directions —
+which is this document's own warning about counting hitches, arriving as
+evidence.
+
+### What this does and does not license
+
+It licenses dropping the lock-in half of the patch. Three instruments, two queue
+depths, nine runs: nothing measurable.
+
+It does not license the sentence "the lock-in never refuses a frame". That would
+need `FpsRateLimited` counted directly out of a browser trace, which none of
+these runs did. What is measured is narrower and sufficient: whatever the
+lock-in does at either queue depth, it costs nothing that capture yield, frame
+cadence or finished-picture smoothness can see.
+
+The honest reading of Mechanism 3 is therefore that the refusals were seen, and
+the 84 % they were blamed for belonged to the starved DevTools queue next door.
