@@ -10,6 +10,7 @@ import {
   formatsFor,
   importScript,
   prepareCapture,
+  readDeviceSpecs,
   runPipeline,
   scriptStem,
   type PipelineDependencies,
@@ -636,5 +637,55 @@ describe('importScript', () => {
     await expect(importScript(path)).rejects.toThrow(
       /exports no recording function.*must not call record\(\)/s,
     )
+  })
+})
+
+describe('the devices export', () => {
+  it('passes a mixed list of names and overrides through untouched', () => {
+    const devices = [
+      'desktop',
+      {
+        as: 'desktop-4k',
+        capture: { height: 2160, width: 3840 },
+        extends: 'desktop',
+      },
+    ]
+    expect(readDeviceSpecs({ devices }).devices).toEqual(devices)
+  })
+
+  it('says nothing when the script names no devices', () => {
+    expect(readDeviceSpecs({})).toEqual({})
+  })
+
+  it('refuses a single name written without an array', () => {
+    // The shape that looks right and is not: `export const devices = 'desktop'`
+    // would iterate as seven one-character device names.
+    expect(() => readDeviceSpecs({ devices: 'desktop' }, 'tour.ts')).toThrow(
+      /devices` as a string, but it has to be an array/,
+    )
+  })
+
+  it('refuses an empty list rather than filming nothing', () => {
+    expect(() => readDeviceSpecs({ devices: [] }, 'tour.ts')).toThrow(
+      /empty `devices` array/,
+    )
+  })
+
+  it('refuses an override that names no preset to start from', () => {
+    expect(() =>
+      readDeviceSpecs({ devices: [{ capture: { width: 3840 } }] }, 'tour.ts'),
+    ).toThrow(/devices\[0\]` without a usable `extends`/)
+  })
+
+  it('names the offending index, not just the file', () => {
+    expect(() =>
+      readDeviceSpecs({ devices: ['desktop', 42] }, 'tour.ts'),
+    ).toThrow(/devices\[1\]` as a number/)
+  })
+
+  it('refuses a variant name that is not a usable directory name', () => {
+    expect(() =>
+      readDeviceSpecs({ devices: [{ as: '', extends: 'desktop' }] }, 'tour.ts'),
+    ).toThrow(/devices\[0\].as`/)
   })
 })

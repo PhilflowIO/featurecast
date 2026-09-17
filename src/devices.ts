@@ -139,6 +139,21 @@ export type DeviceOverrides = {
    * `ASPECT_DIMENSIONS`. Ignored when `output.width` and `output.height` are
    * given explicitly.
    */
+  /**
+   * What this variant is filed under: the name it appears as in a report and
+   * the directory its artifacts land in.
+   *
+   * Defaults to `extends`, which is right until two variants extend the same
+   * preset. Two recordings of `desktop` at different capture areas would then
+   * both want the directory `desktop`, and the second would drop its files
+   * between the first one's frames. Deriving a name from the overridden
+   * fields instead was considered and dropped: it answers "which fields count"
+   * with a guess, and a pointer colour would silently produce a second
+   * directory nobody asked for.
+   *
+   * Ignored by `resolveDevice` — it names the variant, it does not resolve it.
+   */
+  as?: string
   aspect?: Aspect
   capture?: Partial<Omit<CaptureSettings, 'status'>>
   /** A curated preset name or any name from Playwright's registry. */

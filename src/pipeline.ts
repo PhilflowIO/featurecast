@@ -5,6 +5,7 @@ import {
   aspectOf,
   resolveDevice,
   type CaptureSettings,
+  type DeviceSpec,
   type OutputSettings,
   type ResolvedDevice,
 } from './devices.js'
@@ -55,6 +56,29 @@ export const SCRIPT_EXPORT_NAMES = ['default', 'recording'] as const
  * and produced an event log instead of a video.
  */
 export type LoadedScript = {
+  /**
+   * `devices`: which devices this script is meant to be filmed on, with any
+   * field of the device layer overridden.
+   *
+   * It belongs to the script for the same reason the three context exports do
+   * — it is knowable where the script is written and nowhere else. A tour of a
+   * phone layout is not a desktop tour with a narrower window; a capture area
+   * larger than the delivery exists to buy the camera room to move into, and
+   * how much room a particular journey needs is a property of that journey.
+   *
+   * Until this existed, the only selectable thing was a **name**: one of the
+   * curated presets or an entry in Playwright's registry. The override type
+   * underneath has always been complete — capture area, output size, frame
+   * rate, pointer — and was reachable only by writing TypeScript against the
+   * API. That is why "can it do 4K" and "why does the camera not move on a
+   * phone" were both unanswerable in practice: not because the layer could not
+   * do it, but because nobody outside the code could ask for it.
+   *
+   * `--devices` on the command line overrides this for a single run. Neither
+   * present is an error, not a default: filming the wrong device is a whole
+   * wasted recording, and guessing one is worse than refusing.
+   */
+  devices?: readonly DeviceSpec[]
   /**
    * `fixedTime`: the wall clock the recording claims, as an ISO instant.
    *
@@ -144,7 +168,11 @@ export type RunRequest = {
    * Off by default; see `formatsFor`.
    */
   allFormats?: boolean
-  devices: readonly string[]
+  /**
+   * The devices this run films, overriding the script's own `devices` export.
+   * Absent means "whatever the script says"; neither is an error.
+   */
+  devices?: readonly DeviceSpec[]
   /** Overrides the encoder every resolved device's output layer carries. */
   encoder?: Encoder
   /** Root directory; each device gets a subdirectory of its own. */
@@ -209,6 +237,7 @@ export const importScript: ScriptLoader = async (path) => {
     if (typeof candidate !== 'function') continue
     return {
       recording: candidate as RecordingScript,
+      ...readDeviceSpecs(module_, path),
       ...readContextSettings(module_, path),
       ...(typeof prepare === 'function'
         ? { prepare: prepare as PrepareStep }
@@ -221,6 +250,83 @@ export const importScript: ScriptLoader = async (path) => {
       '`export default async (page, demo) => { await page.goto(url); await demo.click("#x") }`. ' +
       'It must not call record() itself — featurecast run opens the browser and the capture around it.',
   )
+}
+
+/**
+ * The `devices` export, read and checked field by field.
+ *
+ * Checked here for the same reason the context settings are: this is the last
+ * place that still knows which file the value came from. And the failure it
+ * prevents is the expensive one — a spec whose `capture` is secretly a string
+ * resolves to a device that records at the preset's area, produces a perfectly
+ * good video of the wrong size, and nobody finds out until somebody watches
+ * it. A message naming the file and the index costs nothing; a silent pass
+ * costs the recording.
+ *
+ * Deliberately shallow: only the shape this module depends on is checked here
+ * — that each entry is a name or an object carrying `extends`. Whether
+ * `capture.width` is a positive integer, whether a capture smaller than the
+ * output is allowed, and whether the name resolves at all are the device
+ * layer's own refusals (`resolveDevice`), and repeating them here would give
+ * two messages for one fault that drift apart.
+ */
+export function readDeviceSpecs(
+  module_: Record<string, unknown>,
+  path = 'the script',
+): Pick<LoadedScript, 'devices'> {
+  const devices = module_['devices']
+  if (devices === undefined) return {}
+  if (!Array.isArray(devices)) {
+    throw new Error(
+      `"${path}" exports \`devices\` as ${describeType(devices)}, but it has to be an array: ` +
+        "`export const devices = ['desktop', { extends: 'iphone', capture: { width: 1620, height: 2880 } }]`.",
+    )
+  }
+  if (devices.length === 0) {
+    throw new Error(
+      `"${path}" exports an empty \`devices\` array. Name at least one device, or drop the export ` +
+        'and pass --devices on the command line.',
+    )
+  }
+  devices.forEach((spec: unknown, index: number) => {
+    if (typeof spec === 'string') {
+      if (spec.trim() !== '') return
+      throw new Error(
+        `"${path}" exports \`devices[${String(index)}]\` as an empty name.`,
+      )
+    }
+    if (typeof spec !== 'object' || spec === null) {
+      throw new Error(
+        `"${path}" exports \`devices[${String(index)}]\` as ${describeType(spec)}. ` +
+          'Each entry is either a device name or an object with an `extends` field.',
+      )
+    }
+    const extendsValue = (spec as Record<string, unknown>)['extends']
+    if (typeof extendsValue !== 'string' || extendsValue.trim() === '') {
+      throw new Error(
+        `"${path}" exports \`devices[${String(index)}]\` without a usable \`extends\`. ` +
+          'An override names the preset it starts from: ' +
+          "`{ extends: 'desktop', capture: { width: 3840, height: 2160 } }`.",
+      )
+    }
+    const asValue = (spec as Record<string, unknown>)['as']
+    if (
+      asValue !== undefined &&
+      (typeof asValue !== 'string' || asValue.trim() === '')
+    ) {
+      throw new Error(
+        `"${path}" exports \`devices[${String(index)}].as\` as ${describeType(asValue)}. ` +
+          'It names the directory the variant is filed under, so it has to be a non-empty string.',
+      )
+    }
+  })
+  return { devices: devices as readonly DeviceSpec[] }
+}
+
+function describeType(value: unknown): string {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'an array'
+  return `a ${typeof value}`
 }
 
 /**
@@ -299,12 +405,22 @@ export function readContextSettings(
  * dots ("Galaxy S24"), which are legal in an S3 key but make for URLs nobody
  * can read out loud.
  */
-export function deviceSlug(device: string): string {
-  const slug = device
+export function deviceSlug(device: DeviceSpec): string {
+  const slug = deviceName(device)
     .toLowerCase()
     .replaceAll(/[^a-z0-9]+/g, '-')
     .replaceAll(/^-+|-+$/g, '')
   return slug === '' ? 'device' : slug
+}
+
+/**
+ * What a spec is called: its own `as`, else the preset it extends, else the
+ * bare name. This is the string a report shows and the directory name comes
+ * from, so it is derived in one place rather than at each of the three.
+ */
+export function deviceName(device: DeviceSpec): string {
+  if (typeof device === 'string') return device
+  return device.as ?? device.extends
 }
 
 /** `demo/feature-xy.ts` -> `feature-xy`. */
@@ -404,6 +520,32 @@ function describeDevice(device: ResolvedDevice): string {
     : `"${device.preset}" (${device.playwrightName})`
 }
 
+/**
+ * Refuses two devices that would file their artifacts under the same name.
+ *
+ * Silently allowed, the second recording writes its frames into the first
+ * one's directory, the render reads a mixture of the two and the result is a
+ * video nobody can explain. This is the one failure the name field exists to
+ * make impossible, so it is checked before any browser starts rather than
+ * discovered in the output.
+ */
+function requireDistinctNames(devices: readonly DeviceSpec[]): void {
+  const seen = new Map<string, string>()
+  for (const device of devices) {
+    const name = deviceName(device)
+    const slug = deviceSlug(device)
+    const previous = seen.get(slug)
+    if (previous !== undefined) {
+      throw new Error(
+        `Two devices would both be filed under "${slug}": "${previous}" and "${name}". ` +
+          'Give one of them a name of its own with `as`, e.g. ' +
+          "`{ extends: 'desktop', as: 'desktop-4k', capture: { width: 3840, height: 2160 } }`.",
+      )
+    }
+    seen.set(slug, name)
+  }
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -430,18 +572,27 @@ export async function runPipeline(
     ...DEFAULT_DEPENDENCIES,
     ...dependencies,
   }
-  if (request.devices.length === 0) {
-    throw new Error(
-      'No device requested. Pass --devices with at least one name, e.g. --devices desktop-wide.',
-    )
-  }
   if (request.upload) deps.checkUploadConfigured()
   const script = await deps.loadScript(request.script)
+  // The command line wins over the script, because it is the later and more
+  // specific instruction: a script says what it is normally filmed on, and
+  // `--devices` is somebody overriding that for one run.
+  const devices =
+    request.devices !== undefined && request.devices.length > 0
+      ? request.devices
+      : (script.devices ?? [])
+  if (devices.length === 0) {
+    throw new Error(
+      `No device requested. Either pass --devices, e.g. --devices desktop-wide, or export one from ` +
+        `"${request.script}": \`export const devices = ['desktop-wide']\`.`,
+    )
+  }
+  requireDistinctNames(devices)
   const stem = scriptStem(request.script)
   const seed = request.seed ?? 1
 
   const outcomes: DeviceOutcome[] = []
-  for (const device of request.devices) {
+  for (const device of devices) {
     outcomes.push(await runOneDevice(deps, request, script, device, stem, seed))
   }
   for (const outcome of outcomes) {
@@ -457,10 +608,14 @@ async function runOneDevice(
   deps: PipelineDependencies,
   request: RunRequest,
   script: LoadedScript,
-  device: string,
+  device: DeviceSpec,
   stem: string,
   seed: number,
 ): Promise<DeviceOutcome> {
+  // The outcome carries the *name*, not the spec: it is what a reader sees in
+  // the report, and an override object printed into an error message is noise
+  // around the one word that says which recording failed.
+  const label = deviceName(device)
   const slug = deviceSlug(device)
   // Two directories, not one. The capture owns `frames/`, `timestamps.json`
   // and the event log; the render writes its decisions and its videos. Mixed
@@ -479,14 +634,24 @@ async function runOneDevice(
   try {
     resolved = resolveDevice(device)
   } catch (error) {
-    return { device, kind: 'failed', reason: messageOf(error), stage: 'device' }
+    return {
+      device: label,
+      kind: 'failed',
+      reason: messageOf(error),
+      stage: 'device',
+    }
   }
 
   let recorded: { capture: CaptureSettings; captureDirectory: string }
   try {
     recorded = await deps.record(resolved, directory, script, seed)
   } catch (error) {
-    return { device, kind: 'failed', reason: messageOf(error), stage: 'record' }
+    return {
+      device: label,
+      kind: 'failed',
+      reason: messageOf(error),
+      stage: 'record',
+    }
   }
 
   let rendered: Awaited<ReturnType<PipelineDependencies['render']>>
@@ -500,7 +665,7 @@ async function runOneDevice(
     })
   } catch (error) {
     return {
-      device,
+      device: label,
       kind: 'failed',
       reason: messageOf(error),
       stage: 'render',
@@ -515,7 +680,7 @@ async function runOneDevice(
     return {
       decisionsPath: rendered.decisionsPath,
       deliveries,
-      device,
+      device: label,
       kind: 'rendered',
     }
   }
@@ -533,11 +698,16 @@ async function runOneDevice(
     return {
       decisionsPath: rendered.decisionsPath,
       deliveries: uploaded,
-      device,
+      device: label,
       kind: 'rendered',
     }
   } catch (error) {
-    return { device, kind: 'failed', reason: messageOf(error), stage: 'upload' }
+    return {
+      device: label,
+      kind: 'failed',
+      reason: messageOf(error),
+      stage: 'upload',
+    }
   }
 }
 

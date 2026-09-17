@@ -67,6 +67,58 @@ application loses its storage and draws nothing. Capture and output area are
 **the same size** here, without the desktop reserve; both measured and argued
 in [M3-VERDICT.md](M3-VERDICT.md).
 
+## Ordering a device, not just naming one
+
+A run is given its devices in one of two places, and the command line wins over
+the script:
+
+```bash
+pnpm featurecast run demo/fixture-tour.ts --devices desktop,tablet,iphone
+```
+
+```ts
+// in the recording script
+export const devices = [
+  'desktop-wide',
+  {
+    extends: 'iphone',
+    as: 'phone-with-reserve',
+    capture: { width: 1620, height: 2880 },
+  },
+]
+```
+
+The script export is where anything beyond a name belongs, for the same reason
+`url`, `storageStatePath`, `hideSelectors` and `fixedTime` live there: it is
+knowable where the script is written and nowhere else. How much capture area a
+particular journey needs is a property of that journey, not of the person who
+types the command.
+
+Every field of the resolution below can be overridden — capture area, frame
+rate, JPEG quality, capture strategy, output size and quality, pointer shape,
+pointer size, ripple colour, and `aspect` as a shorthand for the output size.
+The refusals stay where they were: an unknown name, a capture smaller than the
+output and a zoom that would need more than the capture holds are all answered
+by the device and render layers, in one message each, not repeated here.
+
+**`as` names the variant**, and exists because two variants of one preset would
+otherwise collide. Both would want the directory `desktop`, and the second
+would drop its files between the first one's frames; a run that would do that
+is refused before any browser starts. Deriving a name from the overridden
+fields instead was considered and dropped — it answers "which fields count"
+with a guess, and a changed pointer colour would silently produce a second
+directory nobody asked for.
+
+Two things this unlocks that were previously unreachable without writing
+TypeScript against the API: a capture area larger than 2560×1600, and a mobile
+capture with room for the camera to move into. A phone preset records at
+exactly its delivery size, which is why the renderer clamps every mobile zoom
+to 1.00× — give it reserve and the push-in becomes possible. What that costs in
+frame rate is measured, not assumed; see [M3-VERDICT.md](M3-VERDICT.md) and the
+capture-area measurements referenced from it.
+
+---
+
 ## Curated shortlist
 
 Values taken directly from Playwright's registry. `Capture` and `Output` are
