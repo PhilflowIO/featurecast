@@ -30,8 +30,11 @@ import {
  */
 
 export type RecipeSettings = {
-  /** CSS selector of the consent overlay to hide; omit to hide nothing. */
-  bannerSelector?: string
+  /**
+   * CSS selectors of the surfaces that disappear before the page's own
+   * scripts run; empty or omitted hides nothing.
+   */
+  hideSelectors?: readonly string[]
   /** Wall clock every recording should claim, e.g. `2026-01-15T09:00:00Z`. */
   fixedTime?: string
   /** Directory that receives `events.jsonl` and `browser.json`. */
@@ -45,7 +48,7 @@ export type RecipeSettings = {
 }
 
 /**
- * Hides a consent overlay for every document of the context, before the
+ * Hides the named surfaces for every document of the context, before the
  * page's own scripts run.
  *
  * The payload is a plain string on purpose. A function payload is compiled
@@ -56,9 +59,18 @@ export type RecipeSettings = {
  */
 export async function hideOverlay(
   context: BrowserContext,
-  selector: string,
+  selectors: readonly string[],
 ): Promise<void> {
-  const css = JSON.stringify(`${selector}{display:none!important}`)
+  if (selectors.length === 0) return
+  // One rule per selector, never one comma-joined group. A group selector is
+  // parsed as a unit: a single selector the browser does not understand makes
+  // it drop the entire rule, and the valid selectors next to it go silently
+  // unhidden. Separate rules fail one at a time.
+  const css = JSON.stringify(
+    selectors
+      .map((selector) => `${selector}{display:none!important}`)
+      .join('\n'),
+  )
   await context.addInitScript(
     '(function () {' +
       `  var css = ${css};` +
@@ -127,8 +139,8 @@ export async function recordWithRecipes(
           viewport: { height: 720, width: 1280 },
         })
         try {
-          if (settings.bannerSelector !== undefined) {
-            await hideOverlay(context, settings.bannerSelector)
+          if (settings.hideSelectors !== undefined) {
+            await hideOverlay(context, settings.hideSelectors)
           }
           if (settings.fixedTime !== undefined) {
             await freezeTimeAndRandomness(context, settings.fixedTime)
@@ -167,7 +179,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   await recordWithRecipes(
     {
-      bannerSelector: '#cookie-banner',
+      hideSelectors: ['#cookie-banner'],
       fixedTime: '2026-01-15T09:00:00Z',
       out: out ?? 'artifacts/recipe-authenticated',
       seed: 1,

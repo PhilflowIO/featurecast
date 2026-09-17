@@ -180,7 +180,7 @@ import { recordWithRecipes } from './recipe-authenticated.js'
 
 await recordWithRecipes(
   {
-    bannerSelector: '#cookie-banner',
+    hideSelectors: ['#cookie-banner', '#internal-address-card'],
     fixedTime: '2026-01-15T09:00:00Z',
     out: 'artifacts/feature-xy',
     storageStatePath: 'auth/state.json',
@@ -227,8 +227,15 @@ dann gar nicht erst — nichts muss unterdrückt werden, weil nichts da ist.
 **Über ein Init-Skript.** Wenn das nicht greift (Zustimmung serverseitig,
 neue Domain, Banner in einem Frame), blendet ein Init-Skript den Knoten aus,
 bevor die Seite ihre eigenen Skripte ausführt. `hideOverlay` im Rezept oben
-tut genau das: es hängt ein `<style>` mit `display:none !important` für den
-übergebenen Selektor an jedes Dokument des Kontexts.
+tut genau das: es hängt ein `<style>` an jedes Dokument des Kontexts, mit
+einer eigenen `display:none !important`-Regel je übergebenem Selektor.
+
+`hideSelectors` nimmt beliebig viele Selektoren, weil selten nur das Banner
+stört — die Produktkarte mit der internen Adresse muss genauso weg. Jeder
+Selektor bekommt eine eigene Regel statt eines kommagetrennten
+Gruppenselektors: eine Gruppe wird als Einheit geparst, ein einziger
+unverstandener Selektor darin lässt den Browser die ganze Regel verwerfen
+und nimmt die gültigen Selektoren stillschweigend mit.
 
 Ausblenden statt wegklicken ist Absicht. Ein Klick auf „Akzeptieren“ ist
 eine Interaktion, die im Video und im Ereignis-Log steht, und für jede
