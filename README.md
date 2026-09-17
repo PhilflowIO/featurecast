@@ -179,14 +179,29 @@ reached the file.
 | Self-built, patched Chromium            | **99.6 %** (3595 of 3610, gate 95 %)                |
 | The Chromium that ships with Playwright | **84 %** ([docs/M1-VERDICT.md](docs/M1-VERDICT.md)) |
 
-Measured on the benchmark machine, 2026-09-17 and 2026-09-11 respectively.
+Measured on the benchmark machine, 2026-09-17 and 2026-09-11 respectively. Both
+are single runs. A later four-arm measurement over three repeats each, on a
+shorter script, puts the unpatched arm at 87.7 % (83.6-92.4) and the patched one
+at 98.7 % (98.5-98.8).
 
 **If you start today, you get 84 %.** There is no downloadable artifact of the
 patched build; building it yourself is the only route, and packaging it is an
-open issue. At 84 % the loss is not evenly spread — it concentrates in
-horizontal scrolling right after a vertical one, and it is visible, not just
-measurable. The mechanism is Chromium's `AnimatedContentSampler` locking onto
-one damage region; the full analysis is in
+open issue.
+
+**One of the two patched values earns that entire difference.** Raising
+DevTools' limit on unacknowledged frames in flight is worth +11.1 points on its
+own, and it is what makes the result repeatable at all: exactly 338 captured
+frames in six runs with it, 286 to 316 without. Current Chromium exposes that
+limit as an official `Page.startScreencast` parameter, so this half of the fork
+has an end date.
+
+**The visible defect is a separate claim, and a weaker one.** The loss is not
+evenly spread — it concentrates in horizontal scrolling right after a vertical
+one, and it is visible, not just measurable. Chromium's `AnimatedContentSampler`
+locking onto one damage region was caught doing exactly that in a trace, and the
+patch's second value switches it off. But that value changes the yield by
+nothing measurable, and the judder itself has never been isolated in either
+direction. Full analysis in
 [docs/CAPTURE-CADENCE.md](docs/CAPTURE-CADENCE.md).
 
 Nothing here has ever been measured against another product. This README

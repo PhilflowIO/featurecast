@@ -793,3 +793,81 @@ captured (`stock` 70/77, `unpatched` 92/104/110), so a mapping built there
 would silently move content in time. The exact mapping is therefore
 available only behind ticket 17's patch. Whether it would buy anything is open: the
 one experiment that said no deleted 40 frames on its way in.
+
+## Which half of the patch earns the yield (added 2026-09-17)
+
+The patched build carries two changes, and until this measurement the whole
+84 % → 99.6 % difference was attributed to the first of them. It is the second.
+
+Four arms, three repeats each, interleaved per repeat so machine drift hits
+every arm equally. Same device (`desktop`), same capture area 2560×1600, same
+script `demo/fixture-tour.ts`, `--passes 2`, one run at a time on the RTX 3090
+box, ANGLE GL, Chromium 153.0.8010.12 from the patched tree. Switching an arm is
+an incremental rebuild of two translation units plus the link, 46-55 s — no full
+build was triggered.
+
+| arm | `SetAnimationFpsLockIn(false)` | frames in flight | r1     | r2     | r3     | mean       | captured/presented | 95 % gate |
+| --- | ------------------------------ | ---------------- | ------ | ------ | ------ | ---------- | ------------------ | --------- |
+| A   | applied                        | 12               | 98.8 % | 98.8 % | 98.5 % | **98.7 %** | 338 / 342          | pass ×3   |
+| B   | applied                        | 2 (stock)        | 87.4 % | 91.2 % | 88.3 % | **89.0 %** | 299-312 / 342      | fail ×3   |
+| C   | reverted                       | 12               | 98.8 % | 98.8 % | 98.8 % | **98.8 %** | 338 / 342          | pass ×3   |
+| D   | reverted                       | 2 (stock)        | 92.4 % | 87.1 % | 83.6 % | **87.7 %** | 286-316 / 342      | fail ×3   |
+
+Contributions from the means: the in-flight limit alone +11.1 points (D→C), the
+sampler change alone +1.3 points (D→B), both together +11.0 points (D→A). There
+is no interaction — A and C are indistinguishable.
+
+**The spread carries as much of the finding as the mean.** A and C captured
+exactly 338 frames in all six runs; B and D scattered between 286 and 316, and
+in repeat 1 B (87.4 %) landed _below_ D (92.4 %). Raising the in-flight limit
+does not merely lift the average, it moves the capture from a random ceiling to
+a fixed one. The sampler change on its own is not distinguishable from zero at
+this capture area — mechanically plausible, since it offers more frames into a
+pipe that is already blocked at two frames in flight.
+
+**Neither change produces the cadence.** Median inter-frame interval is
+16.71-16.90 ms in every arm, full-cadence share 80.4-87.7 %, and `refreshHz`
+stays between 59.68 and 60.12 across all twelve runs. The 60 Hz comes from the
+page.
+
+**Instrument check.** The same cadence script run against the reference capture
+from the same day reproduces its published values exactly
+(`median=16.76 ms`, `full12-21=84.8 %`, `dbl28-40=6.7 %`), so the instrument
+moves and agrees with an outside anchor.
+
+### What this does not say
+
+It does not say the sampler change is useless, and no sentence anywhere should.
+It was built for the visible judder during sideways scrolling; yield is the
+wrong instrument for that, because an arm can deliver every frame and still
+judder. The lock-in mechanism itself is not in doubt — it was traced directly
+(see "Trace: presented vs captured frames" above, where `FpsRateLimited` refuses
+every presented frame for the first ~240 ms of a horizontal scroll). What is
+unmeasured is whether switching it off improves the finished picture. Until that
+is measured with a smoothness instrument rather than a yield one, the honest
+statement is: **unnecessary for yield, unproven for the picture.**
+
+Three further limits: only 2560×1600 desktop, only `demo/fixture-tour.ts` (and
+whether that tour even sustains animation in a single damage region is itself
+unverified), and three repeats on one machine — enough to see a spread, not
+enough to be statistically load-bearing.
+
+### Consequence for the fork
+
+In the pinned tree `Page.startScreencast` has no in-flight parameter (its list
+ends at `everyNthFrame`) and the value is fixed at
+`content/browser/devtools/protocol/page_handler.cc:98`. On Chromium `main` it is
+`optional integer maxFramesInFlight`, documented as defaulting to 3, with the
+constant replaced by a validated accessor. `SetAnimationFpsLockIn` still has no
+caller in `devtools_video_consumer.cc` on `main`.
+
+So the fork's yield half has an upstream replacement waiting, and the other half
+does not — and now also has no number behind it.
+
+The twelve runs, the per-arm driver and the restore check live in the
+measurement workspace on the AI box, a scratch directory next to this checkout
+and not part of this repository: `halves.sh`, `halves.log`, `cadence.py`, and
+`artifacts/half-{A,B,C,D}[-r2,-r3]` plus `artifacts/half-restore-check`, each
+carrying its own `capture-efficiency.json`, `presented.json` and `browser.json`.
+After the last arm the tree was restored to both changes (`git diff --stat`:
+2 files, 6 insertions, 1 deletion) and a control run confirmed 98.8 %.
