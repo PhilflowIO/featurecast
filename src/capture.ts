@@ -36,6 +36,30 @@ export const CAPTURE_SIZE: CaptureSize = { height: 1600, width: 2560 }
 export const CAPTURE_QUALITY = 90
 
 /**
+ * How many frames Chromium may have outstanding before it stops handing them
+ * out, i.e. `Page.startScreencast`'s `maxFramesInFlight`.
+ *
+ * This is the single largest lever on capture yield that exists, and the only
+ * one measured to make the yield reproducible rather than merely higher.
+ * Measured on the AI box (RTX 3090, 2560x1600 desktop, `demo/fixture-tour.ts`,
+ * four browser builds, three interleaved repeats each): at the compiled-in 2 a
+ * run captures 286-316 of 342 presented frames and lands at 87.7 % on average;
+ * at 12 it captures exactly 338 in all six runs and lands at 98.8 %. The other
+ * half of the browser patch, the one that switches off the animated-content
+ * lock-in, moves the same number by 1.3 points, inside the noise. Full table in
+ * `docs/CAPTURE-CADENCE.md`, "Which half of the patch earns the yield".
+ *
+ * 12 is the value those runs used, carried over from the browser patch it
+ * replaces. Chromium's own default is 3, and nothing between 3 and 12 has been
+ * measured, so 12 is the proven value rather than the known optimum.
+ *
+ * Browsers before Chromium 154 have no such parameter. There the recording
+ * still runs, at whatever the build compiled in — see `ScreencastCapture`'s
+ * `framesInFlight` for how a run says which of the two it was.
+ */
+export const CAPTURE_FRAMES_IN_FLIGHT = 12
+
+/**
  * Upper bound on bytes buffered between the screencast callback and the
  * disk writer (roughly a couple of seconds of backlog for a dense
  * 2560x1600 JPEG stream, where individual frames have measured
@@ -69,18 +93,31 @@ export type ScreencastFrame = {
  * an unacknowledged frame, a frame without a usable clock. It exists because
  * those failures have to abort the capture rather than quietly shrink it.
  */
+/** What a transport resolved the frames-in-flight request to. */
+export type ScreencastStartResult = {
+  /** The bound in force, or `null` if the browser has no such parameter. */
+  framesInFlight: number | null
+}
+
 export type ScreencastTransport = {
   detach: () => Promise<void>
   start: (options: {
+    framesInFlight: number
     onError: (error: Error) => void
     onFrame: (frame: ScreencastFrame) => void
     quality: number
     size: CaptureSize
-  }) => Promise<void>
+  }) => Promise<ScreencastStartResult>
   stop: () => Promise<void>
 }
 
 export type CaptureDependencies = {
+  /**
+   * Overrides `CAPTURE_FRAMES_IN_FLIGHT`. The product has no reason to; it is
+   * here so a measurement can sweep the value, including against Chromium's
+   * own default of 3.
+   */
+  framesInFlight?: number
   maxQueuedBytes?: number
   now?: () => number
   openScreencast?: (page: Page) => Promise<ScreencastTransport>
@@ -104,6 +141,17 @@ export type TimestampManifest = {
 }
 
 export type ScreencastCapture = {
+  /**
+   * The frames-in-flight bound that was actually in force, or `null` when the
+   * browser is too old to have the parameter at all.
+   *
+   * A capture never fails over this, because the tool has to keep working on
+   * the browser it ships with today. What must not happen is a *measurement*
+   * that does not know which of the two regimes produced it —
+   * `demo/yield-bench.ts` refuses to report a number when this comes back
+   * `null`.
+   */
+  framesInFlight: number | null
   /**
    * Frames that shared a capture timestamp with the frame before them and
    * could therefore never both be on screen; see `orderFramesByCaptureTime`.
@@ -409,7 +457,8 @@ export async function captureScreencast(
     // convention to achieve. Errors the transport discovers between frames
     // come back through `onError` and abort the capture through the same
     // channel a stalled write uses.
-    await transport.start({
+    const started = await transport.start({
+      framesInFlight: dependencies.framesInFlight ?? CAPTURE_FRAMES_IN_FLIGHT,
       onError: (error) => {
         queue?.fail(error)
       },
@@ -465,6 +514,7 @@ export async function captureScreencast(
     return {
       ...writerResult,
       coincidentTimestampCount: ordered.coincidentTimestampCount,
+      framesInFlight: started.framesInFlight,
       framesDirectory,
       timestampsPath,
     }

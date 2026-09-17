@@ -174,34 +174,39 @@ frames. Nothing else differs — same script, same page, same browser.
 Capture yield is the share of frames the browser presented that actually
 reached the file.
 
-| Browser                                 | Yield                                               |
-| --------------------------------------- | --------------------------------------------------- |
-| Self-built, patched Chromium            | **99.6 %** (3595 of 3610, gate 95 %)                |
-| The Chromium that ships with Playwright | **84 %** ([docs/M1-VERDICT.md](docs/M1-VERDICT.md)) |
+| Browser                                     | Yield                                   |
+| ------------------------------------------- | --------------------------------------- |
+| **Chromium 154 or newer** (any stock build) | **98.8 %** (338 of 342, three of three) |
+| The Chromium that ships with Playwright     | **84-88 %**, and it fails the 95 % gate |
 
-Measured on the benchmark machine, 2026-09-17 and 2026-09-11 respectively. Both
-are single runs. A later four-arm measurement over three repeats each, on a
-shorter script, puts the unpatched arm at 87.7 % (83.6-92.4) and the patched one
-at 98.7 % (98.5-98.8).
+Measured on the benchmark machine, 2026-09-17, at 2560×1600 with the same tour
+and three repeats per arm.
 
-**If you start today, you get 84 %.** There is no downloadable artifact of the
-patched build; building it yourself is the only route, and packaging it is an
-open issue.
+**Point `CHROME_BIN` at a Chromium 154 or newer and you get the top row.** No
+patched build, no compiling anything — a
+[Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/)
+download is enough. Without that step you get whatever Playwright bundles, which
+is currently 153.
 
-**One of the two patched values earns that entire difference.** Raising
-DevTools' limit on unacknowledged frames in flight is worth +11.1 points on its
-own, and it is what makes the result repeatable at all: exactly 338 captured
-frames in six runs with it, 286 to 316 without. Current Chromium exposes that
-limit as an official `Page.startScreencast` parameter, so this half of the fork
-has an end date.
+```bash
+CHROME_BIN=/path/to/chrome-154/chrome pnpm featurecast run demo/feature-xy.ts
+```
+
+**What changed, and why the number moves so much.** Chromium stops handing out
+screencast frames once too many are unacknowledged, and its default bound of
+three is too low for a 2560×1600 capture: the same run scores 82-90 % at three
+and 98.8 % at twelve. Playwright's screencast wrapper cannot pass that bound at
+all, so featurecast drives the recording over the browser protocol directly.
+This used to require a self-built Chromium; it no longer does.
 
 **The visible defect is a separate claim, and a weaker one.** The loss is not
 evenly spread — it concentrates in horizontal scrolling right after a vertical
 one, and it is visible, not just measurable. Chromium's `AnimatedContentSampler`
-locking onto one damage region was caught doing exactly that in a trace, and the
-patch's second value switches it off. But that value changes the yield by
+locking onto one damage region was caught doing exactly that in a trace, and a
+self-built browser can switch it off. But that switch changes the yield by
 nothing measurable, and the judder itself has never been isolated in either
-direction. Full analysis in
+direction — so it remains the one reason to build your own browser, and an
+unproven one. Full analysis in
 [docs/CAPTURE-CADENCE.md](docs/CAPTURE-CADENCE.md).
 
 Nothing here has ever been measured against another product. This README

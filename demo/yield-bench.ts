@@ -62,6 +62,7 @@ const { positionals, values } = parseArgs({
   options: {
     capture: { type: 'string' },
     device: { type: 'string' },
+    framesInFlight: { type: 'string' },
     out: { type: 'string' },
     passes: { type: 'string' },
     render: { type: 'string' },
@@ -74,6 +75,10 @@ const scriptPath = positionals[0] ?? 'demo/fixture-tour.ts'
 const outRoot = values.out ?? 'artifacts/yield'
 const windowMs = Number(values.windowMs ?? '1000')
 const passes = Number(values.passes ?? '1')
+const framesInFlight =
+  values.framesInFlight === undefined
+    ? undefined
+    : Number(values.framesInFlight)
 const [width, height] = (values.capture ?? '2560x1600').split('x').map(Number)
 if (!Number.isInteger(width) || !Number.isInteger(height)) {
   throw new Error(`--capture wants WIDTHxHEIGHT, got "${values.capture ?? ''}"`)
@@ -193,6 +198,7 @@ try {
         )
       }
     },
+    { framesInFlight },
   )
   recordSeconds = (Date.now() - recordStart) / 1000
   await writeBrowserProvenance(captureDirectory, provenance)
@@ -209,6 +215,18 @@ try {
   console.log(
     `DIAG presentedInstants=${String(presentedTimestamps.length)} capturedFrames=${String(manifest.frames.length)} sessionMs=${String(manifest.session.duration)} paintTicks=${String(paintTimestamps.length)}`,
   )
+  if (captureResult.framesInFlight === null) {
+    // A yield number is only worth reading when it is known which regime
+    // produced it. This browser has no `maxFramesInFlight` at all, so the
+    // bound in force is whatever the build compiled in - measured to be worth
+    // eleven points, which is more than most differences anyone would come
+    // here to look for. Recording on such a browser is fine; reporting a
+    // number from it as if the regime were known is not.
+    throw new Error(
+      'This browser has no maxFramesInFlight parameter (Chromium 154 or newer has it), so the frames-in-flight bound is whatever the build compiled in. Point CHROME_BIN at a browser that has it, or measure something other than yield.',
+    )
+  }
+
   const report = computeCaptureEfficiencyReport(
     manifest,
     tiledWindows(manifest),
@@ -224,7 +242,8 @@ try {
       `sessionSeconds=${(manifest.session.duration / 1000).toFixed(2)} ` +
       `recordSeconds=${recordSeconds.toFixed(1)} ` +
       `framesOnDisk=${String(manifest.frames.length)} ` +
-      `droppedDuplicates=${String(captureResult.droppedDuplicateFrameCount)}`,
+      `droppedDuplicates=${String(captureResult.droppedDuplicateFrameCount)} ` +
+      `framesInFlight=${captureResult.framesInFlight === null ? 'browser-default' : String(captureResult.framesInFlight)}`,
   )
   try {
     validateCaptureEfficiencyReport(report)

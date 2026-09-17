@@ -22,15 +22,16 @@ flatter itself.
 
 ## Options
 
-| Option          | Default                | What it does                                    |
-| --------------- | ---------------------- | ----------------------------------------------- |
-| _(positional)_  | `demo/fixture-tour.ts` | the recording script to drive                   |
-| `--device NAME` | `desktop`              | any preset or Playwright device name            |
-| `--capture WxH` | `2560x1600`            | the area to record                              |
-| `--passes N`    | `1`                    | drive the script N times inside **one** capture |
-| `--windowMs N`  | `1000`                 | width of the tiled windows                      |
-| `--out DIR`     | `artifacts/yield`      | where capture and video land                    |
-| `--render WxH`  | _(off)_                | also render a video afterwards                  |
+| Option               | Default                | What it does                                    |
+| -------------------- | ---------------------- | ----------------------------------------------- |
+| _(positional)_       | `demo/fixture-tour.ts` | the recording script to drive                   |
+| `--device NAME`      | `desktop`              | any preset or Playwright device name            |
+| `--capture WxH`      | `2560x1600`            | the area to record                              |
+| `--passes N`         | `1`                    | drive the script N times inside **one** capture |
+| `--windowMs N`       | `1000`                 | width of the tiled windows                      |
+| `--framesInFlight N` | `12`                   | frames the browser may have outstanding         |
+| `--out DIR`          | `artifacts/yield`      | where capture and video land                    |
+| `--render WxH`       | _(off)_                | also render a video afterwards                  |
 
 **`--passes` is a requirement, not a convenience.** `resolveRefreshHz`
 (`src/presented.ts`) will not bound the denominator until it has 150 gaps inside
@@ -40,6 +41,11 @@ were used for the 4K and phone measurements) because each pass is shorter.
 Between passes the script's own `prepare` runs again with `localStorage`
 cleared, so every pass starts from the same state.
 
+**`--framesInFlight` is the single largest lever on the number this harness
+reports**, which is why it is an option rather than a constant: at Chromium's
+own default of 3 the same run scores 82-90 %, at 12 it scores 98.8 % three
+times out of three. See [CAPTURE-CADENCE.md](CAPTURE-CADENCE.md).
+
 ## Which browser it measures
 
 Whatever `CHROME_BIN` points at; without it, the Chromium that ships with
@@ -48,6 +54,13 @@ Playwright.
 ```bash
 CHROME_BIN=/path/to/chrome pnpm yield-bench demo/fixture-tour.ts --passes 2
 ```
+
+**A browser older than Chromium 154 is refused outright.** `maxFramesInFlight`
+does not exist there, so the bound in force is whatever that build compiled in —
+worth eleven points, i.e. more than most differences anyone comes here to look
+for. Recording on such a browser is fine and the product does it; reporting a
+yield number from one as though the regime were known is not, so the harness
+stops before it prints anything.
 
 This matters more than it looks. `src/browser.ts` verifies through
 `/proc/<pid>/exe` which binary actually started, and writes its path, version
@@ -66,7 +79,7 @@ browser: /crbuild/chrome (Chromium 153.0.8010.12; requested: CHROME_BIN)
 capture area: 2560x1600, strategy screencast, fps 60, jpeg q90
 renderer: ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL ES 3.2)
 DIAG presentedInstants=342 capturedFrames=338 sessionMs=31204 paintTicks=0
-RESULT capture=2560x1600 device=desktop efficiency=98.8% captured=338 presented=342 refreshHz=59.96 ...
+RESULT capture=2560x1600 device=desktop efficiency=98.8% captured=338 presented=342 refreshHz=59.96 ... framesInFlight=12
 GATE pass (>=95%, denominator checks clean)
 ```
 

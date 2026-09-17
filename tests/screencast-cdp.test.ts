@@ -27,7 +27,9 @@ type Journal = Array<{ what: string; detail?: unknown }>
  * happens *before* what, and an assertion on call counts alone would pass for
  * an implementation that has them backwards.
  */
-function fakeSession(options: { ackFails?: Error } = {}): {
+function fakeSession(
+  options: { ackFails?: Error; knowsFramesInFlight?: boolean } = {},
+): {
   detach: ReturnType<typeof vi.fn>
   emit: (payload: FramePayload) => void
   journal: Journal
@@ -47,6 +49,17 @@ function fakeSession(options: { ackFails?: Error } = {}): {
       journal.push({ detail: parameters, what: method })
       if (method === 'Page.screencastFrameAck' && options.ackFails) {
         throw options.ackFails
+      }
+      // A browser that knows the parameter validates it; one that does not
+      // ignores the field and starts a screencast. Both measured, see
+      // `supportsFramesInFlight`.
+      const sent = parameters as { maxFramesInFlight?: unknown } | undefined
+      if (
+        method === 'Page.startScreencast' &&
+        (options.knowsFramesInFlight ?? true) &&
+        sent?.maxFramesInFlight === 0
+      ) {
+        throw new Error('maxFramesInFlight must be a positive integer')
       }
     },
   } as unknown as CDPSession
@@ -100,8 +113,14 @@ describe('openCdpScreencast', () => {
     const onFrame = vi.fn()
 
     await expect(
-      transport.start({ onError: vi.fn(), onFrame, quality: 90, size: SIZE }),
-    ).resolves.toBeUndefined()
+      transport.start({
+        framesInFlight: 12,
+        onError: vi.fn(),
+        onFrame,
+        quality: 90,
+        size: SIZE,
+      }),
+    ).resolves.toEqual({ framesInFlight: 12 })
 
     expect(onFrame).toHaveBeenCalledOnce()
   })
@@ -113,6 +132,7 @@ describe('openCdpScreencast', () => {
     const transport = await openWith(session)
 
     await transport.start({
+      framesInFlight: 12,
       onError: vi.fn(),
       onFrame: () => {
         journal.push({ what: 'onFrame' })
@@ -139,6 +159,7 @@ describe('openCdpScreencast', () => {
     const onError = vi.fn()
 
     await transport.start({
+      framesInFlight: 12,
       onError,
       onFrame: vi.fn(),
       quality: 90,
@@ -158,6 +179,7 @@ describe('openCdpScreencast', () => {
     const transport = await openWith(session)
 
     await transport.start({
+      framesInFlight: 12,
       onError: vi.fn(),
       onFrame: vi.fn(),
       quality: 90,
@@ -181,6 +203,7 @@ describe('openCdpScreencast', () => {
     const transport = await openWith(session)
 
     await transport.start({
+      framesInFlight: 12,
       onError: vi.fn(),
       onFrame: vi.fn(),
       quality: 77,
@@ -190,12 +213,77 @@ describe('openCdpScreencast', () => {
     expect(journal.at(-1)).toEqual({
       detail: {
         format: 'jpeg',
+        maxFramesInFlight: 12,
         maxHeight: 900,
         maxWidth: 1280,
         quality: 77,
       },
       what: 'Page.startScreencast',
     })
+  })
+
+  it('sends the frames-in-flight bound to a browser that knows it', async () => {
+    // Mutation: drop the field, or send Chromium's own default of 3. The
+    // measured 98.8 % becomes a measured 87.7 %, and nothing in the run says
+    // so.
+    const { journal, session } = fakeSession({ knowsFramesInFlight: true })
+    const transport = await openWith(session)
+
+    const result = await transport.start({
+      framesInFlight: 12,
+      onError: vi.fn(),
+      onFrame: vi.fn(),
+      quality: 90,
+      size: SIZE,
+    })
+
+    expect(result).toEqual({ framesInFlight: 12 })
+    expect(journal.at(-1)?.detail).toMatchObject({ maxFramesInFlight: 12 })
+  })
+
+  it('omits the bound on a browser that does not know it, and says so', async () => {
+    // Chromium before 154 swallows an unknown parameter without a word. The
+    // recording still has to run - that is the browser this tool ships with
+    // today - but it must come back saying which regime produced it.
+    //
+    // Mutation: return the requested number regardless. A measurement taken on
+    // an old browser then claims a bound that was never in force, which is the
+    // exact mix-up `src/browser.ts` exists to prevent one level down.
+    const { journal, session } = fakeSession({ knowsFramesInFlight: false })
+    const transport = await openWith(session)
+
+    const result = await transport.start({
+      framesInFlight: 12,
+      onError: vi.fn(),
+      onFrame: vi.fn(),
+      quality: 90,
+      size: SIZE,
+    })
+
+    expect(result).toEqual({ framesInFlight: null })
+    expect(journal.at(-1)?.detail).not.toHaveProperty('maxFramesInFlight')
+  })
+
+  it('stops the screencast its own capability probe started', async () => {
+    // The probe reaches an old browser as a real `Page.startScreencast` at two
+    // pixels square. Mutation: skip the stop, and the capture's own start then
+    // runs against a screencast that is already going.
+    const { journal, session } = fakeSession({ knowsFramesInFlight: false })
+    const transport = await openWith(session)
+
+    await transport.start({
+      framesInFlight: 12,
+      onError: vi.fn(),
+      onFrame: vi.fn(),
+      quality: 90,
+      size: SIZE,
+    })
+
+    expect(journal.map((entry) => entry.what)).toEqual([
+      'Page.startScreencast',
+      'Page.stopScreencast',
+      'Page.startScreencast',
+    ])
   })
 
   it('reports an acknowledgement that fails before the stop', async () => {
@@ -207,6 +295,7 @@ describe('openCdpScreencast', () => {
     const onError = vi.fn()
 
     await transport.start({
+      framesInFlight: 12,
       onError,
       onFrame: vi.fn(),
       quality: 90,
@@ -230,6 +319,7 @@ describe('openCdpScreencast', () => {
     const onError = vi.fn()
 
     await transport.start({
+      framesInFlight: 12,
       onError,
       onFrame: vi.fn(),
       quality: 90,

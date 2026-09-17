@@ -871,3 +871,59 @@ and not part of this repository: `halves.sh`, `halves.log`, `cadence.py`, and
 carrying its own `capture-efficiency.json`, `presented.json` and `browser.json`.
 After the last arm the tree was restored to both changes (`git diff --stat`:
 2 files, 6 insertions, 1 deletion) and a control run confirmed 98.8 %.
+
+## Reaching the bound without a fork (added 2026-09-17)
+
+The measurement above leaves the fork's yield half resting on a recompiled
+constant. It does not have to: `maxFramesInFlight` is an official parameter of
+`Page.startScreencast` from Chromium 154 on. Playwright's `page.screencast`
+does not pass it — its Chromium delegate sends `format`, `quality`, `maxWidth`
+and `maxHeight` and nothing else — so `src/screencast-cdp.ts` drives the
+screencast over a raw CDP session instead.
+
+Measured against **stock Chrome for Testing 154.0.8037.0**, no patch, no
+self-built browser, same box, same script and same capture area as the four-arm
+measurement, three repeats interleaved between the two values:
+
+| `maxFramesInFlight`             | r1     | r2     | r3     | mean       | captured/presented     | 95 % gate |
+| ------------------------------- | ------ | ------ | ------ | ---------- | ---------------------- | --------- |
+| 3 (Chromium's own default)      | 89.5 % | 82.2 % | 88.0 % | **86.6 %** | 281-306 / 342          | fail ×3   |
+| 12 (what the patch compiled in) | 98.8 % | 98.8 % | 98.8 % | **98.8 %** | 338 / 342, three times | pass ×3   |
+
+**An unmodified browser reaches the patched build's number exactly.** 338 of
+342 in every run, the same figure all six patched arms produced, the same
+duplicate count. For capture yield the fork is now replaceable by a protocol
+parameter — the remaining reason to build it is the animated-content lock-in,
+which this project has still never measured against a metric that could see it.
+
+**And the default costs 12.2 points.** That is the figure an upstream request
+needs, and it is now measured against the documented default of 3 rather than
+against the 2 the pinned tree compiled in.
+
+Nothing between 3 and 12 has been measured, so 12 is the proven value rather
+than the known optimum.
+
+### How the capture knows whether it got the bound
+
+Not from the version string: `src/browser.ts` records why that witness is
+unusable — a patched and an unpatched build report the same version, and
+attributing a measurement to the wrong one has already cost this project three
+days. Not from the protocol definition either: that lives on the browser's
+DevTools HTTP endpoint, and Playwright launches Chromium over a pipe.
+
+So the command is asked directly. Measured against Chrome for Testing
+153.0.8010.47 and 154.0.8037.0:
+
+| sent to `Page.startScreencast`         | 153      | 154                                   |
+| -------------------------------------- | -------- | ------------------------------------- |
+| `maxFramesInFlight: 12`                | resolves | resolves                              |
+| `maxFramesInFlight: 0`                 | resolves | rejects, "must be a positive integer" |
+| `maxFramesInFlight: "x"`               | resolves | rejects, "Invalid parameters"         |
+| a parameter that does not exist at all | resolves | resolves                              |
+
+The last row is what makes this sound rather than lucky: 153 swallows anything
+it does not recognise, so a rejection can only come from a browser that
+recognises this one. A capture reports what it resolved to, and
+`demo/yield-bench.ts` refuses to print a yield number when the answer is "the
+browser has no such parameter" — the recording is fine, a number from an
+unknown regime is not.
