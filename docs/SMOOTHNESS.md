@@ -1,243 +1,244 @@
-# Bewegungsglätte am fertigen Video
+# Motion smoothness on the finished video
 
-Gemessen und gebaut 2026-09-12. Werkzeug: `tools/smoothness/`.
+Measured and built 2026-09-12. Tool: `tools/smoothness/`.
 
-**Sprache dieses Dokuments:** Deutsch, abweichend von den übrigen Dateien in
-`docs/`. Grund: das Werkzeug selbst spricht Deutsch — seine Ausgabe kennt
-„Haker", „Störstelle", „Nachholsprung", „NICHT MESSBAR". Ein englisches
-Dokument müsste die Etiketten seines eigenen Gegenstands übersetzen und
-würde damit eine zweite Benennung erzeugen, die sofort driftet.
+**A note on the labels.** The tool itself speaks German — its output, its
+command-line switches and its JSON keys use `Haker`, `Störstelle`,
+`Nachholsprung`, `NICHT MESSBAR`, `--lauf`, `haelt`. Those are quoted here
+exactly as the tool prints them and are not translated, because a second set
+of names for the same thing would drift apart from the first within a week.
+The prose around them is English: a hitch is a `Haker`, a disturbance is a
+`Störstelle`, a catch-up jump is a `Nachholsprung`, and `NICHT MESSBAR` means
+not measurable.
 
-## Warum es dieses Werkzeug gibt
+## Why this tool exists
 
-Jede Zahl, die dieses Projekt bisher berichtet, ist ein Zähler **innerhalb**
-der Aufnahmekette: `src/efficiency.ts` zählt, wie viel von dem, was Chromium
-auf den Schirm gebracht hat, auch angekommen ist; `src/presented.ts` liefert
-den Nenner dazu; `src/cadence.ts` misst die Lieferabstände der Quelle. Keine
-davon sieht das fertige MP4 jemals an.
+Every number this project has reported so far is a counter **inside** the
+capture chain: `src/efficiency.ts` counts how much of what Chromium put on the
+screen actually arrived; `src/presented.ts` supplies the denominator for it;
+`src/cadence.ts` measures the delivery spacing of the source. None of them
+ever looks at the finished MP4.
 
-Der Owner sieht genau das an, und sein Urteil zum `compare3`-Lauf (gepatchtes
-Chromium, beide Fixes, 98,2 % Aufnahme-Effizienz) war: _deutlich besser, aber
-nicht ruckelfrei — zwei Haker, in beide Richtungen._ 98,2 % und ein sichtbarer
-Haker sind kein Widerspruch. Sie messen Verschiedenes. Dieses Werkzeug misst
-das Erzeugnis.
+The owner looks at exactly that, and his verdict on the `compare3` run (patched
+Chromium, both fixes, 98.2 % capture efficiency) was: _clearly better, but not
+free of judder — two hitches, in both directions._ 98.2 % and a visible hitch
+are not in contradiction. They measure different things. This tool measures
+the artifact.
 
-## Was gemessen wird
+## What is measured
 
-Der Versatz von Bild zu Bild, in Pixeln, für jedes Paar aufeinanderfolgender
-Ausgabebilder — und daraus, je Bewegungsfenster, wie gleichmäßig diese
-Versätze verteilt sind.
+The displacement from frame to frame, in pixels, for every pair of consecutive
+output frames — and from that, per motion window, how evenly those
+displacements are distributed.
 
-Der Versatz wird mit **Phasenkorrelation über FFT** bestimmt, die einen Wert
-nur gelten lässt, wenn ihr Korrelationsgipfel deutlich besser ist als ihr
-bestes Nebenmaximum. Als zweite, anders gebaute Meinung läuft **blockweiser
-Lucas-Kanade-Fluss**. Widersprechen sich beide, entscheidet ein dritter Test
-direkt am Bild: ob das Zurückschieben um den behaupteten Versatz den
-Restunterschied dort halbiert, wo sich überhaupt etwas geändert hat.
+The displacement is determined by **phase correlation over FFT**, which only
+lets a value stand if its correlation peak is clearly better than its best
+secondary maximum. As a second, differently built opinion, **block-wise
+Lucas-Kanade flow** runs alongside. If the two disagree, a third test decides
+directly on the image: whether shifting back by the claimed displacement
+halves the residual difference in the places where anything changed at all.
 
-**Warum nicht einfacher.** Während der Fehlersuche entstand ein Schätzer nach
-dem Prinzip „kleinste mittlere Differenz". Er verhakte sich am Spaltenraster
-der Tabelle und meldete konstant 111 px für Bilder, die sich kaum bewegt
-hatten — zuversichtlich, ohne Zweifel. Auf senkrechter Bewegung ist er blind,
-weil er nur über waagerechten Versätzen sucht, und er weist diese Annahme
-nirgends aus. Beide Fehler sind in `tests/test_naiver_schaetzer.py`
-festgehalten, damit der Grund für den Aufwand nicht verloren geht.
+**Why not simpler.** During triage an estimator was written on the
+"smallest mean difference" principle. It locked onto the table's column pitch
+and reported a constant 111 px for frames that had barely moved — confidently,
+without doubt. On vertical motion it is blind, because it only searches over
+horizontal displacements, and it declares that assumption nowhere. Both faults
+are pinned in `tests/test_naiver_schaetzer.py`, so the reason for the effort is
+not lost.
 
-**Warum nicht ffmpeg-Bordmittel.** `scdet` findet Szenenwechsel sauber,
-`signalstats.YDIF` zählt wiederholte Bilder gut (18 gefunden bei 19 wahren,
-Nenner 60 Bilder), `freezedetect` und `mpdecimate` liefern nur Ja/Nein je
-Bild. Keines davon gibt einen Versatz in Pixeln aus, also kann keines sagen,
-_wie_ glatt eine Bewegung ist. Die Bewegungsvektoren des Codecs sind über
-`ffprobe` nicht numerisch lesbar — `side_data_list` enthält nur den Eintrag
-`{"side_data_type": "Motion vectors"}` ohne Werte — und sie sind ohnehin eine
-Entscheidung des Kodierers, keine Bewegungswahrheit.
+**Why not ffmpeg's own facilities.** `scdet` finds scene changes cleanly,
+`signalstats.YDIF` counts repeated frames well (18 found against 19 true,
+denominator 60 frames), `freezedetect` and `mpdecimate` deliver only yes/no per
+frame. None of them outputs a displacement in pixels, so none of them can say
+_how_ smooth a movement is. The codec's motion vectors are not numerically
+readable through `ffprobe` — `side_data_list` contains only the entry
+`{"side_data_type": "Motion vectors"}` with no values — and they are an
+encoder's decision anyway, not a truth about motion.
 
-## Die Definition „Haker"
+## The definition of a hitch
 
-> Ein **Haker** ist eine Stelle innerhalb der Reisestrecke einer
-> gleichgerichteten Bewegung, an der der Bild-zu-Bild-Versatz vom Tempo
-> seiner unmittelbaren Nachbarn abweicht: entweder **mindestens zwei
-> aufeinanderfolgende Bilder unter 25 % des örtlichen Tempos**
-> (Stillstand ≥ 33 ms), oder **ein Einzelschritt über dem Doppelten des
-> örtlichen Tempos** (Nachholsprung). Ereignisse, die weniger als vier
-> Bilder auseinander liegen, sind **eine** Störstelle — das Auge kann zwei
-> Stolperer 50 ms auseinander nicht trennen. Gezählt werden Störstellen.
+> A **hitch** (`Haker`) is a place within the travel of a uni-directional
+> movement where the frame-to-frame displacement departs from the pace of its
+> immediate neighbours: either **at least two consecutive frames below 25 % of
+> the local pace** (a stall of ≥ 33 ms), or **a single step above twice the
+> local pace** (a catch-up jump). Events less than four frames apart are
+> **one** disturbance — the eye cannot separate two stumbles 50 ms apart. What
+> is counted is disturbances.
 
-## Schwere: wie schlimm, nicht nur wie oft
+## Severity: how bad, not only how often
 
-Die Zahl der Haker allein ordnet falsch (Ticket 29). Am echten Material bekam der
-Standard-Browser, der die ganze Seitwärts-Strecke in einem Bild überspringt,
-**einen** Haker, der gepatchte Bau mit zwei kleinen Nachholern **zwei**. Die
-Zahl sagt, dass etwas geschah, nie wie schlimm.
+The number of hitches on its own ranks wrongly (ticket 29). On real material
+the stock browser, which skips the whole sideways travel in one frame, got
+**one** hitch; the patched build with two small catch-ups got **two**. The
+count says that something happened, never how bad it was.
 
-Jedes Urteil nennt deshalb den **größten Sprung in Gleichschritten**. Ein
-Gleichschritt ist die Sollstrecke geteilt durch die Bildpaare des Fensters —
-der Schritt, den eine vollkommen gleichmäßige Bewegung je Bild machen würde.
-Beide Größen kommen aus `motion-windows.json`, nicht aus der Messung. Ein
-Sprung von 15 Gleichschritten heißt: in einem Bild kommt die Strecke von 15
-Bildern an. Jede Störstelle trägt außerdem ihren größten Schritt in Pixeln
-und ihre stehende Zeit in Millisekunden.
+Every verdict therefore names the **largest step in even steps**. An even step
+is the target distance divided by the window's frame pairs — the step a
+perfectly uniform movement would take per frame. Both quantities come from
+`motion-windows.json`, not from the measurement. A jump of 15 even steps means
+that the travel of 15 frames arrives in one. Every disturbance additionally
+carries its largest step in pixels and its stalled time in milliseconds.
 
-Liefert ein einzelnes Bildpaar **mindestens die Hälfte der Sollstrecke**
-(`teleport_anteil`), heißt das Urteil **Teleport**: zwischen den Sprüngen
-existiert die Bewegung nicht. Offenlegung: dieser Wert wurde nach dem Blick
-auf die drei Browser-Arme eingeführt (ungepatcht 82–95 %, gepatcht 20 %) und
-liegt absichtlich weit zwischen beiden.
+If a single frame pair delivers **at least half the target distance**
+(`teleport_anteil`), the verdict is called **teleport**: between the jumps the
+movement does not exist. Disclosure: this value was introduced after looking
+at the three browser arms (unpatched 82–95 %, patched 20 %) and sits
+deliberately far between the two.
 
-Den Sprungfaktor gegen das örtliche Tempo gibt es nur, wo es ein örtliches
-Tempo gibt. Stehen die Nachbarn still (unter `still_px`), teilte die erste
-Fassung durch 10⁻⁶ und meldete Nachholsprünge vom 110-millionenfachen Tempo.
-Dort steht jetzt kein Faktor, sondern der Schritt in Pixeln.
+The jump factor against the local pace exists only where there is a local
+pace. When the neighbours stand still (below `still_px`), the first version
+divided by 10⁻⁶ and reported catch-up jumps at 110 million times the pace.
+There is no factor there now, but the step in pixels.
 
-**Läufe vergleichen.** `smoothness --vergleiche a.json b.json c.json` ordnet
-Berichte desselben Aufnahmeskripts von glatt nach hakelig, nach dem größten
-Sprung in Gleichschritten. Verglichen wird nur über Fenster, die in **jedem**
-Lauf beurteilt wurden, und deren Anzahl steht in der Ausgabe — sonst gewinnt
-der Lauf, dessen schlimmstes Fenster zufällig verweigert wurde.
+**Comparing runs.** `smoothness --vergleiche a.json b.json c.json` orders
+reports from the same recording script from smooth to hitchy, by the largest
+step in even steps. The comparison runs only over windows that were judged in
+**every** run, and their number is printed in the output — otherwise the run
+whose worst window happened to be refused wins.
 
-## Die Stellschrauben und ihre Begründung
+## The knobs and their justification
 
-Alle stehen in `tools/smoothness/smoothness/knobs.py`, jede genau einmal, und
-`smoothness --erklaere-schwelle` druckt sie samt Begründung aus. Die vier,
-die die Definition oben tragen:
+All of them live in `tools/smoothness/smoothness/knobs.py`, each exactly once,
+and `smoothness --erklaere-schwelle` prints them with their justification. The
+four that carry the definition above:
 
-| Stellschraube      | Wert | Warum dieser Wert                                                                                                                                                                                                                                                       |
-| ------------------ | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `stall_frac`       | 0,25 | Verglichen wird gegen das **örtliche** Tempo, nicht gegen den Fenster-Median. Das Produkt scrollt mit Anlauf- und Bremskurve; ein fester Maßstab zählte jede Beschleunigung als Sprung — erste Fassung: 33 Haker in einem 47-Bild-Fenster.                              |
-| `stall_min_frames` | 2    | Zwei Bilder sind 33 ms, die gebräuchliche Sichtbarkeitsgrenze für Aussetzer bei 60 Hz. Ein-Bild-Aussetzer werden nicht verschwiegen, sondern getrennt als _Mikro-Aussetzer_ mit eigenem Nenner ausgewiesen.                                                             |
-| `jump_factor`      | 2,0  | Der Punkt, an dem ein Bild mehr als die Strecke zweier Bilder überspringt — also mindestens ein Bild fehlt.                                                                                                                                                             |
-| `merge_gap`        | 4    | Die Fusionsgrenze der Wahrnehmung. **Offenlegung zur Reihenfolge:** dieser Wert wurde _nach_ dem ersten Lauf am echten Material eingeführt, weil dort fünf bis sechs Einzelereignisse in 0,3 s auftraten. Begründet ist er mit der Wahrnehmung, nicht mit dem Ergebnis. |
+| Knob               | Value | Why this value                                                                                                                                                                                                                                                     |
+| ------------------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `stall_frac`       | 0.25  | The comparison is against the **local** pace, not against the window median. The product scrolls with an acceleration and braking curve; a fixed yardstick counted every acceleration as a jump — first version: 33 hitches in a 47-frame window.                  |
+| `stall_min_frames` | 2     | Two frames are 33 ms, the usual visibility threshold for dropouts at 60 Hz. Single-frame dropouts are not concealed but reported separately as _micro-dropouts_ with a denominator of their own.                                                                   |
+| `jump_factor`      | 2.0   | The point at which one frame skips more than the travel of two frames — so at least one frame is missing.                                                                                                                                                          |
+| `merge_gap`        | 4     | The fusion threshold of perception. **Disclosure about the order of events:** this value was introduced _after_ the first run on real material, because five or six separate events occurred there within 0.3 s. It is justified by perception, not by the result. |
 
-## Die beiden äußeren Schranken
+## The two external bounds
 
-Beides sind Kriterien, die **nicht** aus der Rechnung stammen, die sie
-prüfen. Ein Fenster, das eine von beiden reißt **oder nicht prüfen kann**,
-bekommt **kein** Glätte-Urteil, sondern `NICHT MESSBAR` mit Grund.
+Both are criteria that do **not** come from the calculation they check. A
+window that breaks either of them **or cannot check it** gets **no** smoothness
+verdict, but `NICHT MESSBAR` with a reason.
 
-Der zweite Halbsatz kam am 2026-09-12 hinzu (Ticket 28): die erste Fassung hielt
-das Urteil nur bei einer _gerissenen_ Schranke zurück. Sortier-Fenster, in
-denen die Tabelle nur neu zeichnet, haben keine Sollstrecke — und bekamen
-trotzdem einen Haker samt einer Richtung, die aus einer Messung von exakt 0 px
-„abgeleitet" war. Damit liefert auch die eigene Zerlegung (ohne `--lauf`)
-nur noch Messwerte, kein Urteil: sie hat keine Sollstrecke.
+The second half of that sentence was added on 2026-09-12 (ticket 28): the
+first version withheld the verdict only for a _broken_ bound. Sort windows, in
+which the table merely re-renders, have no target distance — and got a hitch
+anyway, along with a direction "derived" from a measurement of exactly 0 px.
+As a result the tool's own segmentation (without `--lauf`) now delivers
+measurements only, no verdict: it has no target distance.
 
-**Streckenabgleich.** Die Summe der gemessenen Einzelversätze muss die
-unabhängig bekannte Strecke treffen (Toleranz 10 %). Die Sollstrecke steht im
-Feld `target` der `motion-windows.json` (`src/m1-benchmark.ts` schreibt dort
-die Scrollweite des Elements hinein) und wird mit dem Maßstab in
-Ausschnittspixel umgerechnet. Der gescheiterte Schätzer hätte hier 24 statt
-135 px geliefert und wäre durchgefallen.
+**Travel-distance check.** The sum of the measured individual displacements
+must hit the independently known travel distance (tolerance 10 %). The target
+distance is in the `target` field of `motion-windows.json`
+(`src/m1-benchmark.ts` writes the element's scroll distance there) and is
+converted into crop pixels using the scale. The failed estimator would have
+delivered 24 px instead of 135 px here and would have been rejected.
 
-**60-Hz-Schranke.** In einem Fenster, das laut unabhängiger Quelle _d_
-Sekunden dauert, können höchstens 60·_d_+1 Bilder stecken.
+**60 Hz bound.** A window that lasts _d_ seconds according to an independent
+source can contain at most 60·_d_+1 frames.
 
-## Was an dieser Schranke zweimal falsch war
+## What was twice wrong about this bound
 
-Diese beiden Absätze bleiben stehen, weil derselbe Fehler in diesem Projekt
-inzwischen viermal aufgetreten ist und jedes Mal plausibel aussah.
+These two paragraphs stay, because the same mistake has now occurred four
+times in this project and looked plausible every time.
 
-**Erster Fehler (Prototyp, behoben vor dem Einzug ins Repo).** Die erste
-Fassung berechnete die Fensterdauer aus der eigenen Bildzählung. `n` Bilder
-ergeben `n/60` Sekunden ergeben eine Obergrenze von `n` Bildern — die
-Schranke konnte deshalb **nie** anschlagen. Derselbe Zirkelschluss wie in
-`src/paint-rate.ts` und in der ersten Fassung von `src/presented.ts`.
-Behoben, indem die Dauer ein eigener Typ mit Herkunft wurde
-(`bounds.Dauer`); eine Dauer aus der eigenen Bildzählung wird ausdrücklich
-abgelehnt.
+**First mistake (prototype, fixed before it moved into the repository).** The
+first version computed the window duration from its own frame count. `n`
+frames give `n/60` seconds give an upper bound of `n` frames — so the bound
+could **never** fire. The same circular argument as in `src/paint-rate.ts` and
+in the first version of `src/presented.ts`. Fixed by making the duration a type
+of its own that carries its provenance (`bounds.Dauer`); a duration derived
+from the tool's own frame count is explicitly rejected.
 
-**Zweiter Fehler (beim Einzug ins Repo gefunden, 2026-09-12).** Damit war es
-nicht getan. Sobald die Fenstergrenzen aus derselben Dauer abgeleitet werden
-— und genau das tut `windows.aus_lauf`, indem es Videozeit in Ausgabebilder
-umrechnet —, ist die Zahl der **Ausgabebilder** im Fenster per Konstruktion
-wieder höchstens 60·_d_+1. Der Zirkelschluss war eine Ebene höher
-zurückgekehrt. Gezählt werden deshalb jetzt die **Aufnahmebilder** aus
-`timestamps.json`: sie stammen aus einer anderen Messung als die
-Fenstergrenzen und können sehr wohl zu viele sein. Fehlt eine solche
-unabhängige Zahl, meldet die Schranke `haelt: null` mit dem Grund
-„tautologisch" — nicht „bestanden".
+**Second mistake (found on the way into the repository, 2026-09-12).** That was
+not the end of it. As soon as the window boundaries are derived from the same
+duration — and that is exactly what `windows.aus_lauf` does, by converting
+video time into output frames — the number of **output frames** in the window is
+by construction at most 60·_d_+1 again. The circular argument had come back one
+level up. What is counted now is therefore the **capture frames** from
+`timestamps.json`: they come from a different measurement than the window
+boundaries and can very well be too many. If no such independent number exists,
+the bound reports `haelt: null` with the reason "tautological" — not "passed".
 
-## Verweigern statt benoten
+## Refusing rather than grading
 
-Drei Ergebnisse sind zu unterscheiden, und das Werkzeug unterscheidet sie:
-geprüft und bestanden, geprüft und gerissen, **gar nicht geprüft**. Das
-dritte ist kein Bestehen. Ein Lauf, in dem kein Fenster auswertbar war, sagt
-wörtlich: „KEIN auswertbares Bewegungsfenster gefunden — das ist KEIN gutes
-Zeugnis, sondern eine Verweigerung", und meldet dazu das Zappel-Maß (wie oft
-die Bewegung die Richtung wechselt).
+Three outcomes have to be distinguished, and the tool distinguishes them:
+checked and passed, checked and broken, **not checked at all**. The third is
+not a pass. A run in which no window was evaluable says so literally: "KEIN
+auswertbares Bewegungsfenster gefunden — das ist KEIN gutes Zeugnis, sondern
+eine Verweigerung" ("no evaluable motion window found — that is not a clean
+bill of health but a refusal"), and reports the jitter measure alongside it
+(how often the movement changes direction).
 
-Jeder Bericht beginnt mit einer **Zusammenfassung**: wie viele Fenster des
-Laufs beurteilt und wie viele zurückgehalten wurden, mit Grund je Fenster
-(`strecke_ungeprueft`, `strecke_verfehlt`, `60hz_ungeprueft`,
-`60hz_verletzt`, `zu_wenig_gueltig`). Eine Haker-Summe ohne diesen Nenner
-läse sich wie ein Urteil über den ganzen Lauf, obwohl sie am echten Material
-nur 10 von 38 Fenstern abdeckt.
+Every report begins with a **summary**: how many of the run's windows were
+judged and how many were withheld, with a reason per window
+(`strecke_ungeprueft`, `strecke_verfehlt`, `60hz_ungeprueft`, `60hz_verletzt`,
+`zu_wenig_gueltig`). A hitch total without that denominator would read like a
+verdict on the whole run, when on real material it covers only 10 of 38
+windows.
 
-Links und rechts werden getrennt ausgewiesen und nie gemittelt. Der Owner
-berichtet Haker in beiden Richtungen; ein Mittelwert hätte sie gegeneinander
-aufgehoben.
+Left and right are reported separately and never averaged. The owner reports
+hitches in both directions; an average would have cancelled them against each
+other.
 
-## Grenzen
+## Limits
 
-Was dieses Werkzeug **nicht** kann und was an ihm **nicht** geprüft ist. Die
-Liste ist der ehrliche Teil der Messung und wird nicht gekürzt.
+What this tool **cannot** do and what about it is **not** proven. The list is
+the honest part of the measurement and is not shortened.
 
-- **Keine Farbe.** Alles wird auf Graustufen gemessen. Eine Bewegung, die
-  sich nur im Farbkanal zeigt, sieht das Werkzeug nicht.
-- **Nur Verschiebung.** Geprüft sind Translationen. Drehung, Skalierung
-  (Zoom), Überblendung und Deckkraft-Animationen sind nicht modelliert. Der
-  Eichfall c8 zeigt lediglich, dass eine _lokale_ Nebenanimation (drehendes
-  Symbol, einblendender Tooltip) nicht stört.
-- **Nur ein Bewegungsobjekt.** Scrollen zwei Bereiche gleichzeitig
-  verschieden schnell, misst das Werkzeug den Mehrheitsversatz. Dieser Fall
-  ist nicht geprüft.
-- **Die Schwelle ist nicht gegen das Auge geeicht.** Eine Eichreihe „ab hier
-  nennt der Owner es hakelig" hat es in diesem Projekt nie gegeben. Die Werte
-  sind aus 60-Hz-Physik und aus dem Material begründet. Gegen das Auge
-  festgenagelt ist bisher nur die **Reihenfolge** der drei Browser-Arme
-  (`tests/test_browser_arme.py`), keine Schwelle. Die Eichreihe steht in Ticket 30
-  aus und braucht einen erreichbaren Aufnahmerechner.
-- **Standard hinter ungepatcht hängt an einem Fenster.** Beide ungepatchten
-  Arme teleportieren; dass der Standard-Browser als der schlimmere gilt, wie
-  der Owner sagt, trägt allein `tasks:scroll-right:2` (128 gegen 111 px). Die
-  Trennung gepatcht gegen ungepatcht ist breit (4,7 gegen 15,6 Gleichschritte).
-- **Die Grenze des Verfahrens ist der Alias-Fall.** Bei exakt periodischem
-  Inhalt und großem Versatz je Bild sind zwei verschiedene Versätze dieselbe
-  Bildinformation (bei Rasterperiode 111 px: +70 und −41). Aus zwei Bildern
-  ist das prinzipiell nicht entscheidbar. Das Werkzeug verweigert dort die
-  Mehrheit der Bildpaare und nimmt einen Rest falsch an; aufgefangen wird das
-  erst von der Streckenschranke. Eichfall `c12`, festgehalten in
-  `tests/test_eichung.py`.
-- **Viertelgeschwindigkeits-Videos taugen nicht.** In den Zeitlupendateien
-  des Vergleichslaufs sind 61–71 % der Bilder Wiederholungen der Zeitlupe
-  selbst. Gemessen, nicht angenommen.
-- **Echte Laufdaten: drei Läufe, je einer pro Browser.** Seit 2026-09-13
-  prüft `tests/test_browser_arme.py` gegen die Bildpaare und Laufdateien
-  dreier echter Aufnahmen (Herkunft und Prüfsummen in
-  `tests/browser_arme/`). Der Streckenabgleich hält dort auf den
-  `tasks`-Scrolls und auf `invoices:scroll-down`; **`invoices:scroll-up`
-  reißt ihn in allen sechs Fällen mit derselben Abweichung** von rund 20 %.
-  Das ist systematisch, nicht Rauschen, und nicht geklärt (Ticket 31).
-  Wiederholbarkeit über mehrere Läufe _desselben_ Browsers ist nicht gezeigt.
-- **Laufzeit.** Ein ganzer Lauf (rund 4300 Bilder zu 1920×1080) braucht 130
-  bis 180 s und unter 300 MB Speicher. Für CI ist das nicht erprobt; die
-  Python-Tests laufen in der CI dieses Repos derzeit gar nicht (Ticket 32).
+- **No colour.** Everything is measured on greyscale. A movement that shows up
+  only in the colour channel is invisible to the tool.
+- **Translation only.** What is proven are translations. Rotation, scaling
+  (zoom), cross-fades and opacity animations are not modelled. Calibration case
+  c8 shows only that a _local_ side animation (a rotating icon, a tooltip
+  fading in) does not interfere.
+- **One moving object only.** If two areas scroll at different speeds at the
+  same time, the tool measures the majority displacement. That case is not
+  proven.
+- **The threshold is not calibrated against the eye.** A calibration series of
+  the form "from here on the owner calls it hitchy" has never existed in this
+  project. The values are argued from 60 Hz physics and from the material. What
+  is pinned against the eye so far is only the **ordering** of the three browser
+  arms (`tests/test_browser_arme.py`), no threshold. The calibration series is
+  outstanding in ticket 30 and needs a reachable capture machine.
+- **Stock behind unpatched rests on a single window.** Both unpatched arms
+  teleport; that the stock browser counts as the worse of the two, as the owner
+  says, rests entirely on `tasks:scroll-right:2` (128 against 111 px). The
+  separation between patched and unpatched is wide (4.7 against 15.6 even
+  steps).
+- **The method's limit is the aliasing case.** With exactly periodic content
+  and a large displacement per frame, two different displacements are the same
+  image information (at a raster period of 111 px: +70 and −41). From two
+  frames that is in principle undecidable. The tool refuses the majority of
+  frame pairs there and gets a remainder wrong; only the travel-distance bound
+  catches that. Calibration case `c12`, pinned in `tests/test_eichung.py`.
+- **Quarter-speed videos are no good.** In the slow-motion files of the
+  comparison run, 61–71 % of the frames are repetitions of the slow motion
+  itself. Measured, not assumed.
+- **Real run data: three runs, one per browser.** Since 2026-09-13
+  `tests/test_browser_arme.py` checks against the frame pairs and run files of
+  three real recordings (provenance and checksums in `tests/browser_arme/`).
+  The travel-distance check holds there on the `tasks` scrolls and on
+  `invoices:scroll-down`; **`invoices:scroll-up` breaks it in all six instances
+  with the same deviation** of around 20 %. That is systematic, not noise, and
+  unexplained (ticket 31). Repeatability across several runs of the _same_
+  browser has not been shown.
+- **Run time.** A whole run (around 4300 frames at 1920×1080) takes 130 to
+  180 s and under 300 MB of memory. It is untested for CI; the Python tests do
+  not run in this repository's CI at all at present (ticket 32).
 
-## Was der Prototyp am echten Material gemessen hat
+## What the prototype measured on real material
 
-Diese Zahlen stammen aus dem Vorlauf (`.claude/handoffs/messtechnik-glaette.md`,
-2026-09-12) und sind hier **nicht** nachgestellt — das Vergleichsvideo liegt
-nicht im Repo. Sie stehen hier, weil sie die Frage des Owners beantworten,
-und sie gelten als ungeprüft, bis ein Lauf sie wiederholt.
+These numbers come from the preliminary work
+(`.claude/handoffs/messtechnik-glaette.md`, 2026-09-12) and are **not**
+reproduced here — the comparison video is not in the repository. They are here
+because they answer the owner's question, and they count as unproven until a
+run repeats them.
 
-| Lauf                           | Bildpaare | Median-Schritt | größter Einzelsprung | wiederholte Bilder | Urteil       |
-| ------------------------------ | --------- | -------------- | -------------------- | ------------------ | ------------ |
-| Feld 1, Standard-Browser       | 8         | 1,70 px        | **55,49 px**         | 3/8 = 37,5 %       | 1 Störstelle |
-| Feld 2, eigener Bau ungepatcht | 8         | 1,70 px        | **55,51 px**         | 3/8 = 37,5 %       | 1 Störstelle |
-| Feld 3, gepatcht               | 17        | 3,68 px        | 13,87 px             | 3/17 = 17,6 %      | **2 Haker**  |
-| Feld 3, gepatcht (2. Fenster)  | 20        | 2,27 px        | 13,87 px             | 4/20 = 20,0 %      | **2 Haker**  |
+| Run                            | frame pairs | median step | largest single jump | repeated frames | verdict       |
+| ------------------------------ | ----------- | ----------- | ------------------- | --------------- | ------------- |
+| panel 1, stock browser         | 8           | 1.70 px     | **55.49 px**        | 3/8 = 37.5 %    | 1 disturbance |
+| panel 2, self-built, unpatched | 8           | 1.70 px     | **55.51 px**        | 3/8 = 37.5 %    | 1 disturbance |
+| panel 3, patched               | 17          | 3.68 px     | 13.87 px            | 3/17 = 17.6 %   | **2 hitches** |
+| panel 3, patched (2nd window)  | 20          | 2.27 px     | 13.87 px            | 4/20 = 20.0 %   | **2 hitches** |
 
-Der Standard-Browser scrollt nicht, er springt: 55,5 von 67,4 px Gesamtstrecke,
-also 82 %, passieren in einem einzigen Bild. Der gepatchte Bau verteilt
-dieselbe Strecke auf 17 bis 20 Bilder. Das ist der Gewinn der Patches,
-erstmals am Erzeugnis gemessen — und die zwei verbleibenden Störstellen sind
-der Größenordnung nach das, was der Owner gesehen hat.
+The stock browser does not scroll, it jumps: 55.5 of 67.4 px total travel, so
+82 %, happen in a single frame. The patched build spreads the same travel over
+17 to 20 frames. That is the gain from the patches, measured on the artifact
+for the first time — and the two remaining disturbances are, in order of
+magnitude, what the owner saw.
