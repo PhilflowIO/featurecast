@@ -48,6 +48,7 @@ const USAGE = `featurecast run <script> [options]
   Three more exports describe the browser context, which a script cannot
   reach itself — it is handed a page that is already open:
 
+    export const devices = ['desktop-wide', { extends: 'iphone', as: 'phone-wide-capture', capture: { width: 1620, height: 2880 } }]
     export const storageStatePath = 'auth/state.json'
     export const hideSelectors = ['#cookie-banner', '#internal-card']
     export const fixedTime = '2026-01-15T09:00:00Z'
@@ -57,7 +58,9 @@ const USAGE = `featurecast run <script> [options]
   the access, it stays under \`auth/\`, which git ignores.
 
 Options
-  --devices <a,b>   Comma-separated device or preset names. Required.
+  --devices <a,b>   Comma-separated device or preset names. Overrides the
+                    script's own \`devices\` export for this run. Required only
+                    when the script does not name any.
   --all-formats     Deliver 16:9, 9:16 and 1:1 instead of the one size the
                     device promises. One recording either way.
   --out <dir>       Root output directory. Default: artifacts/<script name>.
@@ -130,7 +133,7 @@ function parseRunArguments(argv: readonly string[]):
   | undefined
   | {
       allFormats: boolean
-      devices: string[]
+      devices?: string[]
       encoder?: Encoder
       out: string
       script: string
@@ -167,18 +170,17 @@ function parseRunArguments(argv: readonly string[]):
       `featurecast run takes one script, got ${String(rest.length + 1)}: ${[script, ...rest].join(', ')}.`,
     )
   }
+  // Not required any more: a script may name its own devices, and overriding
+  // that per run is what this flag is for. An empty `--devices desktop,,` is
+  // still an empty list and reaches the pipeline as one, which refuses it
+  // there with the message that knows both sources.
   const devices = (values.devices ?? '')
     .split(',')
     .map((name) => name.trim())
     .filter((name) => name !== '')
-  if (devices.length === 0) {
-    throw new Error(
-      `--devices is required, e.g. --devices desktop-wide. Presets: ${listPresetNames().join(', ')}.`,
-    )
-  }
   return {
     allFormats: values['all-formats'] === true,
-    devices,
+    ...(devices.length > 0 ? { devices } : {}),
     out: values.out ?? `artifacts/${scriptStem(script)}`,
     script,
     upload: values.upload === true,

@@ -203,23 +203,81 @@ describe('featurecast argument handling', () => {
     expect(context.record).not.toHaveBeenCalled()
   })
 
-  it('refuses a run without --devices, and lists the presets', async () => {
+  it('refuses a run no device was named for, and names both ways to name one', async () => {
+    // The flag stopped being required when a script gained the right to name
+    // its own devices, so the refusal moved to the only place that can see
+    // both sources. It has to mention both, or it sends the reader to the one
+    // they already tried.
     const { code, harness: context } = await run(['run', 'demo/feature-xy.ts'])
-    expect(code).toBe(2)
-    expect(context.text.err).toContain('--devices is required')
-    expect(context.text.err).toContain('desktop-wide')
+    expect(code).toBe(1)
+    expect(context.text.err).toContain('--devices')
+    expect(context.text.err).toContain('export const devices')
+    expect(context.record).not.toHaveBeenCalled()
   })
 
   it('treats an empty --devices list as no list at all', async () => {
-    // `--devices ,,` parses to three empty names; recording nothing and
-    // exiting 0 would look like success.
+    // `--devices ,,` parses to three empty names. Recording nothing and
+    // exiting 0 would look like success; falling back to a script that names
+    // none is the same refusal as passing nothing.
     const { code } = await run([
       'run',
       'demo/feature-xy.ts',
       '--devices',
       ',, ',
     ])
-    expect(code).toBe(2)
+    expect(code).toBe(1)
+  })
+
+  it('films what the script names when the flag is absent', async () => {
+    const { code, harness: context } = await run(
+      ['run', 'demo/feature-xy.ts'],
+      {
+        loadScript: vi.fn(async () => ({
+          devices: ['desktop-wide'],
+          recording: async () => undefined,
+        })),
+      } as Partial<PipelineDependencies>,
+    )
+    expect(code).toBe(0)
+    expect(context.record).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets the flag override what the script names', async () => {
+    // The later, more specific instruction wins: a script says what it is
+    // normally filmed on, the flag is somebody overriding that for one run.
+    const { code, harness: context } = await run(
+      ['run', 'demo/feature-xy.ts', '--devices', 'desktop'],
+      {
+        loadScript: vi.fn(async () => ({
+          devices: ['desktop-wide', 'iphone'],
+          recording: async () => undefined,
+        })),
+      } as Partial<PipelineDependencies>,
+    )
+    expect(code).toBe(0)
+    expect(context.record).toHaveBeenCalledTimes(1)
+    expect(context.text.out).toContain('desktop')
+  })
+
+  it('refuses two devices that would land in the same directory', async () => {
+    // Allowed silently, the second recording writes its frames into the
+    // first one's directory and the render reads a mixture of the two.
+    const { code, harness: context } = await run(
+      ['run', 'demo/feature-xy.ts'],
+      {
+        loadScript: vi.fn(async () => ({
+          devices: [
+            'desktop',
+            { capture: { height: 2160, width: 3840 }, extends: 'desktop' },
+          ],
+          recording: async () => undefined,
+        })),
+      } as Partial<PipelineDependencies>,
+    )
+    expect(code).toBe(1)
+    expect(context.text.err).toContain('both be filed under "desktop"')
+    expect(context.text.err).toContain('as')
+    expect(context.record).not.toHaveBeenCalled()
   })
 
   it('trims whitespace around device names', async () => {
@@ -290,7 +348,11 @@ describe('featurecast argument handling', () => {
   })
 
   it('shows the usage alongside the complaint when arguments are wrong', async () => {
-    const { harness: context } = await run(['run', 'a.ts'])
+    // A missing script is a parse-time fault, which is the class of fault the
+    // usage text answers. A missing device is not: by then the script may
+    // already have named one, so that refusal belongs to the chain and prints
+    // without the usage.
+    const { harness: context } = await run(['run'])
     expect(context.text.err).toContain('featurecast run <script>')
   })
 })
