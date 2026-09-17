@@ -28,20 +28,28 @@ pnpm compare plain/16-9.mp4 default/16-9.mp4 big/16-9.mp4 --out looks.mp4 \
 
 ---
 
-## One recording, every format
+## Every device is filmed as that device
 
-![The same take as 16:9, 9:16 and 1:1, playing at the same time](docs/media/one-take-every-format.gif)
+![One script, three devices: desktop, tablet and phone, each in its own shape](docs/media/every-device-native.gif)
 
-Landing page, phone and social post out of one run. Each format frames the
-clicked element for itself: the wide one keeps the page around it, the tall one
-crops to a column, the square one sits in between. Nobody records three times.
+Three separate runs of one script. The phone is not a slice cut out of the
+desktop take — it is a phone: its own viewport, its own layout, its own type
+size, and a round fingertip instead of an arrow. The shapes differ in the
+picture because they differ in the device.
 
-Zoom is a crop of the original, never a magnification — so a format is only
-delivered at a size the capture can actually pay for, and told when it cannot.
+That is the part a crop cannot fake. A tall video cut out of a wide recording
+shows a desktop layout in a phone-shaped hole; this shows what the application
+does when it believes it is on a phone.
 
 ```bash
-pnpm render artifacts/tour/desktop dist/tour --formats 16:9,9:16,1:1
+pnpm featurecast run demo/fixture-tour.ts --devices desktop,tablet,iphone
 ```
+
+Eleven presets are curated and every name in Playwright's own device registry
+resolves too — [docs/DEVICES.md](docs/DEVICES.md) lists them. Any one of those
+recordings can still be delivered as 16:9, 9:16 and 1:1 at once
+(`--all-formats`), cropped out of that device's own take, which is what a crop
+is honestly for.
 
 <!--
   Two further comparisons and a full product video exist as full-resolution
@@ -51,6 +59,27 @@ pnpm render artifacts/tour/desktop dist/tour --formats 16:9,9:16,1:1
   destroys. They are uploaded once through GitHub's attachment lane and their
   URLs pasted in here. See issue #103 for the sources.
 -->
+
+---
+
+## The camera goes where the click went
+
+![The frame pushes in on the button the pointer is about to press, then pulls back out](docs/media/camera-follows-click.gif)
+
+Nobody framed this by hand. The recording logged which element the click hit,
+and the renderer moved the frame onto that element and back out again
+afterwards. Change your mind about how tight it should sit and it is a
+re-render, not another browser run:
+
+```bash
+pnpm render artifacts/tour/desktop dist/tour --zoom 2.2 --padding 90
+```
+
+The push-in is a crop of the original, never a magnification. A 2560×1600
+capture delivered as 1920×1080 has 1.33× to spend, so that is as close as the
+camera goes, and the renderer says so instead of inventing pixels. A phone
+recording has no such reserve today — it is captured at exactly the size it is
+delivered — so on a phone the camera holds still.
 
 ---
 
@@ -115,10 +144,10 @@ whole idea:
 
 Two consequences worth naming, because they are unusual:
 
-**Zoom is always a crop of the original, never a magnification.** A
-2560×1600 desktop capture does not contain a sharp 1080×1920 portrait frame —
-the largest 9:16 rectangle in it is 900×1600. featurecast delivers 900×1600
-at full sharpness and says so, instead of upscaling.
+**A format is only delivered at a size the capture can pay for.** A 2560×1600
+desktop capture does not contain a sharp 1080×1920 portrait frame — the
+largest 9:16 rectangle in it is 900×1600. featurecast delivers 900×1600 at
+full sharpness and says so, instead of upscaling.
 
 **Same decisions, same video, byte for byte.** Cropping, scaling and cursor
 drawing happen frame by frame in our own code rather than in ffmpeg's filter
@@ -127,7 +156,12 @@ identical runs produced four different videos.
 
 ---
 
-## How far the picture moves between two frames
+## Scrolling that does not look cheap
+
+A wheel moves a page in lumps — one jump per notch — and at 60 frames a second
+a viewer sees every one of them. That judder is the first thing that gives a
+demo video away. featurecast covers the same distance in eased steps instead,
+so the picture never leaps between two frames.
 
 The same 700 px of sideways travel, in the same time, through the same three
 columns of the same table. Left: whole 38.9 px wheel packets, the procedure
