@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  afterStart,
   buildCompareFilter,
   buildComparePlan,
   commonHeight,
+  compareOutputSize,
+  labelBandHeight,
   labelFontSize,
   parseCompareArguments,
   runCompare,
@@ -164,6 +167,112 @@ describe('the comparison picture', () => {
         [video(), video()],
       ),
     ).toThrow(/right label is empty/)
+  })
+})
+
+describe('the caption band', () => {
+  it('adds the caption above the picture instead of painting over it', () => {
+    const filter = buildCompareFilter(SIDES, [video(), video()])
+    for (const index of [0, 1] as const) {
+      const chain = sideChain(filter, index)
+      // The picture is pushed down by exactly the band, so the first row of
+      // the filmed application is still the first row of the picture.
+      expect(chain).toMatch(/pad=iw:ih\+(\d+):0:\1:color=black/)
+      expect(chain.indexOf('pad=')).toBeLessThan(chain.indexOf('drawtext'))
+    }
+  })
+
+  it('makes the finished frame taller than the material it is made of', () => {
+    // Without this the regression is invisible from the outside: a caption
+    // that has fallen back onto the video and a caption in a band look the
+    // same in every other assertion.
+    const probes: readonly [VideoInfo, VideoInfo] = [
+      video({ height: 1080, width: 1920 }),
+      video({ height: 1080, width: 1920 }),
+    ]
+    const size = compareOutputSize(SIDES, probes)
+    expect(size.height).toBeGreaterThan(1080)
+    expect(size.height).toBe(1080 + size.band)
+    expect(size.width).toBe(3840)
+  })
+
+  it('derives the band from the type size, not from a guessed constant', () => {
+    expect(labelBandHeight(40)).toBe(76)
+    expect(labelBandHeight(20)).toBe(38)
+    // Even, because an odd frame dimension is not encodable as yuv420p.
+    expect(labelBandHeight(21) % 2).toBe(0)
+  })
+
+  it('gives both sides the same band, so the halves stay flush', () => {
+    const filter = buildCompareFilter(
+      [
+        { label: 'x', path: 'a.mp4' },
+        { label: 'a much, much longer caption over here', path: 'b.mp4' },
+      ],
+      [
+        video({ height: 1920, width: 1080 }),
+        video({ height: 960, width: 540 }),
+      ],
+    )
+    const bands = [...filter.matchAll(/pad=iw:ih\+(\d+)/g)].map(
+      (match) => match[1],
+    )
+    expect(bands).toHaveLength(2)
+    expect(bands[0]).toBe(bands[1])
+  })
+
+  it('sits the caption inside the band rather than on the first frame row', () => {
+    const chain = sideChain(buildCompareFilter(SIDES, [video(), video()]), 0)
+    const band = /pad=iw:ih\+(\d+)/.exec(chain)?.[1] ?? '0'
+    expect(chain).toContain(`y=(${band}-text_h)/2`)
+  })
+})
+
+describe('starting both sides later', () => {
+  it('takes the offset off both sides, in the inputs’ own seconds', () => {
+    const plan = buildComparePlan(
+      SIDES,
+      [video({ durationSeconds: 30 }), video({ durationSeconds: 30 })],
+      'out.mp4',
+      { from: 10 },
+    )
+    const seeks = plan.arguments.filter((one) => one === '-ss')
+    expect(seeks).toHaveLength(2)
+    // Before each input, not once after them: `-ss` after the inputs seeks
+    // the output and would cut the front off the comparison instead of the
+    // front off the material.
+    expect(plan.arguments.indexOf('-ss')).toBeLessThan(
+      plan.arguments.indexOf('-i'),
+    )
+  })
+
+  it('re-reads which side is the longer one after the offset', () => {
+    // 12s and 11s becomes 2s and 1s: the same side is still longer here, but
+    // the hold has to shrink with it or the shorter side freezes for ten
+    // seconds of nothing.
+    const left = afterStart(
+      [video({ durationSeconds: 12 }), video({ durationSeconds: 11 })],
+      10,
+    )
+    expect(left.map((one) => one.durationSeconds)).toEqual([2, 1])
+    const filter = buildCompareFilter(
+      SIDES,
+      [video({ durationSeconds: 12 }), video({ durationSeconds: 11 })],
+      { from: 10 },
+    )
+    expect(sideChain(filter, 1)).toContain('stop_duration=1.000')
+  })
+
+  it('refuses an offset past the end of a side, naming it', () => {
+    expect(() =>
+      afterStart([video({ durationSeconds: 4, path: 'short.mp4' })], 9),
+    ).toThrow(/past the end of short\.mp4/)
+    expect(() => afterStart([video()], -1)).toThrow(/--from must be a number/)
+  })
+
+  it('leaves the command alone when nobody asks for an offset', () => {
+    const plan = buildComparePlan(SIDES, [video(), video()], 'out.mp4')
+    expect(plan.arguments).not.toContain('-ss')
   })
 })
 
