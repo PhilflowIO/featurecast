@@ -216,6 +216,35 @@ Sitzungen laufen ab. Wenn eine Aufnahme plötzlich die Anmeldeseite filmt,
 ist nicht das Skript kaputt, sondern die Datei alt: den Befehl oben
 wiederholen.
 
+### Oder die Sitzung in einem `prepare`-Schritt
+
+Ein Ziel mit einem gewöhnlichen Anmeldeformular braucht dafür keinen
+Menschen. `demo/raven-meetings.ts` trennt das in zwei Aufrufe: `prepare`
+meldet sich kopflos an und schreibt `auth/state.json`, `record` fährt die
+Aufnahme darüber.
+
+```sh
+RAVEN_DEMO_EMAIL=… RAVEN_DEMO_PW=… pnpm exec tsx demo/raven-meetings.ts prepare
+pnpm exec tsx demo/raven-meetings.ts record
+```
+
+Zwei Entscheidungen darin sind Absicht und nicht Geschmack.
+
+**Über das Formular, nicht über die Anmelde-Schnittstelle.** Ein
+HTTP-Aufruf gäbe dasselbe Sitzungs-Cookie in einem Bruchteil der Zeit, aber
+die Oberfläche legt beim Anmelden zusätzlich Zustand im Browser ab. Wer nur
+das Cookie holt, filmt beim ersten Lauf einen Zustand, den ein Mensch so nie
+zu sehen bekommt.
+
+**Gewartet wird auf die Überschrift, nicht auf die Adresse.** Die Adresse
+wechselt, bevor die Liste geladen hat. Ein Zustand, der in diesem Moment
+gespeichert wird, kann einen halben Login enthalten — und der Fehler zeigt
+sich dann erst in der Aufnahme.
+
+Die Zugangsdaten stehen in keiner Zeile des Skripts. Sie kommen aus der
+Umgebung, und sie gehören in einen Secret-Store — aus demselben Grund, aus
+dem `auth/` nicht versioniert ist.
+
 ## Rezept: Cookie-Banner wegblenden
 
 Zwei Wege, und der erste ist meistens der bessere.
