@@ -74,7 +74,7 @@ describe('occluded target search against a real headless Chromium', () => {
     await rm(out, { force: true, recursive: true })
 
     // The grid on a hero this size is the search's worst case for cost;
-    // the measured wall time is documented in README.md. This bound is a
+    // the measured wall time is documented in docs/INTERNALS.md. This bound is a
     // sanity ceiling, not that measurement.
     const started = Date.now()
     let clicked: unknown

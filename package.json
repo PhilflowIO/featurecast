@@ -1,7 +1,7 @@
 {
   "name": "featurecast",
   "version": "0.0.0",
-  "description": "Turn a Playwright script into a polished product demo video: smooth cursor, automatic zoom, 16:9 / 9:16 / 1:1 from one recording.",
+  "description": "Turn Playwright scripts into polished product demo videos. Cursor, zoom and framing render after the recording.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,13 +15,14 @@
     "playwright",
     "product-demo",
     "screen-recording",
-    "screencast",
+    "screen-studio-alternative",
     "demo-video",
     "video-generation",
+    "open-source",
     "ffmpeg",
+    "typescript",
     "automation",
-    "devtools-protocol",
-    "chromium"
+    "motion-design"
   ],
   "private": true,
   "type": "module",

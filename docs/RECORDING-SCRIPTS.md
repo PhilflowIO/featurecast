@@ -16,7 +16,7 @@ gibt](#was-es-noch-nicht-gibt) — und nicht als Rezept getarnt dazwischen.
 - `events.jsonl` — das Ereignis-Log v1: Kopfzeile mit `fps` und `seed`,
   danach die Zeigerbahn in 60 Hertz, Klicks, Taps, Holds, Scrolls und
   Tipp-Ereignisse, jeweils mit der Bounding-Box des getroffenen Elements.
-  Aufbau und Garantien: [README.md](../README.md#ereignis-log-v1).
+  Aufbau und Garantien: [INTERNALS.md](INTERNALS.md#ereignis-log-v1).
 - `browser.json` — welcher Chromium tatsächlich gelaufen ist (Pfad,
   Version, SHA-256 des Binärs).
 
