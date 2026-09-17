@@ -182,4 +182,45 @@ describe('a real comparison encode', () => {
     // reading the file and not an empty buffer.
     expect(Math.max(...insideTheLeftHalf)).toBeGreaterThan(80)
   }, 60_000)
+
+  it('puts three differently shaped pictures in one row, and cuts it to length', async () => {
+    const directory = await scratch()
+    const wide = join(directory, 'wide.mp4')
+    const tall = join(directory, 'tall.mp4')
+    const square = join(directory, 'square.mp4')
+    const out = join(directory, 'row.mp4')
+    // The three shapes one recording delivers, at three different lengths.
+    await testClip(wide, '640x360', 4)
+    await testClip(tall, '180x320', 3)
+    await testClip(square, '320x320', 4)
+
+    const probes = [
+      await readVideoInfo(wide),
+      await readVideoInfo(tall),
+      await readVideoInfo(square),
+    ]
+    const sides: readonly CompareSide[] = [
+      { label: 'wide for a landing page', path: wide },
+      { label: 'tall for a phone', path: tall },
+      { label: 'square for a feed', path: square },
+    ]
+    const options = { fps: 30, labelSize: 40, seconds: 2 }
+    const expected = compareOutputSize(sides, probes, options)
+    const plan = buildComparePlan(sides, probes, out, options)
+    await run(plan.command, plan.arguments)
+
+    const { stdout } = await run('ffprobe', buildFfprobeArguments(out))
+    const finished = parseVideoInfo(stdout, out)
+
+    // The measured frame, not the intended one: three pictures wide at a
+    // common height, one band taller than the material.
+    expect(finished.width).toBe(expected.width)
+    expect(finished.height).toBe(expected.height)
+    // Wide + tall + square at a common 320: nothing fell out of the row.
+    expect(finished.width).toBeGreaterThan(640)
+    expect(finished.height).toBeGreaterThan(320)
+    // The length budget is honoured, so a showcase clip cannot silently run
+    // four seconds when two were asked for.
+    expect(finished.durationSeconds).toBeLessThan(2.5)
+  }, 60_000)
 })

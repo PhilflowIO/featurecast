@@ -58,6 +58,122 @@ describe('the comparison picture', () => {
     ])
   })
 
+  it('puts three pictures in one row when three were given', () => {
+    const sides: CompareSide[] = [
+      { label: 'wide for a landing page', path: 'wide.mp4' },
+      { label: 'tall for a phone', path: 'tall.mp4' },
+      { label: 'square for a feed', path: 'square.mp4' },
+    ]
+    const probes = [
+      video({ path: 'wide.mp4', width: 1920, height: 1080 }),
+      video({ path: 'tall.mp4', width: 900, height: 1600 }),
+      video({ path: 'square.mp4', width: 1080, height: 1080 }),
+    ]
+    const filter = buildCompareFilter(sides, probes)
+    expect(filter).toContain('[side0][side1][side2]hstack=inputs=3,')
+    // Each picture is an input of its own, in the order it was named: a row
+    // that drew the same file twice would look like a comparison and be one
+    // file short of it.
+    const plan = buildComparePlan(sides, probes, 'row.mp4')
+    expect(plan.arguments.filter((one) => one === '-i')).toHaveLength(3)
+    expect(plan.arguments.filter((one) => one.endsWith('.mp4'))).toEqual([
+      'wide.mp4',
+      'tall.mp4',
+      'square.mp4',
+      'row.mp4',
+    ])
+  })
+
+  it('refuses one picture and refuses five', () => {
+    expect(() => buildCompareFilter([SIDES[0]], [video()])).toThrow(
+      /at least 2 videos/,
+    )
+    expect(() =>
+      buildCompareFilter(
+        [SIDES[0], SIDES[1], SIDES[0], SIDES[1], SIDES[0]],
+        [video(), video(), video(), video(), video()],
+      ),
+    ).toThrow(/at most 4 videos in a row/)
+  })
+
+  it('lets the caller size the caption for the width it will be read at', () => {
+    // The automatic size is a twenty-eighth of the picture, which assumes the
+    // clip is watched at its own resolution. A row destined for a README
+    // column is watched at a fraction of it, and the caption arrives there
+    // too small to read. The caller knows that width; the command cannot.
+    const automatic = buildCompareFilter(SIDES, [video(), video()])
+    expect(automatic).toContain('fontsize=39')
+    const asked = buildCompareFilter(SIDES, [video(), video()], {
+      labelSize: 90,
+    })
+    expect(asked).toContain('fontsize=90')
+    // The fit rule still wins: a caption wider than the picture it sits on
+    // would walk off the edge, which is the failure the rule exists for.
+    const absurd = buildCompareFilter(SIDES, [video(), video()], {
+      labelSize: 4000,
+    })
+    expect(absurd).not.toContain('fontsize=4000')
+    // And the band grows with the type, so the caption never lands on the
+    // picture it captions.
+    expect(asked).toContain(`pad=iw:ih+${String(labelBandHeight(90))}`)
+  })
+
+  it('escapes a colon in a caption instead of losing half of it', () => {
+    // Found in a finished picture: `16:9 for a landing page` was drawn as
+    // `9 for a landing page`, because drawtext splits its own options on
+    // colons even inside a quoted section. Nothing errored.
+    const filter = buildCompareFilter(
+      [
+        { label: '16:9 for a landing page', path: 'a.mp4' },
+        { label: '9:16 for a phone', path: 'b.mp4' },
+      ],
+      [video(), video()],
+    )
+    expect(filter).toContain(String.raw`text='16\:9 for a landing page'`)
+    expect(filter).toContain(String.raw`text='9\:16 for a phone'`)
+  })
+
+  it('counts one frame per picture and one closing the row', () => {
+    // A row of three has four frames, not three: one down the left of each
+    // picture and one shutting the right edge. Getting that count wrong makes
+    // the announced size disagree with the encoded one, which is the whole
+    // point of being able to state it.
+    const sides: CompareSide[] = [
+      { label: 'wide', path: 'wide.mp4' },
+      { label: 'tall', path: 'tall.mp4' },
+      { label: 'square', path: 'square.mp4' },
+    ]
+    const probes = [
+      video({ path: 'wide.mp4', width: 1920, height: 1080 }),
+      video({ path: 'tall.mp4', width: 1080, height: 1080 }),
+      video({ path: 'square.mp4', width: 1080, height: 1080 }),
+    ]
+    const size = compareOutputSize(sides, probes)
+    const frame = frameWidth(labelFontSize(sides, probes, 1080))
+    expect(size.frame).toBe(frame)
+    expect(size.width).toBe(1920 + 1080 + 1080 + frame * 4)
+  })
+
+  it('cuts every side to the same length budget', () => {
+    const plan = buildComparePlan(SIDES, [video(), video()], 'out.mp4', {
+      seconds: 9,
+    })
+    // On the output, after the filter graph: on an input it would be counted
+    // in input seconds, which --slow stretches.
+    expect(plan.arguments.indexOf('-t')).toBeGreaterThan(
+      plan.arguments.indexOf('-filter_complex'),
+    )
+    expect(plan.arguments[plan.arguments.indexOf('-t') + 1]).toBe('9')
+    // A budget shorter than both inputs makes them equally long, so no side
+    // freezes waiting for another.
+    const filter = buildCompareFilter(
+      SIDES,
+      [video({ durationSeconds: 30 }), video({ durationSeconds: 24 })],
+      { seconds: 9 },
+    )
+    expect(filter).not.toContain('tpad')
+  })
+
   it('burns each label into its own side of the picture', () => {
     const filter = buildCompareFilter(SIDES, [video(), video()])
     expect(sideChain(filter, 0)).toContain(
@@ -507,11 +623,25 @@ describe('the encoded comparison', () => {
 })
 
 describe('the compare command line', () => {
-  it('takes two videos and the file they go into', () => {
+  it('takes the videos and the file they go into', () => {
     const request = parseCompareArguments(['a.mp4', 'b.mp4', '--out', 'c.mp4'])
-    expect(request?.sides[0].path).toBe('a.mp4')
-    expect(request?.sides[1].path).toBe('b.mp4')
+    expect(request?.sides.map((side) => side.path)).toEqual(['a.mp4', 'b.mp4'])
     expect(request?.outputPath).toBe('c.mp4')
+  })
+
+  it('takes a third and a fourth video, in the order they were typed', () => {
+    const request = parseCompareArguments([
+      'wide.mp4',
+      'tall.mp4',
+      'square.mp4',
+      '--out',
+      'row.mp4',
+    ])
+    expect(request?.sides.map((side) => side.path)).toEqual([
+      'wide.mp4',
+      'tall.mp4',
+      'square.mp4',
+    ])
   })
 
   it('names the sides after their files unless told otherwise', () => {
@@ -530,9 +660,9 @@ describe('the compare command line', () => {
       'b.mp4',
       '--out',
       'c.mp4',
-      '--label-left',
+      '--label',
       'stock browser build',
-      '--label-right',
+      '--label',
       'patched browser build',
     ])
     expect(named?.sides.map((side) => side.label)).toEqual([
@@ -553,10 +683,54 @@ describe('the compare command line', () => {
     ).toThrow(/would\s+overwrite the material/)
   })
 
-  it('takes two videos, not three', () => {
+  it('refuses a row of one, and a row too wide to read', () => {
+    expect(() => parseCompareArguments(['a.mp4', '--out', 'c.mp4'])).toThrow(
+      /needs at least 2 videos/,
+    )
     expect(() =>
-      parseCompareArguments(['a.mp4', 'b.mp4', 'c.mp4', '--out', 'd.mp4']),
-    ).toThrow(/takes two videos, got 3/)
+      parseCompareArguments([
+        'a.mp4',
+        'b.mp4',
+        'c.mp4',
+        'd.mp4',
+        'e.mp4',
+        '--out',
+        'f.mp4',
+      ]),
+    ).toThrow(/at most 4 videos in a row, got 5/)
+  })
+
+  it('refuses more captions than there are pictures to put them on', () => {
+    // The extra caption is silently not drawn, and a row with a miscounted
+    // caption looks finished. Nothing downstream would ever surface it.
+    expect(() =>
+      parseCompareArguments([
+        'a.mp4',
+        'b.mp4',
+        '--out',
+        'c.mp4',
+        '--label',
+        'one',
+        '--label',
+        'two',
+        '--label',
+        'three',
+      ]),
+    ).toThrow(/3 captions were given for 2 videos/)
+  })
+
+  it('carries the caption size and the length budget through', () => {
+    const request = parseCompareArguments([
+      'a.mp4',
+      'b.mp4',
+      '--out',
+      'c.mp4',
+      '--label-size',
+      '96',
+      '--seconds',
+      '9',
+    ])
+    expect(request?.options).toMatchObject({ labelSize: 96, seconds: 9 })
   })
 
   it('carries the look flags through', () => {

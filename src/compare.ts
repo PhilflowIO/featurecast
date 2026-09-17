@@ -50,11 +50,58 @@ import type { FfmpegPlan } from './render/ffmpeg.js'
  * to say which side is which on its own.
  */
 
-/** One half of the picture: a file, and what to call it on screen. */
+/** One picture in the row: a file, and what to call it on screen. */
 export type CompareSide = {
   /** Burnt into the picture. Describes a *procedure*, not a product. */
   label: string
   path: string
+}
+
+/**
+ * How many pictures may stand next to each other.
+ *
+ * Two was the original answer and it was the right one for a comparison of
+ * two procedures. It stopped being the only shape the moment the question
+ * became "what does one recording deliver" rather than "which of these two is
+ * better": three aspect ratios of the same take are a row of three, and
+ * folding them into two pictures would drop one of the three.
+ *
+ * Four is the upper bound and it is about the reader, not about ffmpeg. A row
+ * is shown at some fixed width — a README column, a slide — and every extra
+ * picture divides that width again. At five the type in each one is smaller
+ * than the type around it, which is the failure this repository already paid
+ * for once.
+ */
+export const MIN_SIDES = 2
+export const MAX_SIDES = 4
+
+/** Names a position for an error message: `left`/`right` when there are two. */
+export function sideName(index: number, count: number): string {
+  if (count === 2) return index === 0 ? 'left' : 'right'
+  const ordinals = ['first', 'second', 'third', 'fourth']
+  return ordinals[index] ?? String(index + 1)
+}
+
+/**
+ * Refuses a row that is not a row.
+ *
+ * One picture is not a comparison — it is the file the caller already has —
+ * and five is unreadable at any width a reader will actually see.
+ */
+export function checkSideCount(count: number): void {
+  if (count < MIN_SIDES) {
+    throw new Error(
+      `featurecast compare needs at least ${String(MIN_SIDES)} videos; one ` +
+        'picture on its own is the file you already have.',
+    )
+  }
+  if (count > MAX_SIDES) {
+    throw new Error(
+      `featurecast compare puts at most ${String(MAX_SIDES)} videos in a row, ` +
+        `got ${String(count)}. Every extra picture divides the width the ` +
+        'reader sees it at, and past four the type stops being readable.',
+    )
+  }
 }
 
 /**
@@ -97,6 +144,18 @@ export type CompareOptions = {
   /** Output frame rate. The chain's 60 unless a caller says otherwise. */
   fps?: number
   /**
+   * How tall the caption is, in the output's own pixels.
+   *
+   * Derived from the picture height when absent, which assumes the clip is
+   * watched at the size it was encoded. A clip made for a README column is
+   * not: it is shown at whatever width that column has, and a caption that
+   * was a twenty-eighth of a 1600 pixel picture arrives there at ten pixels.
+   * The automatic size cannot know the width it will be read at, so the
+   * caller says it. The fit rule still applies — a caption asked to be wider
+   * than its own picture is brought back down rather than run off the edge.
+   */
+  labelSize?: number
+  /**
    * The height both sides are brought to.
    *
    * Defaults to the taller of the two inputs. That direction is the decision:
@@ -108,6 +167,16 @@ export type CompareOptions = {
    */
   height?: number
   quality?: OutputQuality
+  /**
+   * How many seconds of each input to use, counted from `from`.
+   *
+   * Whole inputs when absent. A showcase clip has a length budget that has
+   * nothing to do with how long the recording was — past ten seconds a
+   * reader has already scrolled — and cutting the tail off afterwards with a
+   * second tool would put the one number that decides whether the clip gets
+   * watched outside the command that made it.
+   */
+  seconds?: number
   /**
    * How much slower than real time.
    *
@@ -189,12 +258,29 @@ export function frameWidth(fontSize: number): number {
 }
 
 /**
+ * A label as drawtext will read it.
+ *
+ * The colon is the one character that has to be escaped and the one this
+ * command swore was safe: the comment on the refusal list said colons and
+ * commas pass through a quoted section untouched. Commas do. A colon does
+ * not — the filtergraph hands the quoted text to drawtext, drawtext splits
+ * its own options on colons, and `16:9 for a landing page` arrives as
+ * `9 for a landing page`. It was found in a finished picture, which is the
+ * only place it can be found: nothing errors, the caption is simply shorter
+ * than it was written and still looks deliberate.
+ */
+export function escapeLabel(label: string): string {
+  return label.replaceAll(':', String.raw`\:`)
+}
+
+/**
  * Characters a burnt-in label may not contain.
  *
  * The text travels through two unescaping passes — the filtergraph parser's
- * and drawtext's — and a quote or a backslash survives neither reliably. The
- * rest of Unicode is passed through untouched inside a quoted section, so
- * colons, commas and umlauts are fine. Anything on this list is refused by
+ * and drawtext's — and a quote or a backslash survives neither reliably.
+ * Commas and umlauts do pass through a quoted section untouched; a colon does
+ * not, and is escaped on the way out rather than refused, because `16:9` is a
+ * caption people will reasonably write. Anything on this list is refused by
  * name rather than mangled: a label that silently lost half of itself is the
  * exact failure this command exists to stop.
  */
@@ -258,9 +344,19 @@ export function commonHeight(
  * Not the probed width: the side that gets enlarged is the one whose label is
  * most likely to run off the edge, and the label has to be sized against the
  * picture it will actually sit on.
+ *
+ * Rounded *down to an even number*, because that is what `scale=-2:H` does.
+ * This was a plain rounding, and it agreed with ffmpeg for as long as every
+ * comparison was of two pictures of the same shape — the only case where the
+ * derived width is either exactly right or wrong on both sides at once. The
+ * first row of three differently shaped pictures had the predicted frame one
+ * pixel wider than the encoded one, which is the kind of disagreement that
+ * makes the announced size worthless precisely when somebody starts trusting
+ * it.
  */
 export function scaledWidth(probe: VideoInfo, height: number): number {
-  return Math.round((probe.width * height) / probe.height)
+  const exact = (probe.width * height) / probe.height
+  return Math.floor(exact) - (Math.floor(exact) % 2)
 }
 
 /**
@@ -292,8 +388,17 @@ export function labelFontSize(
   sides: readonly CompareSide[],
   probes: readonly VideoInfo[],
   height: number,
+  requested?: number,
 ): number {
-  const fromHeight = Math.round(height / 28)
+  if (
+    requested !== undefined &&
+    (!Number.isFinite(requested) || requested <= 0)
+  ) {
+    throw new Error(
+      `--label-size must be a positive number of pixels, got "${String(requested)}".`,
+    )
+  }
+  const fromHeight = requested ?? Math.round(height / 28)
   const fits = sides.map((side, index) => {
     const probe = probes[index]
     if (probe === undefined) return fromHeight
@@ -355,6 +460,30 @@ export function afterStart(
 }
 
 /**
+ * What each side is left with once a length budget has been applied.
+ *
+ * It has to reach the durations and not only the ffmpeg command, for the same
+ * reason the start offset does: the durations decide which side is the longest
+ * one and therefore how long the others hold their last frame. A budget
+ * shorter than every input makes all of them equally long, and nothing holds.
+ */
+export function afterLength(
+  probes: readonly VideoInfo[],
+  seconds: number | undefined,
+): VideoInfo[] {
+  if (seconds === undefined) return [...probes]
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error(
+      `--seconds must be a positive number of seconds, got "${String(seconds)}".`,
+    )
+  }
+  return probes.map((probe) => ({
+    ...probe,
+    durationSeconds: Math.min(probe.durationSeconds, seconds),
+  }))
+}
+
+/**
  * The size each side has once the crop has been taken, and the refusal to
  * take one that would not mean the same thing on both sides.
  *
@@ -396,7 +525,7 @@ export function afterCrop(
   for (const probe of rest) {
     if (probe.width !== first.width || probe.height !== first.height) {
       throw new Error(
-        `--crop takes the same rectangle from both sides, but ${first.path} is ` +
+        `--crop takes the same rectangle from every side, but ${first.path} is ` +
           `${String(first.width)}x${String(first.height)} and ${probe.path} is ` +
           `${String(probe.width)}x${String(probe.height)}. The same rectangle ` +
           'would be a different region of each, which is not a comparison.',
@@ -443,14 +572,15 @@ export function parseCropSpec(spec: string): CompareCrop {
 }
 
 export function buildCompareFilter(
-  sides: readonly [CompareSide, CompareSide],
-  rawProbes: readonly [VideoInfo, VideoInfo],
+  sides: readonly CompareSide[],
+  rawProbes: readonly VideoInfo[],
   options: CompareOptions = {},
 ): string {
-  const probes = afterCrop(
-    afterStart(rawProbes, options.from),
-    options.crop,
-  ) as [VideoInfo, VideoInfo]
+  checkSideCount(sides.length)
+  const probes = afterLength(
+    afterCrop(afterStart(rawProbes, options.from), options.crop),
+    options.seconds,
+  )
   const slow = options.slow ?? DEFAULT_SLOW_FACTOR
   if (!Number.isFinite(slow) || slow <= 0) {
     throw new Error(
@@ -459,11 +589,11 @@ export function buildCompareFilter(
     )
   }
   for (const [index, side] of sides.entries()) {
-    checkLabel(side.label, index === 0 ? 'left' : 'right')
+    checkLabel(side.label, sideName(index, sides.length))
   }
   const height = commonHeight(probes, options.height)
   const longest = Math.max(...probes.map((probe) => probe.durationSeconds))
-  const fontSize = labelFontSize(sides, probes, height)
+  const fontSize = labelFontSize(sides, probes, height, options.labelSize)
   const margin = Math.round(fontSize * 0.8)
   const band = labelBandHeight(fontSize)
   const frame = frameWidth(fontSize)
@@ -498,7 +628,7 @@ export function buildCompareFilter(
       `pad=iw:ih+${String(band)}:0:${String(band)}:color=${BAND_COLOUR}`,
     )
     steps.push(
-      `drawtext=text='${side.label}':expansion=none` +
+      `drawtext=text='${escapeLabel(side.label)}':expansion=none` +
         `:x=${String(margin)}:y=(${String(band)}-text_h)/2` +
         `:fontsize=${String(fontSize)}:fontcolor=white`,
     )
@@ -512,8 +642,9 @@ export function buildCompareFilter(
     return `${steps.join(',')}[side${String(index)}]`
   })
 
+  const inputs = sides.map((_, index) => `[side${String(index)}]`).join('')
   return (
-    `${chains.join(';')};[side0][side1]hstack=inputs=2,` +
+    `${chains.join(';')};${inputs}hstack=inputs=${String(sides.length)},` +
     `pad=iw+${String(frame)}:ih+${String(frame)}:0:0:color=${BAND_COLOUR}[stacked]`
   )
 }
@@ -528,27 +659,25 @@ export function buildCompareFilter(
  * otherwise indistinguishable without opening the file and looking.
  */
 export function compareOutputSize(
-  sides: readonly [CompareSide, CompareSide],
-  rawProbes: readonly [VideoInfo, VideoInfo],
+  sides: readonly CompareSide[],
+  rawProbes: readonly VideoInfo[],
   options: CompareOptions = {},
 ): { band: number; frame: number; height: number; width: number } {
-  const probes = afterCrop(
-    afterStart(rawProbes, options.from),
-    options.crop,
-  ) as [VideoInfo, VideoInfo]
+  const probes = afterCrop(afterStart(rawProbes, options.from), options.crop)
   const height = commonHeight(probes, options.height)
-  const fontSize = labelFontSize(sides, probes, height)
+  const fontSize = labelFontSize(sides, probes, height, options.labelSize)
   const band = labelBandHeight(fontSize)
   const frame = frameWidth(fontSize)
   return {
     band,
     frame,
-    // One frame down the outside of each half and one between them: three in
-    // a two-sided picture, and the last of them is the seam.
+    // One frame down the left of every picture and one closing the right:
+    // three in a row of two, four in a row of three, and all but the last of
+    // them is a seam between two pictures.
     height: height + band + frame,
     width:
       probes.reduce((total, probe) => total + scaledWidth(probe, height), 0) +
-      frame * 3,
+      frame * (probes.length + 1),
   }
 }
 
@@ -561,8 +690,8 @@ export function compareOutputSize(
  * repository that translates.
  */
 export function buildComparePlan(
-  sides: readonly [CompareSide, CompareSide],
-  probes: readonly [VideoInfo, VideoInfo],
+  sides: readonly CompareSide[],
+  probes: readonly VideoInfo[],
   outputPath: string,
   options: CompareOptions = {},
 ): FfmpegPlan {
@@ -573,22 +702,26 @@ export function buildComparePlan(
   if (!Number.isFinite(fps) || fps <= 0) {
     throw new Error(`--fps must be a positive number, got "${String(fps)}".`)
   }
-  // `-ss` before each `-i` rather than once after them: it has to seek both
-  // inputs, and the same number twice is the only offset that leaves the two
+  // `-ss` before each `-i` rather than once after them: it has to seek every
+  // input, and the same number on each is the only offset that leaves the
   // sides comparable.
   const seek = (options.from ?? 0) > 0 ? ['-ss', String(options.from)] : []
+  const inputs = sides.flatMap((side) => [...seek, '-i', side.path])
+  // `-t` on the *output*, after the filter graph, so it counts finished
+  // seconds. On the inputs it would count input seconds, which `--slow`
+  // stretches — the same number would then mean a different clip length
+  // depending on a flag that has nothing to do with length.
+  const length =
+    options.seconds === undefined
+      ? []
+      : ['-t', String(options.seconds * (options.slow ?? DEFAULT_SLOW_FACTOR))]
   return {
     arguments: [
       '-hide_banner',
       '-loglevel',
       'error',
       '-y',
-      ...seek,
-      '-i',
-      sides[0].path,
-      ...seek,
-      '-i',
-      sides[1].path,
+      ...inputs,
       '-filter_complex',
       buildCompareFilter(sides, probes, options),
       '-map',
@@ -603,6 +736,7 @@ export function buildComparePlan(
       '-pix_fmt',
       'yuv420p',
       '-an',
+      ...length,
       outputPath,
     ],
     command: 'ffmpeg',
@@ -612,41 +746,46 @@ export function buildComparePlan(
 export type CompareRequest = {
   options: CompareOptions
   outputPath: string
-  sides: readonly [CompareSide, CompareSide]
+  sides: readonly CompareSide[]
 }
 
-const USAGE = `featurecast compare — one labelled side-by-side clip out of two videos.
+const USAGE = `featurecast compare — one labelled row out of two to four videos.
 
-  pnpm compare <left.mp4> <right.mp4> --out <clip.mp4> [options]
+  pnpm compare <a.mp4> <b.mp4> [c.mp4] [d.mp4] --out <clip.mp4> [options]
 
-  The two pictures end up in one frame, next to each other, each carrying its
-  own label, slowed down so a human can actually judge them. Two clips played
-  one after the other in real time cannot be compared; that is the whole
-  reason this command exists.
+  The pictures end up in one frame, next to each other, each carrying its own
+  label, playing at the same instant. Clips played one after the other cannot
+  be judged against each other: by the time the second one plays, the first is
+  a memory. That is the whole reason this command exists.
 
   A label describes what was *done* to that side — "rendered at device
-  resolution", "upscaled from a smaller capture". It is burnt into the
-  picture, so it outlives whatever text the file was posted with.
+  resolution", "upscaled from a smaller capture", "9:16 for a phone". It is
+  burnt into the picture, so it outlives whatever text the file was posted
+  with.
 
 Options
-  --out <file>        Where the comparison goes. Required.
-  --label-left <t>    Left caption (default: the left file's name)
-  --label-right <t>   Right caption (default: the right file's name)
+  --out <file>        Where the row goes. Required.
+  --label <t>         Caption for the next unlabelled video, left to right
+                      (default: that file's name). Repeat it per video.
+  --label-size <px>   Caption height in output pixels (default: a
+                      twenty-eighth of the picture). Raise it for a clip that
+                      will be read at a fraction of its own width.
+  --seconds <n>       Use only this many seconds of each input
   --slow <n>          Slow both sides down by this factor (${String(DEFAULT_SLOW_FACTOR)}, real time).
                       An inspection tool: at a fifth speed a late frame is
                       visible, and a smooth one looks late. Do not publish it.
-  --from <s>          Skip this many seconds off the front of both sides
-  --crop <WxH+X+Y>    Compare this rectangle of both inputs instead of whole
+  --from <s>          Skip this many seconds off the front of every side
+  --crop <WxH+X+Y>    Compare this rectangle of every input instead of whole
                       frames, in the inputs' own pixels. The same rectangle on
-                      each side; both inputs must be the same size.
-  --height <px>       Common height (default: the taller input's)
+                      each side; the inputs must all be the same size.
+  --height <px>       Common height (default: the tallest input's)
   --fps <n>           Output frame rate (${String(DEFAULT_COMPARE_FPS)})
   --encoder <name>    x264, nvenc-h264 or nvenc-hevc (x264)
   --quality <n>       Constant quality, lower is better (23)
 
-Unequal inputs are handled rather than ignored: both sides are scaled to a
-common height, and the shorter one holds its last frame until the longer one
-has played out. Nothing is cropped away silently.
+Unequal inputs are handled rather than ignored: every side is scaled to a
+common height, and a short one holds its last frame until the longest has
+played out. Nothing is cropped away silently.
 `
 
 function readNumber(name: string, value: string | undefined): number {
@@ -670,10 +809,9 @@ export function parseCompareArguments(
     return undefined
   }
   const positional: string[] = []
+  const labels: string[] = []
   const options: CompareOptions = {}
   let outputPath: string | undefined
-  let labelLeft: string | undefined
-  let labelRight: string | undefined
   let encoderName: string | undefined
   let quality: number | undefined
 
@@ -691,14 +829,17 @@ export function parseCompareArguments(
         outputPath = next
         index += 1
         break
-      case '--label-left':
-        if (next === undefined) throw new Error('--label-left needs a text')
-        labelLeft = next
+      case '--label':
+        if (next === undefined) throw new Error('--label needs a text')
+        labels.push(next)
         index += 1
         break
-      case '--label-right':
-        if (next === undefined) throw new Error('--label-right needs a text')
-        labelRight = next
+      case '--label-size':
+        options.labelSize = readNumber(argument, next)
+        index += 1
+        break
+      case '--seconds':
+        options.seconds = readNumber(argument, next)
         index += 1
         break
       case '--crop':
@@ -736,26 +877,24 @@ export function parseCompareArguments(
     }
   }
 
-  const [left, right, ...rest] = positional
-  if (left === undefined || right === undefined) {
-    throw new Error(
-      'featurecast compare needs two videos: a left one and a right one.',
-    )
-  }
-  if (rest.length > 0) {
-    // Three pictures side by side is a different command with a different
-    // layout question; guessing one here would produce a shape nobody chose.
-    throw new Error(
-      `featurecast compare takes two videos, got ${String(rest.length + 2)}.`,
-    )
-  }
+  checkSideCount(positional.length)
   if (outputPath === undefined) {
     throw new Error('--out is required: name the file the comparison goes to.')
   }
-  if (outputPath === left || outputPath === right) {
+  if (positional.includes(outputPath)) {
     throw new Error(
       `--out ${outputPath} is one of the inputs. The comparison would ` +
         'overwrite the material it is made of.',
+    )
+  }
+  // More captions than pictures is a miscount the reader would never see:
+  // the extra one is simply not drawn, and the row looks finished. Fewer is
+  // not an error — an unlabelled side falls back to its file name.
+  if (labels.length > positional.length) {
+    throw new Error(
+      `${String(labels.length)} captions were given for ` +
+        `${String(positional.length)} videos. Each --label belongs to one ` +
+        'video, left to right.',
     )
   }
   if (encoderName !== undefined || quality !== undefined) {
@@ -772,10 +911,10 @@ export function parseCompareArguments(
   return {
     options,
     outputPath,
-    sides: [
-      { label: labelLeft ?? fileLabel(left), path: left },
-      { label: labelRight ?? fileLabel(right), path: right },
-    ],
+    sides: positional.map((path, index) => ({
+      label: labels[index] ?? fileLabel(path),
+      path,
+    })),
   }
 }
 
@@ -785,7 +924,7 @@ export type CompareDependencies = {
   write: (text: string) => void
 }
 
-/** Probes both inputs, builds the command, runs it. */
+/** Probes every input, builds the command, runs it. */
 export async function runCompare(
   request: CompareRequest,
   dependencies: Partial<CompareDependencies> = {},
@@ -794,10 +933,10 @@ export async function runCompare(
   const run = dependencies.run ?? runCommand
   const write = dependencies.write ?? ((text) => process.stdout.write(text))
 
-  const probes: [VideoInfo, VideoInfo] = [
-    await probe(request.sides[0].path),
-    await probe(request.sides[1].path),
-  ]
+  const probes: VideoInfo[] = []
+  for (const side of request.sides) {
+    probes.push(await probe(side.path))
+  }
   const plan = buildComparePlan(
     request.sides,
     probes,
@@ -807,7 +946,12 @@ export async function runCompare(
   await run(plan.command, plan.arguments)
 
   const slow = request.options.slow ?? DEFAULT_SLOW_FACTOR
-  const left = afterStart(probes, request.options.from)
+  // The sizes the report names are the sizes that entered the row, which is
+  // what a reader checking a crop needs — not the sizes on disk.
+  const left = afterLength(
+    afterCrop(afterStart(probes, request.options.from), request.options.crop),
+    request.options.seconds,
+  )
   const size = compareOutputSize(request.sides, probes, request.options)
   const longest = Math.max(...left.map((one) => one.durationSeconds))
   write(
@@ -822,7 +966,7 @@ export async function runCompare(
     if (info === undefined) continue
     const hold = longest - info.durationSeconds
     write(
-      `  ${index === 0 ? 'left ' : 'right'}  ${side.label} ` +
+      `  ${sideName(index, request.sides.length).padEnd(6)}  ${side.label} ` +
         `(${String(info.width)}x${String(info.height)}` +
         `${hold > 0.001 ? `, holds its last frame for ${hold.toFixed(2)}s` : ''})\n`,
     )
