@@ -1,6 +1,10 @@
 import type { CDPSession, Page } from 'playwright'
 
-import type { ScreencastFrame, ScreencastTransport } from './capture.js'
+import type {
+  ScreencastFrame,
+  ScreencastStartResult,
+  ScreencastTransport,
+} from './capture.js'
 
 /**
  * Drives Chromium's screencast over a raw CDP session instead of through
@@ -42,6 +46,56 @@ export type CdpScreencastOptions = {
   openSession?: (page: Page) => Promise<CDPSession>
 }
 
+/**
+ * Asks a running browser whether it knows `maxFramesInFlight`.
+ *
+ * Not by version number: `src/browser.ts` records why that witness is
+ * unusable — a patched and an unpatched build report the same version string,
+ * and attributing a measurement to the wrong one has already cost this project
+ * three days. Not by reading the protocol definition either: that lives on the
+ * browser's DevTools HTTP endpoint, and Playwright launches Chromium over a
+ * pipe rather than a port, so there is no endpoint to read.
+ *
+ * What is left is to ask the command itself. A browser that knows the
+ * parameter validates it and rejects zero; a browser that does not know it
+ * ignores the field entirely and starts a screencast. Measured against
+ * Chrome for Testing 153.0.8010.47 and 154.0.8037.0 on 2026-09-17:
+ *
+ * | sent                      | 153      | 154                                   |
+ * | ------------------------- | -------- | ------------------------------------- |
+ * | `maxFramesInFlight: 12`   | resolves | resolves                              |
+ * | `maxFramesInFlight: 0`    | resolves | rejects, "must be a positive integer" |
+ * | `maxFramesInFlight: "x"`  | resolves | rejects, "Invalid parameters"         |
+ * | a parameter that does not exist | resolves | resolves                        |
+ *
+ * The last row is what makes the probe sound rather than lucky: 153 swallows
+ * anything it does not recognise, so a rejection can only come from a browser
+ * that recognises this one.
+ *
+ * On a browser without the parameter the probe does start a screencast, at two
+ * pixels square and for as long as it takes to stop it again.
+ */
+export async function supportsFramesInFlight(
+  cdp: CDPSession,
+): Promise<boolean> {
+  try {
+    await cdp.send(
+      'Page.startScreencast' as never,
+      {
+        format: 'jpeg',
+        maxFramesInFlight: 0,
+        maxHeight: 2,
+        maxWidth: 2,
+        quality: 1,
+      } as never,
+    )
+  } catch {
+    return true
+  }
+  await cdp.send('Page.stopScreencast')
+  return false
+}
+
 /** `Page.startScreencast` wants even edge lengths; so did Playwright. */
 function evenEdge(value: number): number {
   return value & ~1
@@ -77,7 +131,15 @@ export async function openCdpScreencast(
       }
     },
 
-    async start({ onError, onFrame, quality, size }): Promise<void> {
+    async start({
+      framesInFlight,
+      onError,
+      onFrame,
+      quality,
+      size,
+    }): Promise<ScreencastStartResult> {
+      const supported = await supportsFramesInFlight(cdp)
+
       // Subscribe before starting, or the first frame is delivered into
       // nothing. Playwright has the same ordering.
       cdp.on('Page.screencastFrame', (payload: ScreencastFramePayload) => {
@@ -129,12 +191,21 @@ export async function openCdpScreencast(
         onFrame(frame)
       })
 
-      await cdp.send('Page.startScreencast', {
-        format: 'jpeg',
-        maxHeight: evenEdge(size.height),
-        maxWidth: evenEdge(size.width),
-        quality,
-      })
+      // `maxFramesInFlight` is not in the protocol types Playwright ships
+      // (they are generated from the Chromium it bundles, which does not have
+      // it yet), so the parameters go through untyped. Precedent for the same
+      // cast: `src/presented.ts`.
+      await cdp.send(
+        'Page.startScreencast' as never,
+        {
+          format: 'jpeg',
+          maxHeight: evenEdge(size.height),
+          maxWidth: evenEdge(size.width),
+          quality,
+          ...(supported ? { maxFramesInFlight: framesInFlight } : {}),
+        } as never,
+      )
+      return { framesInFlight: supported ? framesInFlight : null }
     },
 
     async stop(): Promise<void> {

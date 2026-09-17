@@ -62,7 +62,10 @@ async function runCapture(
     .screencast
   const transport: ScreencastTransport = {
     detach: vi.fn().mockResolvedValue(undefined),
-    start: screencast.start,
+    start: async (options) => {
+      await screencast.start(options)
+      return { framesInFlight: options.framesInFlight }
+    },
     stop: screencast.stop,
   }
   return captureScreencast(page, outputDirectory, size, record, {
