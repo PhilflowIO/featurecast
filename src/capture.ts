@@ -1,6 +1,8 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { Page, Screencast } from 'playwright'
+import type { Page } from 'playwright'
+
+import { openCdpScreencast } from './screencast-cdp.js'
 
 /** A pixel rectangle: the area a capture is asked to record. */
 export type CaptureSize = { height: number; width: number }
@@ -55,9 +57,33 @@ export type ScreencastFrame = {
   viewportWidth: number
 }
 
+/**
+ * The screencast, reduced to what this module needs of it.
+ *
+ * It is an interface rather than `page.screencast` because Playwright's
+ * shortcut sends a fixed four fields to `Page.startScreencast` and cannot
+ * reach the parameters current Chromium added to it. `src/screencast-cdp.ts`
+ * is the implementation; tests supply their own.
+ *
+ * `onError` is how a transport reports a failure it discovers between frames —
+ * an unacknowledged frame, a frame without a usable clock. It exists because
+ * those failures have to abort the capture rather than quietly shrink it.
+ */
+export type ScreencastTransport = {
+  detach: () => Promise<void>
+  start: (options: {
+    onError: (error: Error) => void
+    onFrame: (frame: ScreencastFrame) => void
+    quality: number
+    size: CaptureSize
+  }) => Promise<void>
+  stop: () => Promise<void>
+}
+
 export type CaptureDependencies = {
   maxQueuedBytes?: number
   now?: () => number
+  openScreencast?: (page: Page) => Promise<ScreencastTransport>
   writeFrame?: (path: string, data: Buffer) => Promise<void>
   writeFrameTimeoutMs?: number
 }
@@ -220,6 +246,13 @@ function createFrameQueue(maxBytes: number): FrameQueue {
  * against: what Chromium reports per frame has to be what was ordered, or the
  * capture fails instead of quietly producing a video at a size nothing
  * downstream expects.
+ *
+ * This path is Chromium-bound, and that is a decision rather than an omission.
+ * The screencast runs over a raw CDP session, which only Chromium offers; the
+ * parameters worth reaching there do not exist in Firefox's or WebKit's
+ * equivalent commands at all. `src/browser.ts` starts nothing but Chromium
+ * today, so nothing is lost — but a future WebKit capture would need its own
+ * transport, not a flag on this one.
  */
 export async function captureScreencast(
   page: Page,
@@ -230,7 +263,7 @@ export async function captureScreencast(
 ): Promise<ScreencastCapture> {
   const framesDirectory = join(outputDirectory, 'frames')
   const timestampsPath = join(outputDirectory, 'timestamps.json')
-  const screencast = page.screencast
+  const openScreencast = dependencies.openScreencast ?? openCdpScreencast
   const writeFrame = dependencies.writeFrame ?? writeCaptureFrame
   const now = dependencies.now ?? Date.now
   const maxQueuedBytes = dependencies.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES
@@ -248,13 +281,17 @@ export async function captureScreencast(
   await mkdir(dirname(outputDirectory), { recursive: true })
   await createCaptureDirectory(outputDirectory)
 
+  let openedTransport: ScreencastTransport | undefined
+
   try {
     await mkdir(framesDirectory)
+    const transport = await openScreencast(page)
+    openedTransport = transport
 
     const stop = async (): Promise<void> => {
       if (!stopAttempted) {
         stopAttempted = true
-        await screencast.stop()
+        await transport.stop()
       }
     }
 
@@ -365,20 +402,17 @@ export async function captureScreencast(
     // the case where `queue.onFailure` wins the race instead.
     writer.catch(() => undefined)
 
-    // Playwright awaits whatever `onFrame` returns before it will ack the
-    // next CDP screencast frame (playwright-core's `Screencast.onScreencastFrame`
-    // races client promises via `Promise.race(asyncResults)`), and it
-    // silently discards any error that promise carries
-    // (`result2.catch(() => {})` in the same function). A capture-resolution
-    // JPEG write is slow enough to throttle the source to a
-    // few frames per second if awaited here, and a validation error thrown
-    // inside this callback would simply vanish. Returning nothing (not a
-    // promise) makes Playwright ack synchronously instead — see the
-    // `Promise<any>|any` signature and the sync example in
-    // `Screencast.start`'s own type doc. `onFrame` therefore only enqueues;
-    // the writer above is a separate consumer, and its errors are surfaced
-    // explicitly through `writer`/`queue.onFailure`.
-    await screencast.start({
+    // `onFrame` only enqueues, and the writer above is a separate consumer.
+    // The transport acknowledges each frame before it ever calls in here (see
+    // `src/screencast-cdp.ts`), so nothing the writer does can throttle the
+    // source — which is what the old `page.screencast` path needed a standing
+    // convention to achieve. Errors the transport discovers between frames
+    // come back through `onError` and abort the capture through the same
+    // channel a stalled write uses.
+    await transport.start({
+      onError: (error) => {
+        queue?.fail(error)
+      },
       onFrame: (frame) => {
         queue?.push({
           data: frame.data,
@@ -435,12 +469,16 @@ export async function captureScreencast(
       timestampsPath,
     }
   } catch (error) {
-    if (!stopAttempted) {
-      await stopCaptureSafely(screencast)
+    if (!stopAttempted && openedTransport !== undefined) {
+      await stopCaptureSafely(openedTransport)
     }
     queue?.close()
     await removeCaptureDirectorySafely(outputDirectory)
     throw error
+  } finally {
+    // The session outlives the capture otherwise, and `captureScreencast` is
+    // called from places that do not close the context straight afterwards.
+    await openedTransport?.detach()
   }
 }
 
@@ -461,9 +499,11 @@ async function writeCaptureFrame(path: string, data: Buffer): Promise<void> {
   await writeFile(path, data, { flag: 'wx' })
 }
 
-async function stopCaptureSafely(screencast: Screencast): Promise<void> {
+async function stopCaptureSafely(
+  transport: ScreencastTransport,
+): Promise<void> {
   try {
-    await screencast.stop()
+    await transport.stop()
   } catch {
     // Preserve the original capture failure.
   }

@@ -5,7 +5,12 @@ import { join } from 'node:path'
 import type { Page } from 'playwright'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { captureScreencast, validateCaptureManifest } from '../src/capture.js'
+import {
+  captureScreencast,
+  type CaptureDependencies,
+  type ScreencastTransport,
+  validateCaptureManifest,
+} from '../src/capture.js'
 
 /**
  * The area these tests order. Nothing about the module under test is tied to
@@ -36,6 +41,34 @@ function testPage(
     .mockResolvedValue(undefined),
 ): Page {
   return { close, screencast } as unknown as Page
+}
+
+/**
+ * Runs the capture against the fake screencast carried by `page`.
+ *
+ * The screencast reaches `captureScreencast` as a dependency rather than as a
+ * property of the page, because the real one is a raw CDP session rather than
+ * `page.screencast`. Keeping it on the fake page is only so each test can
+ * still build its double in one place.
+ */
+async function runCapture(
+  page: Page,
+  outputDirectory: string,
+  size: { height: number; width: number },
+  record: () => Promise<void>,
+  dependencies: CaptureDependencies = {},
+): ReturnType<typeof captureScreencast> {
+  const screencast = (page as unknown as { screencast: TestScreencast })
+    .screencast
+  const transport: ScreencastTransport = {
+    detach: vi.fn().mockResolvedValue(undefined),
+    start: screencast.start,
+    stop: screencast.stop,
+  }
+  return captureScreencast(page, outputDirectory, size, record, {
+    openScreencast: () => Promise.resolve(transport),
+    ...dependencies,
+  })
 }
 
 async function temporaryDirectory(): Promise<string> {
@@ -74,7 +107,7 @@ describe('captureScreencast', () => {
     })
     const page = testPage({ start, stop })
 
-    const result = await captureScreencast(
+    const result = await runCapture(
       page,
       outputDirectory,
       RECORDED_SIZE,
@@ -125,12 +158,14 @@ describe('captureScreencast', () => {
     )
   })
 
-  it('acks frames synchronously instead of awaiting the disk write', async () => {
-    // Playwright only advances the CDP screencast once whatever `onFrame`
-    // returns resolves, and swallows any error that promise carries. If
-    // `onFrame` returned a promise tied to the (slow) disk write, capture
-    // would be throttled to disk speed and a write failure would vanish
-    // silently. Enqueuing must therefore be synchronous.
+  it('enqueues synchronously instead of awaiting the disk write', async () => {
+    // `onFrame` runs inside the transport's frame handler, i.e. inside a CDP
+    // event callback. Returning a promise tied to the (slow) disk write would
+    // put the enqueue behind the writer: frames would reach the queue late and
+    // out of the order they were captured in, and the rejection would be
+    // floating with nobody to observe it. Enqueuing must stay synchronous.
+    // Throttling is no longer among the consequences - the transport
+    // acknowledges before it calls in here - but ordering still is.
     const outputDirectory = join(await temporaryDirectory(), 'capture')
     const stop = vi.fn().mockResolvedValue(undefined)
     let onFrameReturnValue: unknown = 'not called'
@@ -144,7 +179,7 @@ describe('captureScreencast', () => {
     })
     const page = testPage({ start, stop })
 
-    await captureScreencast(
+    await runCapture(
       page,
       outputDirectory,
       RECORDED_SIZE,
@@ -184,16 +219,10 @@ describe('captureScreencast', () => {
     )
 
     await expect(
-      captureScreencast(
-        page,
-        outputDirectory,
-        RECORDED_SIZE,
-        async () => undefined,
-        {
-          maxQueuedBytes: 15,
-          writeFrame,
-        },
-      ),
+      runCapture(page, outputDirectory, RECORDED_SIZE, async () => undefined, {
+        maxQueuedBytes: 15,
+        writeFrame,
+      }),
     ).rejects.toThrow('fell behind')
 
     expect(stop).toHaveBeenCalledOnce()
@@ -221,16 +250,10 @@ describe('captureScreencast', () => {
     )
 
     await expect(
-      captureScreencast(
-        page,
-        outputDirectory,
-        RECORDED_SIZE,
-        async () => undefined,
-        {
-          writeFrame,
-          writeFrameTimeoutMs: 20,
-        },
-      ),
+      runCapture(page, outputDirectory, RECORDED_SIZE, async () => undefined, {
+        writeFrame,
+        writeFrameTimeoutMs: 20,
+      }),
     ).rejects.toThrow('did not finish writing')
 
     expect(stop).toHaveBeenCalledOnce()
@@ -262,7 +285,7 @@ describe('captureScreencast', () => {
     const record = (): Promise<void> => new Promise<void>(() => undefined)
 
     await expect(
-      captureScreencast(page, outputDirectory, RECORDED_SIZE, record, {
+      runCapture(page, outputDirectory, RECORDED_SIZE, record, {
         maxQueuedBytes: 15,
         writeFrame,
       }),
@@ -279,7 +302,7 @@ describe('captureScreencast', () => {
     const page = testPage({ start, stop }, close)
 
     await expect(
-      captureScreencast(page, outputDirectory, RECORDED_SIZE, async () => {
+      runCapture(page, outputDirectory, RECORDED_SIZE, async () => {
         throw new Error('script failed')
       }),
     ).rejects.toThrow('script failed')
@@ -309,7 +332,7 @@ describe('captureScreencast', () => {
     })
     const page = testPage({ start, stop })
 
-    await captureScreencast(
+    await runCapture(
       page,
       outputDirectory,
       RECORDED_SIZE,
@@ -339,7 +362,7 @@ describe('captureScreencast', () => {
     })
     const now = vi.fn().mockReturnValueOnce(1_000).mockReturnValueOnce(1_250)
 
-    const result = await captureScreencast(
+    const result = await runCapture(
       testPage({ start, stop }),
       outputDirectory,
       RECORDED_SIZE,
@@ -361,7 +384,7 @@ describe('captureScreencast', () => {
     const page = testPage({ start, stop })
 
     await expect(
-      captureScreencast(page, outputDirectory, RECORDED_SIZE, async () => {
+      runCapture(page, outputDirectory, RECORDED_SIZE, async () => {
         throw new Error('script failed')
       }),
     ).rejects.toThrow('script failed')
@@ -398,7 +421,7 @@ describe('captureScreencast', () => {
     })
     const page = testPage({ start, stop })
 
-    const result = await captureScreencast(
+    const result = await runCapture(
       page,
       outputDirectory,
       RECORDED_SIZE,
@@ -439,7 +462,7 @@ describe('captureScreencast', () => {
       })
     })
 
-    const result = await captureScreencast(
+    const result = await runCapture(
       testPage({ start, stop }),
       outputDirectory,
       RECORDED_SIZE,
@@ -474,7 +497,7 @@ describe('captureScreencast', () => {
       }
     })
 
-    const result = await captureScreencast(
+    const result = await runCapture(
       testPage({ start, stop }),
       outputDirectory,
       RECORDED_SIZE,
@@ -516,7 +539,7 @@ describe('captureScreencast', () => {
       }
     })
 
-    const result = await captureScreencast(
+    const result = await runCapture(
       testPage({ start, stop }),
       outputDirectory,
       RECORDED_SIZE,
@@ -554,7 +577,7 @@ describe('captureScreencast', () => {
       })
     })
 
-    const result = await captureScreencast(
+    const result = await runCapture(
       testPage({ start, stop }),
       outputDirectory,
       RECORDED_SIZE,
@@ -584,7 +607,7 @@ describe('captureScreencast', () => {
       })
     })
 
-    const result = await captureScreencast(
+    const result = await runCapture(
       testPage({ start, stop }),
       outputDirectory,
       ordered,
@@ -618,7 +641,7 @@ describe('captureScreencast', () => {
     })
 
     await expect(
-      captureScreencast(
+      runCapture(
         testPage({ start, stop }),
         outputDirectory,
         { height: 1440, width: 2560 },
@@ -644,7 +667,7 @@ describe('captureScreencast', () => {
     })
 
     await expect(
-      captureScreencast(
+      runCapture(
         testPage({ start, stop }),
         outputDirectory,
         RECORDED_SIZE,
@@ -660,7 +683,7 @@ describe('captureScreencast', () => {
     const stop = vi.fn().mockResolvedValue(undefined)
 
     await expect(
-      captureScreencast(
+      runCapture(
         testPage({ start, stop }),
         outputDirectory,
         RECORDED_SIZE,
@@ -688,7 +711,7 @@ describe('captureScreencast', () => {
     })
 
     await expect(
-      captureScreencast(
+      runCapture(
         testPage({ start, stop }),
         outputDirectory,
         RECORDED_SIZE,
@@ -708,7 +731,7 @@ describe('captureScreencast', () => {
     const start = vi.fn().mockResolvedValue(undefined)
 
     await expect(
-      captureScreencast(
+      runCapture(
         testPage({ start, stop }),
         outputDirectory,
         RECORDED_SIZE,
