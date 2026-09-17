@@ -1889,7 +1889,7 @@ const GRID_STEP_PX = 6
  * Safety valve, not a normal-mode limiter: prevents a pathological bbox
  * (e.g. a bug producing an absurd width) from generating an unbounded probe
  * count. A real full-screen hero at typical recording resolutions needs a
- * small fraction of this per axis — see the cost note in README.md.
+ * small fraction of this per axis — see the cost note in docs/INTERNALS.md.
  */
 const GRID_MAX_SAMPLES_PER_AXIS = 500
 /** Even a sliver target still gets more than one probe row/column — a free
