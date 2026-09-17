@@ -4,8 +4,10 @@ import {
   buildCompareFilter,
   buildComparePlan,
   commonHeight,
+  labelFontSize,
   parseCompareArguments,
   runCompare,
+  scaledWidth,
   type CompareSide,
 } from '../src/compare.js'
 import { parseVideoInfo, type VideoInfo } from '../src/probe.js'
@@ -87,6 +89,66 @@ describe('the comparison picture', () => {
         buildCompareFilter(SIDES, [video(), video()], { slow }),
       ).toThrow(/--slow must be a positive factor/)
     }
+  })
+
+  it('keeps a long label inside its own half of the picture', () => {
+    // The failure this pins actually shipped once: a 540x960 recording next
+    // to a 1080x1920 one, and `upscaled from a 540x960 capture` cut off after
+    // `captur`. A comparison with half a caption on it says nothing.
+    const sides: readonly [CompareSide, CompareSide] = [
+      { label: 'rendered at device resolution', path: 'left.mp4' },
+      { label: 'upscaled from a 540x960 capture', path: 'right.mp4' },
+    ]
+    const probes: readonly [VideoInfo, VideoInfo] = [
+      video({ height: 1920, width: 1080 }),
+      video({ height: 960, width: 540 }),
+    ]
+    const size = labelFontSize(sides, probes, 1920)
+    for (const [index, side] of sides.entries()) {
+      const info = probes[index]
+      if (info === undefined) continue
+      const drawn = side.label.length * 0.62 * size
+      expect(drawn).toBeLessThan(scaledWidth(info, 1920))
+    }
+    expect(buildCompareFilter(sides, probes)).toContain(
+      `fontsize=${String(size)}`,
+    )
+  })
+
+  it('shrinks the type for a longer label, not for a shorter one', () => {
+    const probes: readonly [VideoInfo, VideoInfo] = [video(), video()]
+    const short = labelFontSize(
+      [
+        { label: 'before', path: 'a.mp4' },
+        { label: 'after', path: 'b.mp4' },
+      ],
+      probes,
+      1080,
+    )
+    const long = labelFontSize(
+      [
+        { label: 'a'.repeat(200), path: 'a.mp4' },
+        { label: 'after', path: 'b.mp4' },
+      ],
+      probes,
+      1080,
+    )
+    expect(long).toBeLessThan(short)
+  })
+
+  it('gives both sides the same size, so neither reads as the headline', () => {
+    const filter = buildCompareFilter(
+      [
+        { label: 'x', path: 'a.mp4' },
+        { label: 'a much, much longer caption over here', path: 'b.mp4' },
+      ],
+      [video(), video()],
+    )
+    const sizes = [...filter.matchAll(/fontsize=(\d+)/g)].map(
+      (match) => match[1],
+    )
+    expect(sizes).toHaveLength(2)
+    expect(sizes[0]).toBe(sizes[1])
   })
 
   it('refuses a label it cannot draw, instead of drawing half of it', () => {

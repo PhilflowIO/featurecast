@@ -136,6 +136,59 @@ export function commonHeight(
 }
 
 /**
+ * How wide a side ends up once it has been scaled to the common height.
+ *
+ * Not the probed width: the side that gets enlarged is the one whose label is
+ * most likely to run off the edge, and the label has to be sized against the
+ * picture it will actually sit on.
+ */
+export function scaledWidth(probe: VideoInfo, height: number): number {
+  return Math.round((probe.width * height) / probe.height)
+}
+
+/**
+ * The average advance width of a glyph, as a fraction of the font size.
+ *
+ * freetype does not tell the filter graph how wide a string will be before it
+ * draws it, so the fit has to be estimated. 0.62 em is a deliberate
+ * over-estimate for the container's default sans face — real mixed-case text
+ * averages nearer 0.5 — because the failure modes are not symmetric: a label
+ * ten per cent smaller than it could be is merely modest, while a label ten
+ * per cent too wide walks off the edge of its own half of the picture and the
+ * comparison ships with half a sentence on it.
+ */
+const GLYPH_ADVANCE_EM = 0.62
+
+/**
+ * One font size for both labels, chosen so the longer of the two fits.
+ *
+ * The first version of this read the common height and nothing else, and the
+ * first real comparison it produced — a 1080x1920 phone recording next to a
+ * 540x960 one — came out with `upscaled from a 540x960 capture` cut off after
+ * `captur`. The height says how *tall* a legible label is; how *wide* it may
+ * be is a question about the side it sits on and the number of characters in
+ * it, and neither of those was being asked. Both sides get the same size,
+ * because two captions in different sizes read as a hierarchy that is not
+ * there.
+ */
+export function labelFontSize(
+  sides: readonly CompareSide[],
+  probes: readonly VideoInfo[],
+  height: number,
+): number {
+  const fromHeight = Math.round(height / 28)
+  const fits = sides.map((side, index) => {
+    const probe = probes[index]
+    if (probe === undefined) return fromHeight
+    // The box border eats a little on each end, and a caption pressed against
+    // the frame edge reads as an accident even when it fits.
+    const budget = scaledWidth(probe, height) * 0.92
+    return Math.floor(budget / (GLYPH_ADVANCE_EM * side.label.length))
+  })
+  return Math.max(14, Math.min(fromHeight, ...fits))
+}
+
+/**
  * The filter graph: scale, hold, slow, label, stack — in that order.
  *
  * The order is load-bearing twice over. `tpad` runs *before* `setpts`, so the
@@ -170,7 +223,7 @@ export function buildCompareFilter(
   }
   const height = commonHeight(probes, options.height)
   const longest = Math.max(...probes.map((probe) => probe.durationSeconds))
-  const fontSize = Math.max(14, Math.round(height / 28))
+  const fontSize = labelFontSize(sides, probes, height)
   const margin = Math.round(fontSize * 0.8)
 
   const chains = sides.map((side, index) => {
