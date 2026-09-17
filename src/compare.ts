@@ -50,6 +50,15 @@ export type CompareSide = {
 }
 
 export type CompareOptions = {
+  /**
+   * Where both sides start, in the inputs' own seconds.
+   *
+   * A comparison whose point arrives after a minute does not get watched to
+   * the end. The offset is deliberately the same for both sides: a comparison
+   * that starts the two halves at different moments is not comparing them,
+   * and there is no honest reason to want that.
+   */
+  from?: number
   /** Output frame rate. The chain's 60 unless a caller says otherwise. */
   fps?: number
   /**
@@ -70,6 +79,35 @@ export type CompareOptions = {
 
 export const DEFAULT_SLOW_FACTOR = 5
 export const DEFAULT_COMPARE_FPS = 60
+
+/**
+ * How tall the caption band is, as a multiple of the font size.
+ *
+ * 1.9 leaves roughly half a line of air above and below the glyphs, which is
+ * what stops the band reading as a crop of the picture rather than a caption
+ * belonging to it. It is derived rather than tabulated so that a comparison of
+ * two phone recordings and a comparison of two 1080p ones get bands in the
+ * same proportion to their type.
+ */
+const BAND_HEIGHT_EM = 1.9
+
+/** The colour behind the caption. Not a shade of the picture — a border. */
+const BAND_COLOUR = 'black'
+
+/**
+ * The band the caption sits in, in pixels.
+ *
+ * The first version of this command had no band: it painted the caption onto
+ * the video with a translucent plate behind it, and every clip it produced
+ * covered the filmed application's own header — its title and its dark-mode
+ * toggle — with the words describing it. A comparison exists to be evidence,
+ * and a caption that eats the top row of the thing it captions destroys
+ * evidence to save vertical space nobody was short of.
+ */
+export function labelBandHeight(fontSize: number): number {
+  const band = Math.round(fontSize * BAND_HEIGHT_EM)
+  return band + (band % 2)
+}
 
 /**
  * Characters a burnt-in label may not contain.
@@ -206,11 +244,43 @@ export function labelFontSize(
  * would throw away exactly the evidence. A frozen picture is visibly frozen;
  * a missing ending is not visibly missing.
  */
+/**
+ * What is left of each input once the start offset has been skipped.
+ *
+ * The offset has to reach the *durations* and not only the ffmpeg command,
+ * because the durations are what decide which side is the longer one and how
+ * long the other has to hold. Skipping ten seconds off the front of a twelve
+ * second clip and an eleven second one swaps which of the two that is.
+ */
+export function afterStart(
+  probes: readonly VideoInfo[],
+  from: number | undefined,
+): VideoInfo[] {
+  const start = from ?? 0
+  if (!Number.isFinite(start) || start < 0) {
+    throw new Error(
+      `--from must be a number of seconds from the start, got "${String(from)}".`,
+    )
+  }
+  return probes.map((probe) => {
+    const left = probe.durationSeconds - start
+    if (left <= 0) {
+      throw new Error(
+        `--from ${String(start)}s is past the end of ${probe.path}, which is ` +
+          `${probe.durationSeconds.toFixed(2)}s long. There would be nothing ` +
+          'left of that side to compare.',
+      )
+    }
+    return { ...probe, durationSeconds: left }
+  })
+}
+
 export function buildCompareFilter(
   sides: readonly [CompareSide, CompareSide],
-  probes: readonly [VideoInfo, VideoInfo],
+  rawProbes: readonly [VideoInfo, VideoInfo],
   options: CompareOptions = {},
 ): string {
+  const probes = afterStart(rawProbes, options.from) as [VideoInfo, VideoInfo]
   const slow = options.slow ?? DEFAULT_SLOW_FACTOR
   if (!Number.isFinite(slow) || slow <= 0) {
     throw new Error(
@@ -225,6 +295,7 @@ export function buildCompareFilter(
   const longest = Math.max(...probes.map((probe) => probe.durationSeconds))
   const fontSize = labelFontSize(sides, probes, height)
   const margin = Math.round(fontSize * 0.8)
+  const band = labelBandHeight(fontSize)
 
   const chains = sides.map((side, index) => {
     const probe = probes[index]
@@ -235,16 +306,48 @@ export function buildCompareFilter(
       steps.push(`tpad=stop_mode=clone:stop_duration=${hold.toFixed(3)}`)
     }
     steps.push(`setpts=${slow.toFixed(4)}*PTS`)
+    // The band is added above the picture and the picture is pushed down into
+    // what is left, so no frame of either input is under the caption. Both
+    // sides get the same band, which is what keeps the two halves flush.
+    steps.push(
+      `pad=iw:ih+${String(band)}:0:${String(band)}:color=${BAND_COLOUR}`,
+    )
     steps.push(
       `drawtext=text='${side.label}':expansion=none` +
-        `:x=${String(margin)}:y=${String(margin)}` +
-        `:fontsize=${String(fontSize)}:fontcolor=white` +
-        `:box=1:boxcolor=black@0.72:boxborderw=${String(Math.round(fontSize / 2))}`,
+        `:x=${String(margin)}:y=(${String(band)}-text_h)/2` +
+        `:fontsize=${String(fontSize)}:fontcolor=white`,
     )
     return `${steps.join(',')}[side${String(index)}]`
   })
 
   return `${chains.join(';')};[side0][side1]hstack=inputs=2[stacked]`
+}
+
+/**
+ * The size of the finished frame: two sides wide, one band taller than the
+ * material.
+ *
+ * Worth being able to state, rather than only observable after an encode. An
+ * output no taller than its inputs is precisely what a caption that has
+ * fallen back onto the picture looks like from the outside, and the two are
+ * otherwise indistinguishable without opening the file and looking.
+ */
+export function compareOutputSize(
+  sides: readonly [CompareSide, CompareSide],
+  rawProbes: readonly [VideoInfo, VideoInfo],
+  options: CompareOptions = {},
+): { band: number; height: number; width: number } {
+  const probes = afterStart(rawProbes, options.from) as [VideoInfo, VideoInfo]
+  const height = commonHeight(probes, options.height)
+  const band = labelBandHeight(labelFontSize(sides, probes, height))
+  return {
+    band,
+    height: height + band,
+    width: probes.reduce(
+      (total, probe) => total + scaledWidth(probe, height),
+      0,
+    ),
+  }
 }
 
 /**
@@ -268,14 +371,20 @@ export function buildComparePlan(
   if (!Number.isFinite(fps) || fps <= 0) {
     throw new Error(`--fps must be a positive number, got "${String(fps)}".`)
   }
+  // `-ss` before each `-i` rather than once after them: it has to seek both
+  // inputs, and the same number twice is the only offset that leaves the two
+  // sides comparable.
+  const seek = (options.from ?? 0) > 0 ? ['-ss', String(options.from)] : []
   return {
     arguments: [
       '-hide_banner',
       '-loglevel',
       'error',
       '-y',
+      ...seek,
       '-i',
       sides[0].path,
+      ...seek,
       '-i',
       sides[1].path,
       '-filter_complex',
@@ -322,6 +431,7 @@ Options
   --label-left <t>    Left caption (default: the left file's name)
   --label-right <t>   Right caption (default: the right file's name)
   --slow <n>          How much slower than real time (${String(DEFAULT_SLOW_FACTOR)})
+  --from <s>          Skip this many seconds off the front of both sides
   --height <px>       Common height (default: the taller input's)
   --fps <n>           Output frame rate (${String(DEFAULT_COMPARE_FPS)})
   --encoder <name>    x264, nvenc-h264 or nvenc-hevc (x264)
@@ -382,6 +492,10 @@ export function parseCompareArguments(
       case '--label-right':
         if (next === undefined) throw new Error('--label-right needs a text')
         labelRight = next
+        index += 1
+        break
+      case '--from':
+        options.from = readNumber(argument, next)
         index += 1
         break
       case '--slow':
@@ -481,15 +595,17 @@ export async function runCompare(
   await run(plan.command, plan.arguments)
 
   const slow = request.options.slow ?? DEFAULT_SLOW_FACTOR
-  const height = commonHeight(probes, request.options.height)
-  const longest = Math.max(...probes.map((one) => one.durationSeconds))
+  const left = afterStart(probes, request.options.from)
+  const size = compareOutputSize(request.sides, probes, request.options)
+  const longest = Math.max(...left.map((one) => one.durationSeconds))
   write(
     `${request.outputPath}\n` +
-      `  ${String(height)} px tall per side, ${slow.toFixed(1)}x slower, ` +
-      `${(longest * slow).toFixed(1)}s long\n`,
+      `  ${String(size.width)}x${String(size.height)}, of which ` +
+      `${String(size.band)} px is caption band above the picture; ` +
+      `${slow.toFixed(1)}x slower, ${(longest * slow).toFixed(1)}s long\n`,
   )
   for (const [index, side] of request.sides.entries()) {
-    const info = probes[index]
+    const info = left[index]
     if (info === undefined) continue
     const hold = longest - info.durationSeconds
     write(
