@@ -92,7 +92,7 @@ describe('captureScreencast against real Chromium', () => {
         outputDirectory,
         CAPTURE_SIZE,
         async () => {
-          await page.waitForTimeout(8_000)
+          await page.waitForTimeout(16_000)
         },
       )
       const paintTimestamps = await readPaintTimestamps(page)
@@ -136,9 +136,13 @@ describe('captureScreencast against real Chromium', () => {
       // And the denominator must be instants, not Chromium's reports of
       // them: a report-counting denominator lands far above what the display
       // can produce. The rate is the one read off this machine's own
-      // presentation instants, not a hard-wired 60 — the recording runs 8s
-      // rather than 2s so there are enough gaps to read it to better than a
-      // frame (`MIN_GAPS_FOR_REFRESH_ESTIMATE`).
+      // presentation instants, not a hard-wired 60 — the recording runs long
+      // enough that there are gaps to read it to better than a frame
+      // (`MIN_GAPS_FOR_REFRESH_ESTIMATE`) on the slowest host this runs on,
+      // not just the bench box. 8s was sized for the box's steady 60Hz; a
+      // 4-core GitHub runner presents about 35fps with half its gaps skipping
+      // a refresh, and 8s there yielded 146 single-refresh gaps against the
+      // 150 needed. 16s doubles that.
       expect(efficiencyReport.refreshHz).toBeGreaterThan(24)
       expect(efficiencyReport.windows[0]?.presentedFps ?? 0).toBeLessThan(
         efficiencyReport.refreshHz + 4,
@@ -153,7 +157,7 @@ describe('captureScreencast against real Chromium', () => {
     } finally {
       await browser.close()
     }
-  }, 20_000)
+  }, 30_000)
 
   it('surfaces a writer failure to the caller instead of swallowing it', async () => {
     const browser = await chromium.launch({
