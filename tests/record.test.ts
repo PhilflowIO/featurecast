@@ -215,6 +215,71 @@ describe('scrolling on a device with a finger', () => {
     expect(page.mouse.wheel).not.toHaveBeenCalled()
   })
 
+  it('moves the finger on the clock, not on the browser acknowledging each step', async () => {
+    // Issue #116. Chromium acknowledges a dispatched touch move only after
+    // the frame it lands in, measured at 33 ms on the benchmark machine —
+    // two refresh intervals. A swipe that waits for each acknowledgement
+    // before sending the next step therefore moves the page on every second
+    // frame, and every phone recording came out as 30 Hz content in a 60 fps
+    // file. A finger does not wait for the page, and neither may the swipe.
+    const ACK_MS = 40
+    const output = await temporaryDirectory()
+    const page = fakePage({ height: 1920, width: 1080 })
+    page.hasTouch = true
+    page.waitForTimeout.mockImplementation(
+      (milliseconds: number) =>
+        new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    )
+    const sentAt: number[] = []
+    let acknowledged = 0
+    page.touchscreen.move.mockImplementation(() => {
+      sentAt.push(performance.now())
+      return new Promise((resolve) =>
+        setTimeout(() => {
+          acknowledged += 1
+          resolve(undefined)
+        }, ACK_MS),
+      )
+    })
+    let acknowledgedAtLift = -1
+    page.touchscreen.up.mockImplementation(() => {
+      acknowledgedAtLift = acknowledged
+      return Promise.resolve(undefined)
+    })
+    const record = createRecorder(runtimeFor(page))
+
+    await record({ out: output, seed: 7 }, async (_page, demo) => {
+      await demo.scroll(0, 600)
+    })
+
+    const gaps = sentAt.slice(1).map((at, index) => at - sentAt[index]!)
+    const sorted = [...gaps].sort((a, b) => a - b)
+    const median = sorted[Math.floor(sorted.length / 2)]!
+    expect(gaps.length).toBeGreaterThan(10)
+    expect(median).toBeLessThan(25)
+    // Not waiting per step must not mean lifting early: the lift comes after
+    // the browser has taken every step of the path, or the page would stop
+    // short of where the log says the finger went.
+    expect(acknowledgedAtLift).toBe(sentAt.length)
+    // Real time: the point is what the swipe does against a real clock.
+  }, 30_000)
+
+  it('reports a step the browser refused instead of lifting past it', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage({ height: 1920, width: 1080 })
+    page.hasTouch = true
+    page.touchscreen.move.mockRejectedValue(new Error('target closed'))
+    const record = createRecorder(runtimeFor(page))
+
+    await expect(
+      record({ out: output, seed: 7 }, async (_page, demo) => {
+        await demo.scroll(0, 600)
+      }),
+    ).rejects.toThrow('target closed')
+    expect(page.touchscreen.move).toHaveBeenCalledTimes(1)
+    expect(page.touchscreen.up).not.toHaveBeenCalled()
+  })
+
   it('still uses the wheel where there is one', async () => {
     const output = await temporaryDirectory()
     const page = fakePage({ height: 1920, width: 1080 })

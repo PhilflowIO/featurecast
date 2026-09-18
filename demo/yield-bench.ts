@@ -41,7 +41,10 @@ import {
 import { framedGeometry, openFramedSurface } from '../src/framed.js'
 import { formatsFor, importScript, prepareCapture } from '../src/pipeline.js'
 import { readPaintTimestamps, startPaintRateProbe } from '../src/paint-rate.js'
-import { startPresentedFrameTrace } from '../src/presented.js'
+import {
+  startPresentedFrameTrace,
+  summarizePresentationCadence,
+} from '../src/presented.js'
 import {
   createRecorder,
   type RecordPage,
@@ -272,11 +275,21 @@ try {
     paintTimestamps,
   )
   await writeCaptureEfficiencyReport(captureDirectory, report)
+  // A green yield says nothing about how often the browser presented at all
+  // (issue #116: every phone run cleared the gate at half the frame rate),
+  // so the cadence is reported next to it, never derived from it.
+  const cadence = summarizePresentationCadence(
+    presentedTimestamps,
+    report.refreshHz,
+  )
   console.log(
     `RESULT capture=${String(captureArea.width)}x${String(captureArea.height)} device=${values.device ?? 'desktop'} ` +
       `efficiency=${(report.overallEfficiency * 100).toFixed(1)}% ` +
       `captured=${String(report.overallCapturedFrameCount)} presented=${String(report.overallPresentedFrameCount)} ` +
       `refreshHz=${report.refreshHz.toFixed(2)} ` +
+      `medianGapMs=${cadence.medianGapMs.toFixed(2)} ` +
+      `singleRefresh=${(cadence.singleRefreshShare * 100).toFixed(1)}% ` +
+      `doubledRefresh=${(cadence.doubledRefreshShare * 100).toFixed(1)}% ` +
       `sessionSeconds=${(manifest.session.duration / 1000).toFixed(2)} ` +
       `recordSeconds=${recordSeconds.toFixed(1)} ` +
       `framesOnDisk=${String(manifest.frames.length)} ` +

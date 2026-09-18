@@ -91,7 +91,7 @@ browser: /crbuild/chrome (Chromium 153.0.8010.12; requested: CHROME_BIN)
 capture area: 2560x1600, strategy screencast, fps 60, jpeg q90
 renderer: ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL ES 3.2)
 DIAG presentedInstants=342 capturedFrames=338 sessionMs=31204 paintTicks=0
-RESULT capture=2560x1600 device=desktop efficiency=98.8% captured=338 presented=342 refreshHz=59.96 ... framesInFlight=12
+RESULT capture=2560x1600 device=desktop efficiency=98.8% captured=338 presented=342 refreshHz=59.96 medianGapMs=16.76 singleRefresh=84.8% doubledRefresh=6.7% ... framesInFlight=12
 GATE pass (>=95%, denominator checks clean)
 ```
 
@@ -99,6 +99,17 @@ GATE pass (>=95%, denominator checks clean)
 sanity checks. `DIAG` is there to catch a run that measured nothing:
 `paintTicks=0` is normal whenever the script navigates (navigation wipes the
 in-page probe) and is not part of the gate.
+
+**The yield is not the frame rate.** `medianGapMs`, `singleRefresh` and
+`doubledRefresh` say how often the browser put a new picture on screen at all:
+the median gap between presented frames, and the share of gaps that are one
+refresh long or two. A page that moves on every refresh shows about 16.7 ms and
+a large single share; one that moves on every second refresh shows 33.3 ms and
+a large doubled share — and both can clear the gate at 98 %. Every phone
+recording did exactly that until issue #116 was found, which is why the
+cadence is printed beside the yield rather than trusted to it. The bands are
+fractions of the measured refresh, so the numbers mean the same on a 120 Hz
+display.
 
 `GATE fail` does not stop the run — the numbers are still written, because a
 failing measurement is a measurement.
