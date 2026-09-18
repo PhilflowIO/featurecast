@@ -14,6 +14,7 @@ import { computeCaptureEfficiencyReport } from '../src/efficiency.js'
 import { readPaintTimestamps, startPaintRateProbe } from '../src/paint-rate.js'
 import { startPresentedFrameTrace } from '../src/presented.js'
 import { HARDWARE_GL_LAUNCH_ARGS } from '../src/renderer.js'
+import { BUNDLE_CHANNEL } from '../src/browser.js'
 
 const directories: string[] = []
 
@@ -75,6 +76,7 @@ describe('captureScreencast against real Chromium', () => {
     // the reason that parameter is now required.
     const browser = await chromium.launch({
       args: [...HARDWARE_GL_LAUNCH_ARGS],
+      channel: BUNDLE_CHANNEL,
       headless: true,
     })
     try {
@@ -156,6 +158,7 @@ describe('captureScreencast against real Chromium', () => {
   it('surfaces a writer failure to the caller instead of swallowing it', async () => {
     const browser = await chromium.launch({
       args: [...HARDWARE_GL_LAUNCH_ARGS],
+      channel: BUNDLE_CHANNEL,
       headless: true,
     })
     try {

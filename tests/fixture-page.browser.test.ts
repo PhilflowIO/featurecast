@@ -5,6 +5,7 @@ import {
   startFixtureServer,
   type FixtureServer,
 } from '../src/fixture-server.js'
+import { BUNDLE_CHANNEL } from '../src/browser.js'
 
 /**
  * What the corpus has to be, measured in a real browser rather than asserted
@@ -36,7 +37,7 @@ describe('the bench corpus', () => {
   let server: FixtureServer
 
   beforeAll(async () => {
-    browser = await chromium.launch({ headless: true })
+    browser = await chromium.launch({ channel: BUNDLE_CHANNEL, headless: true })
     server = await startFixtureServer()
   })
 

@@ -35,8 +35,7 @@ import {
 
 const PATCHED = '/opt/chromium-patched/chrome'
 const FINGERPRINT = { sha256: 'a'.repeat(64), sizeBytes: 516_058_688 }
-const BUNDLE =
-  '/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell'
+const BUNDLE = '/ms-playwright/chromium-1234/chrome-linux64/chrome'
 
 function fakeBrowser(): Browser & { close: ReturnType<typeof vi.fn> } {
   return {
@@ -154,7 +153,12 @@ describe('launchChromium', () => {
       { source: 'playwright-bundle' },
       deps,
     )
-    expect(deps.launch).toHaveBeenCalledWith({ headless: true })
+    // The full bundled Chromium, not the headless shell a bare `headless:
+    // true` would pick: the published numbers were measured on the former.
+    expect(deps.launch).toHaveBeenCalledWith({
+      channel: 'chromium',
+      headless: true,
+    })
     expect(provenance.executablePath).toBe(BUNDLE)
     expect(provenance.request).toEqual({ source: 'playwright-bundle' })
     // Nothing was requested, so the fingerprint can only come from the
