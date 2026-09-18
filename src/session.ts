@@ -20,7 +20,7 @@ import {
   type RecordPage,
   type RecordRuntime,
 } from './record.js'
-import { freezeTimeAndRandomness, hideOverlay } from './recipes.js'
+import { pinClockAndRandomness, hideOverlay } from './recipes.js'
 import { recordPageFor } from './surface.js'
 
 /**
@@ -294,7 +294,7 @@ export async function recordSession(
         await hideOverlay(context, request.hideSelectors)
       }
       if (request.fixedTime !== undefined) {
-        await freezeTimeAndRandomness(context, request.fixedTime)
+        await pinClockAndRandomness(context, request.fixedTime)
       }
       const page = await context.newPage()
       const { app, scale } = await openSurface(

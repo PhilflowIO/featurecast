@@ -321,18 +321,26 @@ seconds of pointer movement per recording that nobody wants to watch.
 Two recordings only look identical if the interface looks identical. Two
 things make sure it does not: relative times ("3 minutes ago") and everything
 that comes out of `Math.random()`. The `fixedTime` export nails down both —
-the clock through Playwright's `clock.setFixedTime`, the randomness through a
-replacement for `Math.random` with a fixed seed (`freezeTimeAndRandomness` in
-[`src/recipes.ts`](../src/recipes.ts)).
+the clock by starting every document's `Date` at that instant, the randomness
+through a replacement for `Math.random` with a fixed seed
+(`pinClockAndRandomness` in [`src/recipes.ts`](../src/recipes.ts)). `Date`
+runs forward at real speed from the fixed instant, so a page that measures
+elapsed time with `Date.now()` still sees time pass; seconds of drift do not
+change "3 days ago".
 
-**Do not use `clock.install()`.** By Playwright's own description that fakes
-`requestAnimationFrame` and `performance` alongside `Date` — and those two are
-exactly what drives, inside the page, the measurement the wrapper uses before
-every interaction to check whether the target's geometry stands still
-(`observeFrames` in `src/record.ts`). A faked frame loop delivers no more
-frames to that measurement; the interaction then runs into `settleTimeoutMs`
-instead of into a click. `setFixedTime` touches only `Date` and leaves the
-frame loop alone.
+**Do not use Playwright's clock — neither `clock.install()` nor
+`clock.setFixedTime()`.** Both install Playwright's fake clock, which replaces
+`performance`, `requestAnimationFrame` and the timers alongside `Date`.
+`setFixedTime` was used here until featurecast#144, on the belief that it
+touches only `Date`; it does not. Two things break under it. The fake
+`performance.now()` drifts away from the timeline the browser runs Web
+Animations on, so an animation started with `startTime = performance.now()`
+(Framer Motion's accelerated fades do exactly that) begins seconds in the
+future and holds its first keyframe — a list that fades its rows in from
+`opacity: 0` is filmed empty while the DOM is full. And the fake frame loop
+starves the measurement the wrapper uses before every interaction to check
+whether the target's geometry stands still (`observeFrames` in
+`src/record.ts`). `tests/fixed-time.browser.test.ts` guards both.
 
 `record()`'s own seed (`seed`) covers something different: the randomness of
 the pointer movement and of the typing delays. Same `seed`, same track. It

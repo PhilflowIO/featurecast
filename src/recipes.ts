@@ -55,25 +55,70 @@ export async function hideOverlay(
 }
 
 /**
- * Pins `Date` to one instant and replaces `Math.random` with a seeded
- * generator, so two runs of the same script render the same relative
- * timestamps and the same "random" sample data.
+ * Starts every document's `Date` at one instant and replaces `Math.random`
+ * with a seeded generator, so two runs of the same script render the same
+ * relative timestamps and the same "random" sample data.
  *
- * `clock.setFixedTime` is used rather than `clock.install`: `install`
- * also fakes `requestAnimationFrame` and `performance`, and the recorder's
- * geometry settling is driven by exactly those two in page context
- * (`observeFrames` in `src/record.ts`), so an installed fake clock would
- * starve it until `settleTimeoutMs` runs out.
+ * `Date` is the only clock that is touched. It begins at `fixedTime` when the
+ * document starts and runs forward at real speed from there, measured on the
+ * page's own `performance.now()`. `performance`, `requestAnimationFrame`, the
+ * timers and the animation timeline stay the browser's own.
  *
- * The `Math.random` payload assigns an arrow function to a property of an
- * existing object. That is the one shape esbuild's name inference does not
- * cover, so it survives the `keepNames` compile described above.
+ * Why not Playwright's clock (featurecast#144). `clock.setFixedTime` was used
+ * here, on the belief that it touches only `Date`. It does not: it installs
+ * Playwright's whole fake clock first, which replaces `performance`,
+ * `requestAnimationFrame` and the timers. The fake `performance.now()` then
+ * drifts away from `document.timeline`, the clock the browser runs Web
+ * Animations on — measured at 3.6 s. Framer Motion starts its accelerated
+ * animations with `startTime = performance.now()`, so under the fake clock
+ * each one began seconds in the future and held its first keyframe. On
+ * Raven that keyframe is `opacity: 0`: the DOM had the meeting rows, the
+ * screencast filmed an empty card. The same fake frame loop also halved the
+ * frames the screencast delivered (87 against 179 for one script), and it
+ * would starve the recorder's own settling, which runs on
+ * `requestAnimationFrame` (`observeFrames` in `src/record.ts`).
+ *
+ * Why `Date` keeps running instead of standing still. A page measures elapsed
+ * time with `Date.now()` as often as with timers — lodash's `debounce` does —
+ * and a clock that never moves never lets such a wait end. Seconds of drift
+ * cannot change "3 days ago".
+ *
+ * Both payloads avoid named functions, for the `keepNames` trap described on
+ * `hideOverlay`: the `Date` one is a plain string, and the `Math.random` one
+ * assigns an arrow function to a property of an existing object, the one shape
+ * esbuild's name inference does not cover.
  */
-export async function freezeTimeAndRandomness(
+export async function pinClockAndRandomness(
   context: BrowserContext,
   fixedTime: string,
 ): Promise<void> {
-  await context.clock.setFixedTime(new Date(fixedTime))
+  const startMs = new Date(fixedTime).getTime()
+  if (Number.isNaN(startMs)) {
+    throw new Error(`fixedTime is not an instant a Date can read: ${fixedTime}`)
+  }
+  await context.addInitScript(
+    '(function () {' +
+      '  var Real = Date;' +
+      `  var start = ${String(startMs)};` +
+      '  var origin = performance.now();' +
+      '  var now = function () {' +
+      '    return start + Math.floor(performance.now() - origin);' +
+      '  };' +
+      '  var Pinned = function () {' +
+      '    if (!new.target) return new Real(now()).toString();' +
+      '    var args = arguments.length === 0 ? [now()] : Array.prototype.slice.call(arguments);' +
+      '    return Reflect.construct(Real, args, new.target);' +
+      '  };' +
+      '  Object.setPrototypeOf(Pinned, Real);' +
+      '  Pinned.prototype = Real.prototype;' +
+      '  Pinned.now = now;' +
+      '  Pinned.parse = Real.parse;' +
+      '  Pinned.UTC = Real.UTC;' +
+      '  Object.defineProperty(Pinned, "name", { value: "Date" });' +
+      '  Object.defineProperty(Pinned, "length", { value: 7 });' +
+      '  globalThis.Date = Pinned;' +
+      '})()',
+  )
   await context.addInitScript(() => {
     let state = 0x2f6e2b1
     Math.random = () => {
