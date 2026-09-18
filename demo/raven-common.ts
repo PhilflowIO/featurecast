@@ -1,6 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
+import type { Frame } from 'playwright'
+
 import { launchChromium, resolveBrowserRequest } from '../src/browser.js'
 import type { RecordPage } from '../src/record.js'
 
@@ -94,6 +96,31 @@ export async function warteAuf(
       )
     }
     await new Promise((fertig) => setTimeout(fertig, 250))
+  }
+}
+
+/**
+ * A `prepare` step that opens `pfad` and returns once `bereit` is visible.
+ *
+ * Why the first navigation belongs here and not in the recording. The capture
+ * starts on the empty page the browser opens with. A script whose first line
+ * is `page.goto` therefore films that empty page and the whole load after it:
+ * both Raven clips opened on about 4 s of white. The renderer is right not to
+ * cut it, because a load is not idle time it can recognise. `prepare` runs on
+ * the same page before the camera rolls (`SessionRequest.prepare` in
+ * `src/session.ts`), so the first frame is the screen the clip is about.
+ *
+ * `bereit` names the content, not the frame around it: the first meeting row,
+ * not the list's heading, because the heading is there a second before the
+ * rows are fetched.
+ */
+export function vorbereiten(
+  pfad: string,
+  bereit: string,
+): (app: Frame) => Promise<void> {
+  return async (app) => {
+    await app.goto(`${RAVEN_URL}${pfad}`)
+    await app.locator(bereit).waitFor({ state: 'visible', timeout: 30_000 })
   }
 }
 

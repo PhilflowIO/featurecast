@@ -5,6 +5,7 @@ import {
   RAVEN_HIDE_SELECTORS,
   RAVEN_STATE,
   RAVEN_URL,
+  vorbereiten,
   warteAuf,
 } from './raven-common.js'
 
@@ -137,14 +138,17 @@ export const hideSelectors = RAVEN_HIDE_SELECTORS
 /** A fixed clock, so relative times do not move between two runs. */
 export const fixedTime = RAVEN_FIXED_TIME
 
+/**
+ * The list is loaded before the camera rolls, so the clip opens on it and not
+ * on a white page (see `vorbereiten`).
+ */
+export const prepare = vorbereiten('/meetings', ERSTE_ZEILE)
+
 export default async function besprechen(
   page: RecordPage,
   demo: Demo,
 ): Promise<void> {
-  await page.goto(`${RAVEN_URL}/meetings`)
-  // The first row, not the header line: the header says "0 meetings" for a
-  // second until the list has fetched its number.
-  await warteAuf(page, ERSTE_ZEILE)
+  // `prepare` has opened the list and seen its first row.
   await demo.hold(1000)
 
   await demo.type('input[placeholder*="durchsuchen"]', SUCHWORT)

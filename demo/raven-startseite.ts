@@ -3,7 +3,7 @@ import {
   RAVEN_FIXED_TIME,
   RAVEN_HIDE_SELECTORS,
   RAVEN_URL,
-  warteAuf,
+  vorbereiten,
 } from './raven-common.js'
 
 /**
@@ -64,6 +64,13 @@ export const hideSelectors = RAVEN_HIDE_SELECTORS
 export const fixedTime = RAVEN_FIXED_TIME
 
 /**
+ * The page is loaded before the camera rolls, so the clip opens on the hero
+ * and not on a white page (see `vorbereiten`). The headline, not the section:
+ * the section box exists before the web font has laid it out.
+ */
+export const prepare = vorbereiten('/', '#hero h1')
+
+/**
  * Scroll pace in px/s. It is slower than the default 700 because the viewer
  * reads the sections as they pass instead of skipping them.
  */
@@ -73,11 +80,7 @@ export default async function startseite(
   page: RecordPage,
   demo: Demo,
 ): Promise<void> {
-  await page.goto(`${RAVEN_URL}/`)
-  // The headline, not the section: the section box exists before the web font
-  // and the entrance animation have laid it out.
-  await warteAuf(page, '#hero h1')
-  // Long enough for the hero card's entrance to finish AND be read. The first
+  // `prepare` has opened the page and seen the headline. Long enough for the hero card's entrance to finish AND be read. The first
   // trial run held 2.8 s and the video left the hero while the headline was
   // still arriving.
   await demo.hold(3500)
