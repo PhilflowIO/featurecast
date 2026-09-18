@@ -23,3 +23,6 @@ artifacts/
 auth/*
 !auth/.gitkeep
 playwright/.auth/
+
+# Browsers a GPU-host recording installs into its checkout (tools/gpu-box).
+.box-browsers/

@@ -231,6 +231,52 @@ a fixed 2560×1600. Which of the two numbers applies is unresolved between
 instead of quietly picking one of the two. The M6 acceptance example
 `--devices desktop,iphone` is therefore not achievable today.
 
+## Where to record: a quiet host with a GPU
+
+A recording paints every frame of the page it films, in real time. Where that
+happens decides whether the clip is smooth:
+
+- **The browser must paint on a GPU.** `featurecast run` launches Chromium
+  with hardware GL, reads the WebGL renderer before the camera rolls, and
+  refuses to record on a software renderer (SwiftShader, llvmpipe) unless
+  `FEATURECAST_ALLOW_SOFTWARE_RENDERER=1` is set. The renderer it painted with
+  is written to `browser.json` beside the frames.
+- **The machine must be quiet.** A page with photos and gradients, painted on
+  a busy CPU, presents a scroll at 20-30 fps and at under half its scripted
+  pace. Every frame-count and duration check still passes; the clip just
+  judders (featurecast#150).
+
+The default place to record is therefore the GPU host, not the workstation:
+
+```sh
+tools/gpu-box/record.sh demo/raven-startseite.ts --devices desktop-wide
+```
+
+It checks the GPU's utilization first and refuses to compete with a running
+job, copies the checkout over (without `.git`, `node_modules`, `artifacts`,
+and without `auth/` unless `FEATURECAST_BOX_SYNC_AUTH=1` — a stored session is
+a login), runs `featurecast run` inside a container with that GPU
+(`tools/gpu-box/Dockerfile`: system libraries and ffmpeg only; dependencies and
+the pinned browser come from the lockfile), and copies the output back to the
+same `artifacts/<script>/` a local run would write. The host needs docker with
+the NVIDIA container toolkit and nothing else. Host, GPU index, remote
+directory and the utilization limit are environment variables, listed at the
+top of the script.
+
+Measured 2026-09-18, Raven's landing page, desktop-wide (2560×1600 capture),
+the same script:
+
+| Where                                | Renderer    | Scroll wall time (script: 9.3 s) | Capture interval p50 / p95 in scroll |
+| ------------------------------------ | ----------- | -------------------------------- | ------------------------------------ |
+| workstation, before #150             | SwiftShader | 21.8 s                           | 38.2 / 64.1 ms                       |
+| workstation, hardware GL, load 50-90 | Radeon 860M | 11.1 s                           | 18.9 / 43.7 ms                       |
+| GPU host, `tools/gpu-box/record.sh`  | RTX 3090    | 10.3-11.1 s                      | 16.7-17.7 / 33.1-35.2 ms             |
+
+`demo/yield-bench.ts` on the GPU host, three passes: hardware GL presents on
+a 60.02 Hz cadence (92.5 % single-refresh gaps) and captures 96.9 % of it;
+SwiftShader never reaches a 60 Hz cadence at all (4 of 1,607 gaps under
+30 ms) and takes 133 s for what hardware GL does in 71 s.
+
 ## Recipe: recording while signed in
 
 A signed-in recording is an ordinary script of the main chain: it names the

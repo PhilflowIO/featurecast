@@ -15,6 +15,8 @@ import { promisify } from 'node:util'
 
 import type { Browser, LaunchOptions } from 'playwright'
 
+import type { RendererInfo } from './renderer.js'
+
 /**
  * Which Chromium produced a run, decided once, verified against the running
  * process, and written next to the run's artifacts.
@@ -79,6 +81,12 @@ export type BrowserProvenance = {
   reportedVersion: string
   /** Identity of the running binary's bytes, not of its path. */
   fingerprint: BrowserFingerprint
+  /**
+   * The WebGL renderer the recording actually painted with, and the launch
+   * arguments that asked for it. Written by a recording session; a software
+   * renderer here explains a slow, juddering capture (featurecast#150).
+   */
+  renderer?: RendererInfo
 }
 
 export type BrowserLaunchDependencies = {
