@@ -136,9 +136,9 @@ before a browser starts.
 
 ### What a script may say about the browser context
 
-Three further exports describe not the recording but the context it takes
+Four further exports describe not the recording but the context it takes
 place in. They are part of the contract because a script simply _cannot_ set
-them itself: it receives an already-opened page, and all three have to hold
+them itself: it receives an already-opened page, and all four have to hold
 before that page exists.
 
 | Export             | Type       | Meaning                                                       |
@@ -146,6 +146,7 @@ before that page exists.
 | `storageStatePath` | `string`   | path to a saved sign-in (`storageState`) — never its contents |
 | `hideSelectors`    | `string[]` | areas that disappear before the page runs its own scripts     |
 | `fixedTime`        | `string`   | the moment every recording claims; also freezes `Math.random` |
+| `fakeMedia`        | `boolean`  | a synthetic camera and microphone, already permitted          |
 
 ```ts
 import type { Demo, RecordPage } from '../src/record.js'
@@ -170,6 +171,13 @@ names the file and the export. That is not formalism: a `hideSelectors` that
 is accidentally a single string would be accepted without complaint in the
 browser, would hide nothing — and the recording would be flawless apart from
 the card that was not supposed to be in it.
+
+`fakeMedia` is for video-call pages. The headless recording browser has no
+camera and no microphone, and such a page films its error state for that — on
+Raven's join card a red banner. With `fakeMedia = true` the browser starts
+with Chromium's synthetic devices (a test picture and a tone) and the context
+holds the permission, so the page sees a working browser. Turn the camera off
+in `prepare` if its test picture should not be in the video.
 
 A complete example that runs against the real application is
 [`demo/raven-meetings.ts`](../demo/raven-meetings.ts).

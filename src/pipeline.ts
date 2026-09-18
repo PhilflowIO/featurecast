@@ -46,10 +46,10 @@ export const SCRIPT_EXPORT_NAMES = ['default', 'recording'] as const
  * does the pointer travel of those clicks, which is the part that actually
  * ruins a recording of a real application.
  *
- * Next to it stand three exports that describe the *browser context* rather
- * than the recording: `storageStatePath`, `hideSelectors` and `fixedTime`.
+ * Next to it stand four exports that describe the *browser context* rather
+ * than the recording: `storageStatePath`, `hideSelectors`, `fixedTime` and `fakeMedia`.
  * They are here rather than in a script's own hands because a script cannot
- * reach them — it is handed a page, and all three have to be true before
+ * reach them — it is handed a page, and all four have to be true before
  * that page exists. Until they were part of this contract there was a
  * second, cameraless recording path in `demo/` that owned its own browser
  * just to set them, and the one script that films this product ran on it
@@ -60,7 +60,7 @@ export type LoadedScript = {
    * `devices`: which devices this script is meant to be filmed on, with any
    * field of the device layer overridden.
    *
-   * It belongs to the script for the same reason the three context exports do
+   * It belongs to the script for the same reason the context exports do
    * — it is knowable where the script is written and nowhere else. A tour of a
    * phone layout is not a desktop tour with a narrower window; a capture area
    * larger than the delivery exists to buy the camera room to move into, and
@@ -79,6 +79,16 @@ export type LoadedScript = {
    * wasted recording, and guessing one is worse than refusing.
    */
   devices?: readonly DeviceSpec[]
+  /**
+   * `fakeMedia`: `true` gives the page a synthetic camera and microphone that
+   * are already permitted.
+   *
+   * Context-level for the plainest reason of all: it is two launch switches
+   * of the browser, and a script is handed a page of a browser that is
+   * already running. Without it a video-call page films its "no camera, no
+   * microphone" state — in Raven's case a red banner over the join card.
+   */
+  fakeMedia?: boolean
   /**
    * `fixedTime`: the wall clock the recording claims, as an ISO instant.
    *
@@ -330,7 +340,7 @@ function describeType(value: unknown): string {
 }
 
 /**
- * The three exports that describe the browser context rather than the
+ * The exports that describe the browser context rather than the
  * recording, read and checked one by one.
  *
  * Checked here and not where they are used, because here is the only place
@@ -345,8 +355,12 @@ function describeType(value: unknown): string {
 export function readContextSettings(
   module_: Record<string, unknown>,
   path = 'the script',
-): Pick<LoadedScript, 'fixedTime' | 'hideSelectors' | 'storageStatePath'> {
+): Pick<
+  LoadedScript,
+  'fakeMedia' | 'fixedTime' | 'hideSelectors' | 'storageStatePath'
+> {
   const settings: {
+    fakeMedia?: boolean
     fixedTime?: string
     hideSelectors?: readonly string[]
     storageStatePath?: string
@@ -393,6 +407,20 @@ export function readContextSettings(
       )
     }
     settings.fixedTime = fixedTime
+  }
+
+  const fakeMedia = module_['fakeMedia']
+  if (fakeMedia !== undefined) {
+    // A boolean and nothing that merely looks like one: `'false'` is a
+    // truthy string, and a camera switched on by the word "false" is exactly
+    // the kind of silent pass this function exists to refuse.
+    if (typeof fakeMedia !== 'boolean') {
+      throw new Error(
+        `"${path}" exports \`fakeMedia\`, which has to be a boolean: ` +
+          '`export const fakeMedia = true`.',
+      )
+    }
+    settings.fakeMedia = fakeMedia
   }
 
   return settings
@@ -447,6 +475,9 @@ const DEFAULT_DEPENDENCIES: PipelineDependencies = {
       outputDirectory,
       recording: script.recording,
       seed,
+      ...(script.fakeMedia === undefined
+        ? {}
+        : { fakeMedia: script.fakeMedia }),
       ...(script.fixedTime === undefined
         ? {}
         : { fixedTime: script.fixedTime }),

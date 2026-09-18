@@ -604,9 +604,32 @@ describe('importScript', () => {
     await expect(importScript(path)).rejects.toThrow(/fixedTime.*an instant/s)
   })
 
+  it('reads fakeMedia as a boolean', async () => {
+    const directory = await temporaryDirectory()
+    const path = join(directory, 'recording-media.mjs')
+    await writeFile(
+      path,
+      'export const fakeMedia = true\nexport default async () => undefined\n',
+    )
+    expect((await importScript(path)).fakeMedia).toBe(true)
+  })
+
+  it('refuses a fakeMedia that only looks like a boolean', async () => {
+    // `'false'` is truthy. A camera switched on by the word "false" is the
+    // silent pass the context settings are checked to prevent.
+    const directory = await temporaryDirectory()
+    const path = join(directory, 'recording-media-string.mjs')
+    await writeFile(
+      path,
+      "export const fakeMedia = 'false'\nexport default async () => undefined\n",
+    )
+    await expect(importScript(path)).rejects.toThrow(/fakeMedia.*a boolean/s)
+  })
+
   it('hands the context settings to the browser leg intact', async () => {
     const recording = async (): Promise<void> => undefined
     const script = {
+      fakeMedia: true,
       fixedTime: '2026-01-15T09:00:00Z',
       hideSelectors: ['#room-card'],
       recording,
