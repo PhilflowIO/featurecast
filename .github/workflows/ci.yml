@@ -1,13 +1,9 @@
 # The check a visitor sees.
 #
-# This repository's origin is a private Forgejo instance and GitHub is its
-# public mirror, so there are two workflow files that do the same thing. This
-# is not duplication for its own sake: a stranger who opens a pull request here
-# has to be able to see the run and re-start it, and a self-hosted runner
-# behind a private network can give them neither.
-#
-# Forgejo reads `.forgejo/workflows/` and never looks in this directory while
-# that one exists, so the two do not collide.
+# This is the repository's only workflow. Its origin is a private Forgejo
+# instance without a runner for it, and GitHub is the mirror where a stranger
+# who opens a pull request can see the run and re-start it.
+
 name: ci
 
 on:
