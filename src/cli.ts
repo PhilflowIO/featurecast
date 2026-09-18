@@ -51,8 +51,7 @@ const USAGE = `featurecast run <script> [options]
 
     export const devices = [
       'desktop-wide',
-      { extends: 'iphone', as: 'phone-with-reserve',
-        capture: { width: 1620, height: 2880 } },
+      { extends: 'iphone', as: 'phone-exact', reserve: 1 },
     ]
 
   Three further exports describe the browser context, which a script cannot
@@ -76,6 +75,10 @@ Options
   --devices <a,b>   Comma-separated device or preset names. Overrides the
                     script's own \`devices\` export for this run. Required only
                     when the script does not name any.
+  --reserve <x>     Record every device at <x> times its output size, so the
+                    camera can push in up to <x> at full sharpness. Default:
+                    1.5 on a touch preset, the fixed 2560x1600 area on a
+                    desktop one. --reserve 1 records exactly the delivery.
   --all-formats     Deliver 16:9, 9:16 and 1:1 instead of the one size the
                     device promises. One recording either way.
   --out <dir>       Root output directory. Default: artifacts/<script name>.
@@ -151,6 +154,7 @@ function parseRunArguments(argv: readonly string[]):
       devices?: string[]
       encoder?: Encoder
       out: string
+      reserve?: number
       script: string
       seed?: number
       upload: boolean
@@ -164,6 +168,7 @@ function parseRunArguments(argv: readonly string[]):
       encoder: { type: 'string' },
       help: { short: 'h', type: 'boolean' },
       out: { type: 'string' },
+      reserve: { type: 'string' },
       seed: { type: 'string' },
       upload: { type: 'boolean' },
     },
@@ -203,7 +208,24 @@ function parseRunArguments(argv: readonly string[]):
       ? {}
       : { encoder: resolveEncoder(values.encoder) }),
     ...(values.seed === undefined ? {} : { seed: parseSeed(values.seed) }),
+    ...(values.reserve === undefined
+      ? {}
+      : { reserve: parseReserve(values.reserve) }),
   }
+}
+
+function parseReserve(raw: string): number {
+  // Checked here as well as in the device layer, because only here is the
+  // flag still a string: `--reserve 1,5` would otherwise reach it as NaN and
+  // be refused in words about a number nobody typed.
+  const reserve = Number(raw)
+  if (raw.trim() === '' || !Number.isFinite(reserve) || reserve < 1) {
+    throw new Error(
+      `--reserve must be a number of at least 1, got "${raw}". ` +
+        'Use a dot for decimals: --reserve 1.5.',
+    )
+  }
+  return reserve
 }
 
 function parseSeed(raw: string): number {

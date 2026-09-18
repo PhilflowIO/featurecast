@@ -66,6 +66,13 @@ wrong trade — and a phone-shaped frame has no margin to travel into anyway.
 What that costs, said openly: a zoom into a mobile capture cuts into a 1:1
 sampled image and goes soft, where the desktop presets have reserve.
 
+> **Superseded 2026-09-18 (#149).** The halving was not the capture area. The
+> phone path presented at 30 Hz at every size because the swipe awaited each
+> touch acknowledgement (#116, fixed in #142). With that fixed, 1620×2880
+> presents at 16.70 ms median and 97.0 % yield, the same as 1080×1920, and the
+> touch presets now record 1.5× their output. The measurement above stands as
+> what was seen; its explanation does not. See [DEVICES.md](DEVICES.md).
+
 ## To watch
 
 **The two stills from this section have been removed from version control**,

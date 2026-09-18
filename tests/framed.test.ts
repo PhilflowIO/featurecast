@@ -17,22 +17,23 @@ describe('framed geometry', () => {
     const iphone = resolveDevice('iphone')
     const geometry = framedGeometry(iphone.capture, iphone.device)
     // The whole point of the strategy: what the app lays out at is the
-    // phone's own width, while the recording is 1080 wide.
+    // phone's own width, while the recording is 1620 wide — 1.5 times the
+    // 1080 it is delivered at.
     expect(geometry.inner.width).toBe(393)
-    expect(iphone.capture.width).toBe(1080)
-    expect(geometry.scale).toBeCloseTo(1080 / 393, 10)
+    expect(iphone.capture.width).toBe(1620)
+    expect(geometry.scale).toBeCloseTo(1620 / 393, 10)
   })
 
   it('fills the recorded height rather than letterboxing the profile', () => {
     const iphone = resolveDevice('iphone')
     const geometry = framedGeometry(iphone.capture, iphone.device)
-    // 1920 / 2.748 = 699, a little taller than the profile's own 659. Scaled
+    // 2880 / 4.122 = 699, a little taller than the profile's own 659. Scaled
     // back up it has to land on the recorded height, or the video carries a
     // strip of shell background.
     expect(geometry.inner.height).toBeCloseTo(698.67, 1)
     // Exactly, not nearly: a rounded height would leave a row of shell
     // background along the bottom edge of every frame.
-    expect(geometry.inner.height * geometry.scale).toBe(1920)
+    expect(geometry.inner.height * geometry.scale).toBe(2880)
     expect(geometry.inner.height).not.toBe(iphone.device.viewport.height)
   })
 

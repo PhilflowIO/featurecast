@@ -160,6 +160,18 @@ export type DeviceOverrides = {
   extends: string
   output?: Partial<OutputSettings>
   pointer?: Partial<PointerSettings>
+  /**
+   * The capture area as a multiple of the output on both axes: `1.5` records
+   * a 1080x1920 delivery at 1620x2880, `1` records exactly what is delivered
+   * and leaves the camera no room to push in.
+   *
+   * The named form of `capture.width`/`height` for the one question a script
+   * usually has — "how much zoom room" — without working out pixels per
+   * device. Touch presets default to `MOBILE_CAPTURE_RESERVE`; desktop presets
+   * keep their fixed area unless this is given. Naming both this and a capture
+   * size is refused: the two answer the same question.
+   */
+  reserve?: number
 }
 
 export type DeviceSpec = DeviceOverrides | string
@@ -260,8 +272,8 @@ function desktopCapture(
  * claiming otherwise is claiming more than was measured.
  *
  * It also costs the camera. The output is the capture area, so there is no
- * reserve to crop into and the render stage clamps every push-in to 1.00x —
- * the same trade the mobile presets make, for the same reason. A run that
+ * reserve to crop into and the render stage clamps every push-in to 1.00x. A
+ * run that
  * wants both a large picture and a moving camera asks for the area and the
  * delivery separately, which the device layer takes:
  * `{ extends: 'desktop', capture: { width: 3840, height: 2160 } }` keeps the
@@ -270,34 +282,60 @@ function desktopCapture(
 const DESKTOP_4K_SIZE = { height: 2160, width: 3840 }
 
 /**
- * What every touch profile records, and why it is exactly the output size.
+ * How much larger than its output every touch profile records.
  *
  * M3's answer to "the screencast delivers CSS pixels" is `framed-scale`: the
  * recorded page is the video's own size and the application is laid out at
  * the device's width inside it, scaled up by a CSS transform that
- * re-rasterises (src/framed.ts carries the argument and the evidence).
+ * re-rasterises (src/framed.ts carries the argument and the evidence). A
+ * larger recorded page only raises that scale, so the reserve costs the
+ * application nothing in layout.
  *
- * The recorded area is therefore the output area, with none of the 1.33x
- * reserve the desktop presets buy. That is measured, not conceded: the same
- * recording of the same application delivered 30.6 frames per second at
- * 1080x1920 and 14.8 at 1440x2560 on the AI box
- * (artifacts/m3-frame/report.json). Halving the frame rate of a social video
- * to buy zoom headroom is the wrong trade, and a phone-shaped picture has
- * nowhere to pan to anyway — the frame already holds the whole device. What
- * it costs is stated plainly: a zoom into a mobile recording crops into a
- * 1:1-sampled image and goes soft, where the desktop presets have reserve.
+ * Until 2026-09-18 the touch presets recorded exactly their output, because a
+ * larger area looked like it cost half the frame rate. It did not: the phone
+ * path presented at 30 Hz at every size, and the cause was the swipe awaiting
+ * each touch acknowledgement (#116, #142). With that fixed, 1620x2880 on the
+ * AI box, stock Chrome for Testing 154, 13 passes: 16.70 ms median gap, 86.7 %
+ * single-refresh gaps, 97.0 % yield — the same cadence as 1080x1920 (16.69 ms,
+ * 84.0 %, 96.7 %) and clear of the 95 % gate (#149).
+ *
+ * What 1.5x buys: a push-in onto a small target up to 1.5x at full sharpness,
+ * where 1x clamps every push-in to 1.00x. What it costs: 2.25 times the pixels
+ * per frame — 322 KB per stored frame against 187 at 1x, measured 2026-09-17 —
+ * 13 % more time per pass, and a slower render: the portrait frame is
+ * resampled instead of copied, 97.3 s against 35.9 s for the same 100-second
+ * tour (AI box, x264, 2026-09-18). A run that does not want it says
+ * `reserve: 1`.
  */
+export const MOBILE_CAPTURE_RESERVE = 1.5
+
 function mobileCapture(output: {
   height: number
   width: number
 }): CaptureSettings {
+  const size = scaledArea(output, MOBILE_CAPTURE_RESERVE)
   return {
     fps: FRAME_RATE,
-    height: output.height,
+    height: size.height,
     quality: CAPTURE_QUALITY,
     status: 'decided',
     strategy: 'framed-scale',
-    width: output.width,
+    width: size.width,
+  }
+}
+
+/**
+ * `size` times `reserve`, rounded to the nearest even pixel on each axis:
+ * the H.264 encoders refuse odd dimensions, and a 1.33x reserve on 1080
+ * lands on 1436.4.
+ */
+function scaledArea(
+  size: { height: number; width: number },
+  reserve: number,
+): { height: number; width: number } {
+  return {
+    height: 2 * Math.round((size.height * reserve) / 2),
+    width: 2 * Math.round((size.width * reserve) / 2),
   }
 }
 
@@ -440,10 +478,14 @@ export function resolveDevice(
     playwrightName,
   }
 
+  const output = applyOutputOverrides(base.output, overrides)
   return {
-    capture: applyCaptureOverrides(base.capture, overrides.capture),
+    capture: applyCaptureOverrides(
+      base.capture,
+      withReserve(overrides, output),
+    ),
     device: copyDescriptor(descriptor),
-    output: applyOutputOverrides(base.output, overrides),
+    output,
     playwrightName,
     pointer: applyPointerOverrides(descriptor, overrides.pointer),
     preset: preset ? name : null,
@@ -461,6 +503,38 @@ export function resolveDevice(
  */
 function copyDescriptor(descriptor: DeviceDescriptor): DeviceDescriptor {
   return { ...descriptor, viewport: { ...descriptor.viewport } }
+}
+
+/**
+ * The capture override with `reserve` turned into the pixel size it names.
+ *
+ * The reserve is taken against the *resolved* output, so
+ * `{ extends: 'iphone', aspect: '1:1', reserve: 1.5 }` records 1620x1620 and
+ * not a 1.5x phone frame around a square delivery.
+ */
+function withReserve(
+  overrides: DeviceOverrides,
+  output: OutputSettings,
+): DeviceOverrides['capture'] {
+  const { reserve } = overrides
+  if (reserve === undefined) return overrides.capture
+  if (typeof reserve !== 'number' || !Number.isFinite(reserve) || reserve < 1) {
+    throw new Error(
+      `reserve must be a number of at least 1, got ${String(reserve)}. ` +
+        '1 records exactly the output; 1.5 leaves room for a 1.5x push-in.',
+    )
+  }
+  if (
+    overrides.capture?.width !== undefined ||
+    overrides.capture?.height !== undefined
+  ) {
+    throw new Error(
+      `reserve ${String(reserve)} and capture ${String(overrides.capture.width ?? '?')}x` +
+        `${String(overrides.capture.height ?? '?')} both set the capture area. ` +
+        'Name one of them: reserve as a multiple of the output, or capture in pixels.',
+    )
+  }
+  return { ...overrides.capture, ...scaledArea(output, reserve) }
 }
 
 function applyCaptureOverrides(
