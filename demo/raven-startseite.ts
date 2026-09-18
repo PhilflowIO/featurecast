@@ -33,14 +33,14 @@ import {
  *
  * INVOCATION::
  *
- *     pnpm featurecast run demo/raven-startseite.ts --devices desktop-wide
+ *     tools/gpu-box/record.sh demo/raven-startseite.ts --devices desktop-wide
  *
- * Record it on a machine with a GPU. On a workstation that paints in software
- * (SwiftShader), this page's photos and gradients bring every scroll step down
- * to about 10 frames per second. The video then plays the scroll at a quarter
- * of its pace: the first trial took 53 s instead of about 20 s. The renderer
- * keeps wall time and trims only idle stretches, so a slow scroll is not
- * compressed away.
+ * Record it on the GPU host (`tools/gpu-box/record.sh`, see
+ * docs/RECORDING-SCRIPTS.md). This page's photos and gradients are expensive
+ * to paint: before featurecast#150 every recording painted in software, the
+ * scroll ran at about 20 frames per second and took 21.8 s instead of 9.3 s,
+ * and the clip juddered. The renderer keeps wall time and trims only idle
+ * stretches, so a slow scroll is not compressed away.
  *
  * THE PHONE DOES NOT WORK AGAINST RAVEN YET. `iphone` films through the framed
  * shell (`src/framed.ts`), which puts the application into an iframe on its

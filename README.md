@@ -111,6 +111,12 @@ Record and render an example that needs no account and no network:
 pnpm featurecast run demo/feature-xy.ts --devices desktop-wide
 ```
 
+Record on a quiet machine with a GPU: the browser paints the page in real
+time, and on a busy or GPU-less machine a scroll judders. `featurecast run`
+refuses a software renderer; `tools/gpu-box/record.sh` runs the same command
+on a GPU host and brings the clip back — see
+[docs/RECORDING-SCRIPTS.md](docs/RECORDING-SCRIPTS.md#where-to-record-a-quiet-host-with-a-gpu).
+
 Next to the recording you get a folder with the finished video and the
 `decisions.json` that produced it. Restyle it without touching the browser:
 
