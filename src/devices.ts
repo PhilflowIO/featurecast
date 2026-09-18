@@ -302,7 +302,10 @@ const DESKTOP_4K_SIZE = { height: 2160, width: 3840 }
  * What 1.5x buys: a push-in onto a small target up to 1.5x at full sharpness,
  * where 1x clamps every push-in to 1.00x. What it costs: 2.25 times the pixels
  * per frame — 322 KB per stored frame against 187 at 1x, measured 2026-09-17 —
- * and 13 % more time per pass. A run that does not want it says `reserve: 1`.
+ * 13 % more time per pass, and a slower render: the portrait frame is
+ * resampled instead of copied, 97.3 s against 35.9 s for the same 100-second
+ * tour (AI box, x264, 2026-09-18). A run that does not want it says
+ * `reserve: 1`.
  */
 export const MOBILE_CAPTURE_RESERVE = 1.5
 

@@ -71,8 +71,9 @@ records 1620×2880, so the camera can push in up to 1.5× at full sharpness; at
 rate — measured 2026-09-18 on the AI box, 13 passes: 16.70 ms median gap and
 97.0 % yield at 1620×2880, against 16.69 ms and 96.7 % at 1080×1920 (#149).
 It costs 2.25 times the pixels per frame (322 KB per stored frame against 187)
-and about 13 % more recording time, and the render has to resample every
-portrait frame instead of copying it. A run that does not want it says so:
+and about 13 % more recording time. The render slows down more: every portrait
+frame is resampled instead of copied, 97 s against 36 s for the same
+100-second tour on the AI box. A run that does not want it says so:
 `reserve: 1` on the device, or `--reserve 1` on the command line. Until
 2026-09-18 the phone presets recorded exactly their output, because the larger
 area looked like it halved the frame rate; [M3-VERDICT.md](M3-VERDICT.md)
