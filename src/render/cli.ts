@@ -18,7 +18,8 @@ events.jsonl. No browser is started; changing a look parameter costs a re-run
 of this command and nothing else.
 
 Options
-  --formats 16:9,9:16,1:1   Which aspect ratios to deliver (default: all three)
+  --formats 16:9,9:16,1:1   Which aspect ratios to deliver (default: all three);
+                            a size such as 1920x1200 works too
   --zoom <n>                Tightest framing allowed on a single element (2.6)
   --padding <px>            Breathing room around the element, source px (140)
   --cursor-size <px>        Arrow height / touch dot diameter, output px (46)
@@ -52,13 +53,23 @@ function readFormats(value: string | undefined): readonly FormatSpec[] {
   const wanted = value.split(',').map((entry) => entry.trim())
   return wanted.map((aspect) => {
     const known = DEFAULT_FORMATS.find((spec) => spec.label === aspect)
-    if (known === undefined) {
-      throw new Error(
-        `Unknown format "${aspect}". Available: ` +
-          DEFAULT_FORMATS.map((spec) => spec.label).join(', '),
-      )
+    if (known !== undefined) return known satisfies FormatSpec
+    // An explicit size. A device can promise a size that has none of the
+    // three names — desktop-wide's 1920x1200 is 16:10 — and without this a
+    // second render of its take could only ship a crop of it. The label is
+    // the size itself, the same one `formatsFor` in the chain gives it.
+    const size = /^([1-9]\d*)x([1-9]\d*)$/.exec(aspect)
+    if (size !== null) {
+      return {
+        desired: { height: Number(size[2]), width: Number(size[1]) },
+        label: aspect,
+      } satisfies FormatSpec
     }
-    return known satisfies FormatSpec
+    throw new Error(
+      `Unknown format "${aspect}". Available: ` +
+        DEFAULT_FORMATS.map((spec) => spec.label).join(', ') +
+        ', or a size such as 1920x1200',
+    )
   })
 }
 

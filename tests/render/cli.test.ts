@@ -45,6 +45,25 @@ describe('the render command', () => {
     )
   })
 
+  it('takes an explicit size, so a device size with no aspect name can be re-rendered', () => {
+    // desktop-wide promises 1920x1200 (16:10), which none of the three names
+    // covers; before this a second look at its take could only be a crop.
+    const parsed = parseArguments(['in', 'out', '--formats', '1920x1200,9:16'])
+    expect(parsed.options.formats).toEqual([
+      { desired: { height: 1200, width: 1920 }, label: '1920x1200' },
+      { desired: { height: 1920, width: 1080 }, label: '9:16' },
+    ])
+  })
+
+  it('refuses a size that is not two positive whole numbers', () => {
+    expect(() => parseArguments(['in', 'out', '--formats', '0x1200'])).toThrow(
+      /Unknown format "0x1200"/,
+    )
+    expect(() =>
+      parseArguments(['in', 'out', '--formats', '1920x1200.5']),
+    ).toThrow(/or a size such as 1920x1200/)
+  })
+
   it('leaves the encoder alone unless asked, and names it when asked', () => {
     // Nothing set means nothing overridden: the device layer's own choice
     // survives instead of being replaced by a render-side default.
