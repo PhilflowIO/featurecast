@@ -1,11 +1,17 @@
 export {
   cursorAt,
+  cursorLookForRecording,
   DEFAULT_CURSOR_LOOK,
   inferCursorKind,
   pointerAt,
   screenToVideoUV,
 } from './cursor.js'
-export type { CursorKind, CursorLook, CursorTransform } from './cursor.js'
+export type {
+  CursorKind,
+  CursorLook,
+  CursorTransform,
+  PointerStyle,
+} from './cursor.js'
 export {
   compositeSprite,
   createRaster,

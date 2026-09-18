@@ -241,3 +241,11 @@ on the eight mobile ones), so it is derived rather than written down a second
 time. Pointer size (24 px) and ripple colour are overridable placeholders and
 belong to M4; `crf 23` is not a new choice but libx264's default value, and
 therefore what the existing assembly stage already produces anyway.
+
+**The style reaches the renderer through the capture.** `featurecast run`
+writes it into `device.json` beside the frames, and `pnpm render` draws that
+pointer — a touch dot for `touch`, nothing for `none` — whatever the event log
+contains. Until featurecast#155 the renderer guessed from the log instead
+(a tap anywhere meant touch), so a phone recording that only swiped got a
+desktop arrow. A capture without `device.json`, made before that, still gets
+the guess.

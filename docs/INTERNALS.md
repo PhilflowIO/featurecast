@@ -491,7 +491,8 @@ would be crops nobody ordered, and out of a mobile recording two of the three
 cannot be cut sharply at all.
 
 Two folders sit side by side per device: the recording (`frames/`,
-`timestamps.json`, the event log) and beside it the videos with their
+`timestamps.json`, the event log, and `device.json`, which names the device
+and the pointer the render draws for it) and beside it the videos with their
 `decisions.json`. Which is raw material and which is result is visible from
 the folder.
 
