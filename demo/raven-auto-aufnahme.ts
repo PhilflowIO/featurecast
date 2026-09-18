@@ -58,6 +58,11 @@ import {
  *
  *     RAVEN_ROOM_LINK='https://staging.raven.ceo/meet/…?t=…&e=…' \
  *         pnpm featurecast run demo/raven-auto-aufnahme.ts
+ *
+ * On the GPU host the link has to be named to reach the container::
+ *
+ *     RAVEN_ROOM_LINK='…' FEATURECAST_BOX_ENV=RAVEN_ROOM_LINK \
+ *         tools/gpu-box/record.sh demo/raven-auto-aufnahme.ts --devices iphone,desktop-wide
  */
 
 /** An invented name. It is what the other participants see on the guest's tile. */

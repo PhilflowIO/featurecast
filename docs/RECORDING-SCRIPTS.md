@@ -258,7 +258,10 @@ and without `auth/` unless `FEATURECAST_BOX_SYNC_AUTH=1` — a stored session is
 a login), runs `featurecast run` inside a container with that GPU
 (`tools/gpu-box/Dockerfile`: system libraries and ffmpeg only; dependencies and
 the pinned browser come from the lockfile), and copies the output back to the
-same `artifacts/<script>/` a local run would write. The host needs docker with
+same `artifacts/<script>/` a local run would write. The container sees none
+of the calling shell's environment; a script that reads a variable gets it by
+name, `FEATURECAST_BOX_ENV=RAVEN_ROOM_LINK` (comma-separated), carried over
+ssh stdin into an env file that is deleted after the run. The host needs docker with
 the NVIDIA container toolkit and nothing else. Host, GPU index, remote
 directory and the utilization limit are environment variables, listed at the
 top of the script.

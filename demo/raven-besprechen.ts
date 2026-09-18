@@ -43,6 +43,11 @@ import {
  *     RAVEN_DEMO_EMAIL=… RAVEN_DEMO_PW=… \
  *         pnpm exec tsx demo/raven-meetings.ts anmelden
  *     pnpm featurecast run demo/raven-besprechen.ts
+ *
+ * On the GPU host the session has to be copied over explicitly::
+ *
+ *     FEATURECAST_BOX_SYNC_AUTH=1 \
+ *         tools/gpu-box/record.sh demo/raven-besprechen.ts --devices iphone,desktop-wide
  */
 
 /** The staged meeting: has a transcript and is not encrypted. */
