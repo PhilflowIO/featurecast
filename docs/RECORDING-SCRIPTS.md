@@ -173,6 +173,15 @@ the card that was not supposed to be in it.
 
 A complete example that runs against the real application is
 [`demo/raven-meetings.ts`](../demo/raven-meetings.ts).
+Three more film the same application —
+[`demo/raven-startseite.ts`](../demo/raven-startseite.ts) (the public landing
+page, no session), [`demo/raven-besprechen.ts`](../demo/raven-besprechen.ts)
+(from a meeting into the assistant) and
+[`demo/raven-auto-aufnahme.ts`](../demo/raven-auto-aufnahme.ts) (a guest agrees
+and the recording starts by itself). What the four share — the target, the
+session path, the areas to hide, the fixed clock, the visibility poller and the
+sign-in step — lives once in [`demo/raven-common.ts`](../demo/raven-common.ts),
+so a selector added to the hide list reaches every recording at once.
 
 | Switch      | Meaning                                                                   |
 | ----------- | ------------------------------------------------------------------------- |
