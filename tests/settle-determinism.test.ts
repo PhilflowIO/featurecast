@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { readFile, rm } from 'node:fs/promises'
+import { availableParallelism } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -18,13 +19,19 @@ function sha256(content: string): string {
  * How many busy loops run alongside the recordings. Not optional garnish:
  * on an idle machine the old criterion's phase dependence hid under the
  * noise floor and three processes agreed roughly two times in three, while
- * under this exact condition — 32 busy loops in the same container — they
- * disagreed three times out of three. A determinism guarantee has to be
- * checked where it breaks, so the load is part of the test rather than a
- * separate command someone has to remember. Override with
+ * under full load they disagreed three times out of three. A determinism
+ * guarantee has to be checked where it breaks, so the load is part of the
+ * test rather than a separate command someone has to remember. Override with
  * `FEATURECAST_LOAD_WORKERS=0` to reproduce the idle-machine baseline.
+ *
+ * One loop per logical core, because that is the condition it was measured
+ * under: 32 loops on the 32-thread bench box. A fixed 32 on a 4-core CI
+ * runner is eight times that, starves Chromium until no target settles
+ * inside its timeout, and tests the runner instead of the criterion.
  */
-const LOAD_WORKERS = Number(process.env.FEATURECAST_LOAD_WORKERS ?? '32')
+const LOAD_WORKERS = Number(
+  process.env.FEATURECAST_LOAD_WORKERS ?? String(availableParallelism()),
+)
 
 const busy: ChildProcess[] = []
 
