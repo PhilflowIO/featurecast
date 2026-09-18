@@ -91,6 +91,12 @@ assertions do not belong in the video anyway), or — under `featurecast run` �
 into a `prepare` step that gets the full Playwright page and runs outside the
 capture window.
 
+A `page.locator(...)` answers three questions: `boundingBox()`, `evaluate()`
+and `count()`. Poll with `count()`: `boundingBox()` waits for the node to exist
+(Playwright's default, 30 s), so a loop asking "is the failure notice there
+yet?" with it blocks on its first pass and ends in a timeout instead of an
+answer.
+
 And one quirk that bites quickly: `page.evaluate` here takes a function **with
 no arguments**. Values from the script do not reach the page as parameters,
 they have to go into the text of the function.
@@ -194,12 +200,18 @@ safe: the header of [`src/framed.ts`](../src/framed.ts).
 
 A complete example that runs against the real application is
 [`demo/raven-meetings.ts`](../demo/raven-meetings.ts).
+Three product-film scenes film one meeting of it —
+[`demo/raven-protokoll.ts`](../demo/raven-protokoll.ts) (the summary is
+written live), [`demo/raven-transkript-sprung.ts`](../demo/raven-transkript-sprung.ts)
+(a click in the transcript moves the player) and
+[`demo/raven-steinkauz-fragen.ts`](../demo/raven-steinkauz-fragen.ts) (a
+question to the assistant); their headers name the staging preconditions.
 Three more film the same application —
 [`demo/raven-startseite.ts`](../demo/raven-startseite.ts) (the public landing
 page, no session), [`demo/raven-besprechen.ts`](../demo/raven-besprechen.ts)
 (from a meeting into the assistant) and
 [`demo/raven-auto-aufnahme.ts`](../demo/raven-auto-aufnahme.ts) (a guest agrees
-and the recording starts by itself). What the four share — the target, the
+and the recording starts by itself). What they all share — the target, the
 session path, the areas to hide, the fixed clock, the visibility poller and the
 sign-in step — lives once in [`demo/raven-common.ts`](../demo/raven-common.ts),
 so a selector added to the hide list reaches every recording at once.
