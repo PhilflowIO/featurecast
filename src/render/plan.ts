@@ -19,6 +19,7 @@ import {
   buildTimeMapping,
   mapTime,
   type IdleOptions,
+  type Stretch,
   type TimeMapping,
 } from './idle.js'
 import { pointerSamples } from './zoom.js'
@@ -134,6 +135,24 @@ function interactionTimes(events: readonly TimedEvent[]): number[] {
   return times
 }
 
+/**
+ * The stillness the script asked for: every `hold`, from the moment it was
+ * logged for as long as it declared.
+ *
+ * The recorder logs a hold immediately before it waits, on the same wall clock
+ * the frames carry, so `[timeMs, timeMs + milliseconds]` is the stretch the
+ * author wanted on screen. Idle trimming leaves exactly that alone; whatever
+ * stillness runs on past it is still fair game.
+ */
+function scriptedHolds(events: readonly TimedEvent[]): Stretch[] {
+  const holds: Stretch[] = []
+  for (const { event, timeMs } of events) {
+    if (event.type !== 'hold') continue
+    holds.push({ startMs: timeMs, endMs: timeMs + event.milliseconds })
+  }
+  return holds
+}
+
 function remapEvents(
   events: readonly TimedEvent[],
   mapping: TimeMapping,
@@ -181,6 +200,7 @@ export function planRender(
     capture.sessionDurationMs,
     interactionTimes(events),
     recordedSamples,
+    scriptedHolds(events),
     options.idle,
   )
   // One clock for everybody: the same mapping bends the frames and the events,

@@ -119,7 +119,15 @@ function worstPointerStep(plan: RenderPlan): {
 
 describe('the drawn pointer never moves further in one output frame than the recording moved in one sample', () => {
   const capture = benchCapture()
-  const events = fixture('run-bench', capture.sessionStartedAt)
+  // Without its holds. Every stretch this recording ever lost to trimming sat
+  // inside a scripted hold, and since issue 139 a hold plays in full, so on the
+  // real log nothing is trimmed and the bound below would have nothing to
+  // measure. Dropping the holds turns those pauses back into unscripted waits —
+  // the same pixels, the same pointer path — which is exactly the stillness
+  // this instrument exists to watch being squeezed.
+  const events = fixture('run-bench', capture.sessionStartedAt).filter(
+    ({ event }) => event.type !== 'hold',
+  )
 
   it('holds over the recording the owner watched', () => {
     const plan = planRender(capture, events)

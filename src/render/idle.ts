@@ -36,6 +36,16 @@ import type { PointerSample } from './rest.js'
  * the frame gaps, the second from the pointer path this module is handed. Both
  * are stretches of time; the answer is the overlap.
  *
+ * **Stillness the script asked for is not idle.** A `demo.hold(ms)` is the
+ * author asking for time on screen — a reading pause after an answer lands —
+ * and it looks exactly like the waits trimming exists for: the picture holds,
+ * the pointer rests. Neither signal can tell the two apart, but the event log
+ * can, because it records every hold with its declared length. Those stretches
+ * are handed in as `keptStretches` and taken out of every trimmable stretch
+ * before anything is compressed. Only the declared length is kept: stillness
+ * that runs past the end of a hold (the page still waiting for a network
+ * answer, say) is idle again and trimmed like any other.
+ *
  * Known limit, untested at runtime: the picture signal is byte-equality of
  * consecutive frames, and there is no floor under it. One changed pixel per frame — a
  * spinner in a corner, a blinking caret, a clock in the page — defeats the
@@ -68,7 +78,9 @@ export type IdleOptions = {
    * It has to be a speed and not a distance. The log carries no samples at all
    * while a script holds, so the two samples bracketing a one-second pause sit
    * a full move's step apart; judged on distance that pause looks like motion,
-   * and every hold in every recording would survive trimming.
+   * and every long stillness bracketed by two moves would survive trimming.
+   * Whether a scripted hold survives is decided explicitly instead, by
+   * `keptStretches` — not as a side effect of this threshold.
    */
   pointerStillPxPerMs?: number
   /**
@@ -86,6 +98,9 @@ export type IdleOptions = {
    */
   maxPointerSpeedPxPerMs?: number
 }
+
+/** A stretch of recording time, in milliseconds since the session start. */
+export type Stretch = { endMs: number; startMs: number }
 
 export type TimeMapping = {
   /** Strictly increasing pairs (recording ms, output ms). */
@@ -113,13 +128,15 @@ export const DEFAULT_IDLE: Required<IdleOptions> = {
  * start, in order. `protectedTimesMs` are moments that must stay untouched.
  * `pointerSamples` is the path the drawn pointer takes, on the same clock: a
  * stretch the pointer moves through is not still, however unchanged the
- * picture is.
+ * picture is. `keptStretches` are stretches the script asked to be shown in
+ * full — its `hold`s — and are never trimmed, whatever the other signals say.
  */
 export function buildTimeMapping(
   frameTimesMs: readonly number[],
   sessionDurationMs: number,
   protectedTimesMs: readonly number[],
   pointerSamples: readonly PointerSample[],
+  keptStretches: readonly Stretch[],
   options: IdleOptions = {},
 ): TimeMapping {
   const {
@@ -145,6 +162,7 @@ export function buildTimeMapping(
       (time) => time >= startMs - protectMs && time <= endMs + protectMs,
     )
 
+  const kept = mergeStretches(keptStretches)
   const stillPointer = pointerStillStretches(
     pointerSamples,
     sessionDurationMs,
@@ -161,19 +179,27 @@ export function buildTimeMapping(
     // The picture held still from `startMs` to `endMs`. Which parts of that did
     // the pointer hold still for too?
     for (const still of stillPointer) {
-      const from = Math.max(startMs, still.startMs)
-      const to = Math.min(endMs, still.endMs)
-      if (to - from < thresholdMs) continue
-      if (isProtected(from, to)) continue
-      // Long enough for the drift it does contain, and never shorter than the
-      // hold asked for.
-      const travelPx = pointerTravelPx(pointerSamples, from, to)
-      const heldMs = Math.min(
-        to - from,
-        Math.max(compressToMs, travelPx / maxPointerSpeedPxPerMs),
-      )
-      if (to - from - heldMs <= 0) continue
-      trimmed.push({ startMs: from, endMs: to, heldMs })
+      const overlapFrom = Math.max(startMs, still.startMs)
+      const overlapTo = Math.min(endMs, still.endMs)
+      if (overlapTo - overlapFrom < thresholdMs) continue
+      // What is left once the stretches the script asked for are taken out.
+      for (const { startMs: from, endMs: to } of subtractStretches(
+        overlapFrom,
+        overlapTo,
+        kept,
+      )) {
+        if (to - from < thresholdMs) continue
+        if (isProtected(from, to)) continue
+        // Long enough for the drift it does contain, and never shorter than
+        // the compression floor.
+        const travelPx = pointerTravelPx(pointerSamples, from, to)
+        const heldMs = Math.min(
+          to - from,
+          Math.max(compressToMs, travelPx / maxPointerSpeedPxPerMs),
+        )
+        if (to - from - heldMs <= 0) continue
+        trimmed.push({ startMs: from, endMs: to, heldMs })
+      }
     }
   }
 
@@ -273,4 +299,48 @@ function pointerStillStretches(
   }
   add(last.timeMs, sessionDurationMs)
   return stretches
+}
+
+/**
+ * Sorts stretches and fuses the ones that touch or overlap, dropping empty
+ * ones. Two holds written back to back are one pause to the viewer.
+ */
+function mergeStretches(stretches: readonly Stretch[]): Stretch[] {
+  const sorted = stretches
+    .filter((stretch) => stretch.endMs > stretch.startMs)
+    .map((stretch) => ({ startMs: stretch.startMs, endMs: stretch.endMs }))
+    .sort((a, b) => a.startMs - b.startMs)
+  const merged: Stretch[] = []
+  for (const stretch of sorted) {
+    const previous = merged[merged.length - 1]
+    if (previous !== undefined && previous.endMs >= stretch.startMs) {
+      previous.endMs = Math.max(previous.endMs, stretch.endMs)
+      continue
+    }
+    merged.push(stretch)
+  }
+  return merged
+}
+
+/**
+ * `[startMs, endMs)` with every stretch in `holes` cut out, in order. `holes`
+ * must be sorted and non-overlapping, as `mergeStretches` returns them.
+ */
+function subtractStretches(
+  startMs: number,
+  endMs: number,
+  holes: readonly Stretch[],
+): Stretch[] {
+  const pieces: Stretch[] = []
+  let cursor = startMs
+  for (const hole of holes) {
+    if (hole.endMs <= cursor) continue
+    if (hole.startMs >= endMs) break
+    if (hole.startMs > cursor)
+      pieces.push({ startMs: cursor, endMs: hole.startMs })
+    cursor = Math.max(cursor, hole.endMs)
+    if (cursor >= endMs) break
+  }
+  if (cursor < endMs) pieces.push({ startMs: cursor, endMs })
+  return pieces
 }

@@ -31,7 +31,7 @@ export type { FormatSpec, ResolvedFormat } from './format.js'
 export { baseRect, contains } from './geometry.js'
 export type { Rect, Size } from './geometry.js'
 export { buildTimeMapping, DEFAULT_IDLE, mapTime } from './idle.js'
-export type { IdleOptions, TimeMapping } from './idle.js'
+export type { IdleOptions, Stretch, TimeMapping } from './idle.js'
 export { planRender, serializePlan } from './plan.js'
 export type {
   FormatPlan,
