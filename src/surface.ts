@@ -1,6 +1,6 @@
 import type { CDPSession, Frame, Page } from 'playwright'
 
-import type { LocatorLike, RecordPage } from './record.js'
+import type { PageLocator, RecordPage } from './record.js'
 
 /**
  * The seam between "the document being filmed" and "the page being
@@ -66,10 +66,11 @@ async function touch(
  * TypeScript cannot know that, so the conversion is stated once, here, rather
  * than by casting the whole page object and losing every other check with it.
  */
-function locatorFor(frame: Frame, selector: string): LocatorLike {
+function locatorFor(frame: Frame, selector: string): PageLocator {
   const locator = frame.locator(selector)
   return {
     boundingBox: async () => locator.boundingBox(),
+    count: async () => locator.count(),
     evaluate: async (pageFunction, arg) =>
       locator.evaluate(
         pageFunction as Parameters<typeof locator.evaluate>[0],

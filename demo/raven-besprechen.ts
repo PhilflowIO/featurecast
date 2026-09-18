@@ -1,13 +1,20 @@
 import type { Demo, RecordPage } from '../src/record.js'
 import {
-  RAVEN_ALLOW_FRAMING,
+  BESPRECHEN,
+  EINGABE,
   ERSTE_ZEILE,
+  KONTEXT_CHIP,
+  RAVEN_ALLOW_FRAMING,
   RAVEN_FIXED_TIME,
   RAVEN_HIDE_SELECTORS,
   RAVEN_STATE,
   RAVEN_URL,
+  SENDEN,
+  inDieMitte,
   vorbereiten,
   warteAuf,
+  warteAufAntwort,
+  zeileMitTitel,
 } from './raven-common.js'
 
 /**
@@ -71,59 +78,8 @@ import {
  */
 const TITEL = 'Hirtenscheibe Guss'
 
-/**
- * The link that opens that meeting.
- *
- * NOT the shared first-row selector. A meetings row is a clickable `div` that
- * opens the preview pane. The only `a[href^="/meetings/"]` in it is the
- * 28 px chevron "Details öffnen" (`ui/src/components/meetings/meeting-list-item.tsx:121,294-301`
- * in `flow.raven`). An early trial clicked the first row's chevron while a
- * search was still in flight and opened the wrong meeting. This selector names
- * the row by its title and takes that row's chevron, so which meeting opens
- * never depends on where the list happens to stand.
- */
-const ZEILE =
-  `h3:has-text("${TITEL}") >> nth=0 >> ` +
-  'xpath=ancestor::div[contains(concat(" ", @class, " "), " group ")][1]' +
-  '//a[starts-with(@href, "/meetings/")] >> nth=0'
-
-/** The button on the meeting page. There is no `data-testid` on it. */
-const BESPRECHEN = 'role=button[name="Mit Raven besprechen"]'
-
-/**
- * The chip above the composer. `>> nth=0` because the locator has to be
- * unambiguous before the recorder will report its geometry.
- */
-const KONTEXT_CHIP = 'text=Kontext: >> nth=0'
-
-/**
- * A finished assistant message that is an answer.
- *
- * A failed or interrupted turn is ALSO an `assistant-message`, with a marker
- * inside (`assistant-page-client.tsx:2006-2045`). The first trial waited for
- * the bare test id, took "Antwort fehlgeschlagen" for the answer, and the
- * renderer then trimmed the motionless failure away as idle time. The video
- * ended on the question.
- */
-const ANTWORT_OHNE_NUMMER =
-  '[data-testid="assistant-message"]' +
-  ':not(:has([data-testid="assistant-message-failed"]))' +
-  ':not(:has([data-testid="assistant-message-interrupted"]))'
-
-/**
- * The n-th finished answer, counted from zero: 0 is Raven's own opening, 1
- * the answer to `FRAGE`. A turn still streaming is a different node
- * (`assistant-message-streaming`), so this only matches once it has settled.
- */
-function antwort(nummer: number): string {
-  return `${ANTWORT_OHNE_NUMMER} >> nth=${String(nummer)}`
-}
-
-/** The composer at the bottom, where the pointer waits for the answer. */
-const EINGABE = 'textarea >> nth=0'
-
-/** The composer's send button. Enter would do too, but `demo` has no keys. */
-const SENDEN = 'role=button[name="Senden"]'
+/** The link that opens that meeting (see `zeileMitTitel`). */
+const ZEILE = zeileMitTitel(TITEL)
 
 /**
  * The question the viewer asks.
@@ -137,77 +93,6 @@ const SENDEN = 'role=button[name="Senden"]'
  * question whose honest answer is "nobody was named" films Raven saying no.
  */
 const FRAGE = 'Was wurde entschieden, und was ist noch offen?'
-
-/**
- * Scrolls until `selector` stands at about 45 % of the viewport height, with a
- * visible scroll the renderer keeps (swipe on a phone, wheel on a desktop).
- *
- * A tap on something at the screen's edge is filmed as a dot on a sliver of
- * button: in the first phone take the tap on "Mit Raven besprechen" landed on
- * the bottom 6 px of the button, the rest hidden under Raven's own player strip
- * (flow.raven #7217, fixed in PR #7220). Bringing the target to the middle
- * first puts it where the zoom centres anyway, with room above and below.
- * Up to three passes, because a lazily grown list can move the target while
- * the first scroll runs; a target already within 60 px of the mark is left
- * alone, so a desktop layout that shows it at once does not scroll for show.
- */
-async function inDieMitte(
-  page: RecordPage,
-  demo: Demo,
-  selector: string,
-): Promise<void> {
-  for (let durchgang = 0; durchgang < 3; durchgang += 1) {
-    const box = await page.locator(selector).boundingBox()
-    const hoehe = page.viewportSize()?.height
-    if (box === null || hoehe === undefined) {
-      throw new Error(`Cannot place ${selector}: no geometry`)
-    }
-    const abstand = Math.round(box.y + box.height / 2 - hoehe * 0.45)
-    if (Math.abs(abstand) <= 60) return
-    await demo.scroll(0, abstand)
-  }
-}
-
-/** The marker of a turn that did not produce an answer. */
-const FEHLSCHLAG =
-  '[data-testid="assistant-message-failed"], ' +
-  '[data-testid="assistant-message-interrupted"]'
-
-/** An answer is a model call. The slow reasoning level can take this long. */
-const ANTWORT_FRIST_MS = 90_000
-
-/**
- * Waits for the answer, and aborts at once if the turn failed.
- *
- * A failed turn does not become an answer by waiting 90 seconds, and a
- * recording that ends on a failure is worse than none. The message names the
- * cause the trial runs actually hit: on a workstation where Docker keeps
- * creating and removing network interfaces, Chromium reports
- * `ERR_NETWORK_CHANGED` and drops the answer stream midway.
- */
-async function warteAufAntwort(
-  page: RecordPage,
-  nummer: number,
-): Promise<void> {
-  const ende = Date.now() + ANTWORT_FRIST_MS
-  for (;;) {
-    if ((await page.locator(antwort(nummer)).boundingBox()) !== null) return
-    if ((await page.locator(`${FEHLSCHLAG} >> nth=0`).boundingBox()) !== null) {
-      throw new Error(
-        'The assistant turn failed ("Antwort fehlgeschlagen"), so there is ' +
-          'nothing to film. If this machine runs Docker containers that come ' +
-          'and go, Chromium drops the answer stream on every network change ' +
-          '(ERR_NETWORK_CHANGED). Record on a quiet machine and run it again.',
-      )
-    }
-    if (Date.now() > ende) {
-      throw new Error(
-        `No answer within ${String(ANTWORT_FRIST_MS)} ms: ${antwort(nummer)}`,
-      )
-    }
-    await new Promise((fertig) => setTimeout(fertig, 250))
-  }
-}
 
 /** The application that is filmed. */
 export const url = RAVEN_URL

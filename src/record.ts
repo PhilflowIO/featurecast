@@ -51,6 +51,20 @@ export type LocatorLike = {
   ) => Promise<unknown>
 }
 
+/**
+ * What `page.locator` returns in a script: a `LocatorLike` that can also say
+ * how many nodes match right now.
+ *
+ * `boundingBox()` answers "where is it" and waits for the node to exist
+ * (Playwright's default timeout, 30 s). A script that polls for something that
+ * may never come — a failure notice, a toast — needs the question that returns
+ * at once, and that is `count()`. Only the page's own locator carries it; a
+ * `Target` handed to `demo` stays a plain `LocatorLike`.
+ */
+export type PageLocator = LocatorLike & {
+  count: () => Promise<number>
+}
+
 export type ViewportSize = { height: number; width: number }
 
 export type RecordPage = {
@@ -60,7 +74,7 @@ export type RecordPage = {
   /** Set by the runtime from the resolved device descriptor; false without one. */
   hasTouch: boolean
   keyboard: { type: (text: string) => Promise<void> }
-  locator: (selector: string) => LocatorLike
+  locator: (selector: string) => PageLocator
   mouse: {
     click: (x: number, y: number) => Promise<void>
     move: (x: number, y: number, options: { steps: number }) => Promise<void>

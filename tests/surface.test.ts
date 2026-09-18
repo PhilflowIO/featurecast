@@ -22,6 +22,7 @@ function doubles(): {
     goto: record('frame.goto'),
     locator: vi.fn((selector: string) => ({
       boundingBox: async () => ({ height: 10, width: 20, x: 1, y: 2 }),
+      count: async () => (selector === '#absent' ? 0 : 1),
       evaluate: async () => `evaluated:${selector}`,
     })),
   }
@@ -160,5 +161,19 @@ describe('the recording surface', () => {
       scale: 2.75,
     })
     expect(surface.viewportSize()).toEqual({ height: 1920, width: 1080 })
+  })
+
+  it('answers how many nodes match right now, without waiting for one', async () => {
+    // `boundingBox()` waits for the node to exist (Playwright's default, 30 s),
+    // so a script that polls "is the failure notice there?" with it blocks on
+    // every pass. `count()` is the question that returns at once.
+    const { cdp, frame, page } = doubles()
+    const surface = recordPageFor(frame, page, {
+      cdp,
+      hasTouch: false,
+      scale: 1,
+    })
+    expect(await surface.locator('#absent').count()).toBe(0)
+    expect(await surface.locator('#present').count()).toBe(1)
   })
 })
