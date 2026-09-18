@@ -15,10 +15,13 @@ import {
  *
  * The story runs meetings list → search "Steinkauz" → open the meeting →
  * "Mit Raven besprechen" → the assistant, pinned to that one meeting
- * ("Kontext: <title>"), writes a first answer by itself. The last part needs no
- * typing. Opening the assistant with `?meeting=<id>` and an empty history fires
- * one automatic turn (`ui/src/app/assistant/assistant-page-client.tsx:1435-1488`
- * in `flow.raven`).
+ * ("Kontext: <title>"), writes a first answer by itself → the viewer's own
+ * question, typed into the composer, and Raven's answer to it. Opening the
+ * assistant with `?meeting=<id>` and an empty history fires one automatic turn
+ * (`ui/src/app/assistant/assistant-page-client.tsx:1435-1488` in `flow.raven`).
+ * That turn names the meeting's topics and offers follow-ups; it is concrete
+ * but it is not an answer to anything. The typed question is what shows the
+ * feature doing its job.
  *
  * The button is shown to every account since flow.raven PR #7035; before it,
  * it needed the `verstehen_chat` grant and the script had a second path for
@@ -79,13 +82,40 @@ const KONTEXT_CHIP = 'text=Kontext: >> nth=0'
  * renderer then trimmed the motionless failure away as idle time. The video
  * ended on the question.
  */
-const ANTWORT =
+const ANTWORT_OHNE_NUMMER =
   '[data-testid="assistant-message"]' +
   ':not(:has([data-testid="assistant-message-failed"]))' +
-  ':not(:has([data-testid="assistant-message-interrupted"])) >> nth=0'
+  ':not(:has([data-testid="assistant-message-interrupted"]))'
+
+/**
+ * The n-th finished answer, counted from zero: 0 is Raven's own opening, 1
+ * the answer to `FRAGE`. A turn still streaming is a different node
+ * (`assistant-message-streaming`), so this only matches once it has settled.
+ */
+function antwort(nummer: number): string {
+  return `${ANTWORT_OHNE_NUMMER} >> nth=${String(nummer)}`
+}
 
 /** The composer at the bottom, where the pointer waits for the answer. */
 const EINGABE = 'textarea >> nth=0'
+
+/** The composer's send button. Enter would do too, but `demo` has no keys. */
+const SENDEN = 'role=button[name="Senden"]'
+
+/**
+ * The question the viewer asks.
+ *
+ * Chosen against the meeting's own content, read from its summary and
+ * transcript before it was written down (Projekt Steinkauz, Statusrunde KW 37):
+ * three decisions (technical release end of October; no development price for
+ * Salmweide Energie but a volume discount of 240 euros bound to 600 units in
+ * twelve months; the right of first refusal cut to six months and one size)
+ * and one question explicitly left open (who trains the second shift). So the
+ * question asks for exactly that split. "Who does what by when" was the first
+ * idea and was dropped: the meeting assigns almost no tasks, and a question
+ * whose honest answer is "nobody was named" films Raven saying no.
+ */
+const FRAGE = 'Was wurde entschieden, und was ist noch offen?'
 
 /** The marker of a turn that did not produce an answer. */
 const FEHLSCHLAG =
@@ -104,10 +134,13 @@ const ANTWORT_FRIST_MS = 90_000
  * creating and removing network interfaces, Chromium reports
  * `ERR_NETWORK_CHANGED` and drops the answer stream midway.
  */
-async function warteAufAntwort(page: RecordPage): Promise<void> {
+async function warteAufAntwort(
+  page: RecordPage,
+  nummer: number,
+): Promise<void> {
   const ende = Date.now() + ANTWORT_FRIST_MS
   for (;;) {
-    if ((await page.locator(ANTWORT).boundingBox()) !== null) return
+    if ((await page.locator(antwort(nummer)).boundingBox()) !== null) return
     if ((await page.locator(`${FEHLSCHLAG} >> nth=0`).boundingBox()) !== null) {
       throw new Error(
         'The assistant turn failed ("Antwort fehlgeschlagen"), so there is ' +
@@ -117,7 +150,9 @@ async function warteAufAntwort(page: RecordPage): Promise<void> {
       )
     }
     if (Date.now() > ende) {
-      throw new Error(`No answer within ${ANTWORT_FRIST_MS} ms: ${ANTWORT}`)
+      throw new Error(
+        `No answer within ${String(ANTWORT_FRIST_MS)} ms: ${antwort(nummer)}`,
+      )
     }
     await new Promise((fertig) => setTimeout(fertig, 250))
   }
@@ -175,7 +210,17 @@ export default async function besprechen(
   // on the answer covers exactly the words the viewer is meant to read.
   await demo.point(EINGABE)
 
-  await warteAufAntwort(page)
+  await warteAufAntwort(page, 0)
+  // Long enough to see that Raven opened by itself, not long enough to read
+  // it all: the answer the clip is about comes next.
+  await demo.hold(2500)
+
+  await demo.type(EINGABE, FRAGE)
+  await demo.hold(500)
+  await demo.click(SENDEN)
+  // Out of the answer's way again, for the same reason as above.
+  await demo.point(EINGABE)
+  await warteAufAntwort(page, 1)
   // Reading time. A scripted hold is kept in full by the renderer.
-  await demo.hold(6000)
+  await demo.hold(8000)
 }
