@@ -517,14 +517,29 @@ export function createRecorder(
           )
           await page.touchscreen.down(leg.from.x, leg.from.y)
           const start = Date.now()
+          // The steps go out on the clock and are not awaited one by one.
+          // Chromium acknowledges a touch move only after the frame it lands
+          // in — 33 ms measured, two refresh intervals — so waiting for each
+          // acknowledgement moved the page on every second frame and made
+          // every phone recording 30 Hz content (issue #116). One CDP session
+          // delivers in order, so nothing is reordered; a refusal is caught
+          // on arrival so it cannot surface as an unhandled rejection, and it
+          // stops the path before the next step.
+          const inFlight: Promise<void>[] = []
+          let refused: { error: unknown } | undefined
           for (const [index, travelled] of positions.entries()) {
             await sleepUntil(page, start + ((index + 1) / EVENT_LOG_FPS) * 1000)
+            if (refused !== undefined) break
             const at = {
               x: leg.from.x - travelled.x,
               y: leg.from.y - travelled.y,
             }
             const dispatchedAt = Date.now()
-            await page.touchscreen.move(at.x, at.y)
+            inFlight.push(
+              page.touchscreen.move(at.x, at.y).catch((error: unknown) => {
+                refused ??= { error }
+              }),
+            )
             pointer = at
             log(
               {
@@ -536,6 +551,10 @@ export function createRecorder(
               dispatchedAt,
             )
           }
+          // Lifting before the browser has taken every step would stop the
+          // page short of where the log says the finger went.
+          await Promise.all(inFlight)
+          if (refused !== undefined) throw refused.error
           await page.touchscreen.up(pointer.x, pointer.y)
           samples += positions.length
         }
