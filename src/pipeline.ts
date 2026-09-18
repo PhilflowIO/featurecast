@@ -22,6 +22,7 @@ import {
   recordSession,
   requireAppUrl,
 } from './session.js'
+import { type FakeMedia, readFakeMedia } from './fake-media.js'
 import type { PrepareStep, RecordingScript } from './session.js'
 import { uploadFile, resolveUploadConfig } from './upload.js'
 
@@ -99,8 +100,12 @@ export type LoadedScript = {
    * of the browser, and a script is handed a page of a browser that is
    * already running. Without it a video-call page films its "no camera, no
    * microphone" state — in Raven's case a red banner over the join card.
+   *
+   * An object instead of `true` names files: a face for the camera, a voice
+   * for the microphone, the voice anchored on the wall clock so several
+   * browsers in one meeting speak on one timeline (src/fake-media.ts).
    */
-  fakeMedia?: boolean
+  fakeMedia?: FakeMedia
   /**
    * `fixedTime`: the wall clock the recording claims, as an ISO instant.
    *
@@ -383,7 +388,7 @@ export function readContextSettings(
 > {
   const settings: {
     allowFramingOfApp?: boolean
-    fakeMedia?: boolean
+    fakeMedia?: FakeMedia
     fixedTime?: string
     hideSelectors?: readonly string[]
     storageStatePath?: string
@@ -434,16 +439,7 @@ export function readContextSettings(
 
   const fakeMedia = module_['fakeMedia']
   if (fakeMedia !== undefined) {
-    // A boolean and nothing that merely looks like one: `'false'` is a
-    // truthy string, and a camera switched on by the word "false" is exactly
-    // the kind of silent pass this function exists to refuse.
-    if (typeof fakeMedia !== 'boolean') {
-      throw new Error(
-        `"${path}" exports \`fakeMedia\`, which has to be a boolean: ` +
-          '`export const fakeMedia = true`.',
-      )
-    }
-    settings.fakeMedia = fakeMedia
+    settings.fakeMedia = readFakeMedia(fakeMedia, path)
   }
 
   const allowFramingOfApp = module_['allowFramingOfApp']

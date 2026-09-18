@@ -147,13 +147,13 @@ place in. They are part of the contract because a script simply _cannot_ set
 them itself: it receives an already-opened page, and all five have to hold
 before that page exists.
 
-| Export              | Type       | Meaning                                                       |
-| ------------------- | ---------- | ------------------------------------------------------------- |
-| `storageStatePath`  | `string`   | path to a saved sign-in (`storageState`) — never its contents |
-| `hideSelectors`     | `string[]` | areas that disappear before the page runs its own scripts     |
-| `fixedTime`         | `string`   | the moment every recording claims; also freezes `Math.random` |
-| `fakeMedia`         | `boolean`  | a synthetic camera and microphone, already permitted          |
-| `allowFramingOfApp` | `boolean`  | a phone/tablet may film an app that forbids framing           |
+| Export              | Type                | Meaning                                                                                |
+| ------------------- | ------------------- | -------------------------------------------------------------------------------------- |
+| `storageStatePath`  | `string`            | path to a saved sign-in (`storageState`) — never its contents                          |
+| `hideSelectors`     | `string[]`          | areas that disappear before the page runs its own scripts                              |
+| `fixedTime`         | `string`            | the moment every recording claims; also freezes `Math.random`                          |
+| `fakeMedia`         | `boolean` or object | a synthetic camera and microphone, already permitted — or a face file and a voice file |
+| `allowFramingOfApp` | `boolean`           | a phone/tablet may film an app that forbids framing                                    |
 
 ```ts
 import type { Demo, RecordPage } from '../src/record.js'
@@ -185,6 +185,29 @@ Raven's join card a red banner. With `fakeMedia = true` the browser starts
 with Chromium's synthetic devices (a test picture and a tone) and the context
 holds the permission, so the page sees a working browser. Turn the camera off
 in `prepare` if its test picture should not be in the video.
+
+When the person on the camera is a persona, `fakeMedia` names files instead
+(featurecast#166):
+
+```ts
+export const fakeMedia = {
+  camera: 'artifacts/.media/face.y4m', // Y4M or MJPEG, looped
+  microphone: { file: 'artifacts/.media/voice.wav', startsAt: 1789768800000 },
+}
+```
+
+The camera is Chromium's own `--use-file-for-fake-video-capture`. The
+microphone is not Chromium's sibling switch, which starts the file whenever the
+page opens its microphone — a different moment in every browser of a meeting.
+Instead an init script plays the file through WebAudio, looped and anchored on
+the wall clock: at instant `t` the track is at `(t − startsAt) mod duration`,
+however late the page joins. Other participants' browsers that anchor their
+own tracks at the same instant (flow.raven's demo-meeting tool,
+`DEMO_STIMMEN_AB`) therefore speak on one timeline. `startsAt` is epoch
+milliseconds or an ISO instant; without it the file starts when the microphone
+first opens. The anchor is read from `performance`, not `Date`, so `fixedTime`
+does not shift it. Files that do not exist are refused before a browser
+starts. Example: [`demo/raven-live-meeting.ts`](../demo/raven-live-meeting.ts).
 
 `allowFramingOfApp` is for filming a phone or a tablet of an application that
 forbids framing (`X-Frame-Options: DENY`, `frame-ancestors 'none'`). Those
