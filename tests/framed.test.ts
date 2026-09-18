@@ -5,7 +5,11 @@ import {
   FRAMED_SHELL_PATH,
   framedGeometry,
   framedShellHtml,
+  framedDocumentHeaders,
   framedShellUrl,
+  type HeaderEntry,
+  relaxFrameAncestors,
+  relaxFramingHeaders,
 } from '../src/framed.js'
 
 describe('framed geometry', () => {
@@ -92,5 +96,123 @@ describe('the shell', () => {
       scale: 2.748,
     })
     expect(html).toMatch(/html, body \{[^}]*overflow: hidden/)
+  })
+})
+
+describe('relaxing the framing headers (allowFramingOfApp)', () => {
+  // Raven's staging landing page, verbatim apart from the nonce (2026-09-18).
+  const RAVEN_CSP =
+    "default-src 'self'; script-src 'self' 'nonce-abc' 'wasm-unsafe-eval'; " +
+    "style-src 'self' 'unsafe-inline'; connect-src 'self' wss://live.staging.raven.ceo; " +
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+
+  const valueOf = (headers: HeaderEntry[], name: string): string[] =>
+    headers.filter((h) => h.name.toLowerCase() === name).map((h) => h.value)
+
+  it('turns X-Frame-Options: DENY into SAMEORIGIN', () => {
+    expect(
+      relaxFramingHeaders([{ name: 'x-frame-options', value: 'DENY' }]),
+    ).toEqual([{ name: 'x-frame-options', value: 'SAMEORIGIN' }])
+  })
+
+  it('leaves SAMEORIGIN as SAMEORIGIN and keeps the name as it came', () => {
+    expect(
+      relaxFramingHeaders([{ name: 'X-Frame-Options', value: 'sameorigin' }]),
+    ).toEqual([{ name: 'X-Frame-Options', value: 'SAMEORIGIN' }])
+  })
+
+  it("rewrites frame-ancestors to 'self' and keeps every other directive byte for byte", () => {
+    expect(relaxFrameAncestors(RAVEN_CSP)).toBe(
+      RAVEN_CSP.replace("frame-ancestors 'none'", "frame-ancestors 'self'"),
+    )
+  })
+
+  it('replaces a frame-ancestors with several sources, in any case, anywhere in the policy', () => {
+    expect(
+      relaxFrameAncestors(
+        "FRAME-ANCESTORS https://a.example https://b.example;default-src 'self'",
+      ),
+    ).toBe("frame-ancestors 'self';default-src 'self'")
+    expect(relaxFrameAncestors("default-src 'self'; frame-ancestors")).toBe(
+      "default-src 'self'; frame-ancestors 'self'",
+    )
+  })
+
+  it('returns a policy without frame-ancestors unchanged', () => {
+    const policy = "default-src 'self'; img-src 'self' data:; "
+    expect(relaxFrameAncestors(policy)).toBe(policy)
+  })
+
+  it('does not mistake a longer directive name for frame-ancestors', () => {
+    const policy = "frame-src 'none'; frame-ancestors-like 'none'"
+    expect(relaxFrameAncestors(policy)).toBe(policy)
+  })
+
+  it('rewrites each policy of a folded, comma-separated header', () => {
+    expect(
+      relaxFrameAncestors(
+        "default-src 'self'; frame-ancestors 'none', frame-ancestors 'none'; img-src data:",
+      ),
+    ).toBe(
+      "default-src 'self'; frame-ancestors 'self', frame-ancestors 'self'; img-src data:",
+    )
+  })
+
+  it('treats the enforced, a repeated and the report-only CSP alike and touches no other header', () => {
+    const headers: HeaderEntry[] = [
+      { name: 'cache-control', value: 'no-store' },
+      {
+        name: 'Content-Security-Policy',
+        value: "frame-ancestors 'none'; object-src 'none'",
+      },
+      { name: 'content-security-policy', value: "img-src 'none'" },
+      { name: 'content-security-policy-report-only', value: RAVEN_CSP },
+      { name: 'content-type', value: 'text/html; charset=utf-8' },
+      { name: 'set-cookie', value: 'a=1; Secure; HttpOnly' },
+      { name: 'set-cookie', value: 'b=2; SameSite=Strict' },
+      { name: 'strict-transport-security', value: 'max-age=63072000' },
+      { name: 'x-frame-options', value: 'DENY' },
+    ]
+    const relaxed = relaxFramingHeaders(headers)
+    expect(relaxed).toHaveLength(headers.length)
+    expect(valueOf(relaxed, 'content-security-policy')).toEqual([
+      "frame-ancestors 'self'; object-src 'none'",
+      "img-src 'none'",
+    ])
+    expect(valueOf(relaxed, 'content-security-policy-report-only')).toEqual([
+      RAVEN_CSP.replace("frame-ancestors 'none'", "frame-ancestors 'self'"),
+    ])
+    expect(valueOf(relaxed, 'x-frame-options')).toEqual(['SAMEORIGIN'])
+    for (const name of [
+      'cache-control',
+      'content-type',
+      'set-cookie',
+      'strict-transport-security',
+    ]) {
+      expect(valueOf(relaxed, name)).toEqual(valueOf(headers, name))
+    }
+  })
+
+  it('adds nothing to a response that sends no framing headers', () => {
+    const headers = [{ name: 'content-type', value: 'text/css' }]
+    expect(relaxFramingHeaders(headers)).toEqual(headers)
+  })
+
+  it('drops only the transfer headers when the document is delivered decoded', () => {
+    // The body comes back from the protocol already unpacked; a gzip label
+    // on it would be a lie, and so would the compressed length.
+    const delivered = framedDocumentHeaders([
+      { name: 'Content-Encoding', value: 'br' },
+      { name: 'content-length', value: '1234' },
+      { name: 'transfer-encoding', value: 'chunked' },
+      { name: 'content-type', value: 'text/html' },
+      { name: 'x-frame-options', value: 'DENY' },
+      { name: 'vary', value: 'Accept-Encoding' },
+    ])
+    expect(delivered).toEqual([
+      { name: 'content-type', value: 'text/html' },
+      { name: 'x-frame-options', value: 'SAMEORIGIN' },
+      { name: 'vary', value: 'Accept-Encoding' },
+    ])
   })
 })
