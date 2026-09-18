@@ -5,6 +5,7 @@ import {
   aspectOf,
   resolveDevice,
   type CaptureSettings,
+  type DeviceOverrides,
   type DeviceSpec,
   type OutputSettings,
   type ResolvedDevice,
@@ -187,6 +188,12 @@ export type RunRequest = {
   encoder?: Encoder
   /** Root directory; each device gets a subdirectory of its own. */
   out: string
+  /**
+   * The capture reserve for every device of this run, as `reserve` in the
+   * device layer: a multiple of the output. Absent means each device's own
+   * default — 1.5 on a touch preset, the fixed area on a desktop one.
+   */
+  reserve?: number
   script: string
   seed?: number
   upload: boolean
@@ -451,6 +458,23 @@ export function deviceName(device: DeviceSpec): string {
   return device.as ?? device.extends
 }
 
+/**
+ * A spec with the run's `--reserve` laid over it. The name is untouched on
+ * purpose: `--reserve` changes how a device is recorded for one run, not what
+ * it is called, so its directory and its line in the report stay the same.
+ * A spec that already names a capture size is refused by the device layer,
+ * which says which two instructions collide.
+ */
+function withRunReserve(
+  device: DeviceSpec,
+  reserve: number | undefined,
+): DeviceSpec {
+  if (reserve === undefined) return device
+  const spec: DeviceOverrides =
+    typeof device === 'string' ? { extends: device } : device
+  return { ...spec, reserve }
+}
+
 /** `demo/feature-xy.ts` -> `feature-xy`. */
 export function scriptStem(path: string): string {
   return basename(path, extname(path))
@@ -663,7 +687,7 @@ async function runOneDevice(
   // that exist, and a second list here would drift from it.
   let resolved: ResolvedDevice
   try {
-    resolved = resolveDevice(device)
+    resolved = resolveDevice(withRunReserve(device, request.reserve))
   } catch (error) {
     return {
       device: label,

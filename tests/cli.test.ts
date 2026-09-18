@@ -356,3 +356,102 @@ describe('featurecast argument handling', () => {
     expect(context.text.err).toContain('featurecast run <script>')
   })
 })
+
+describe('featurecast run --reserve', () => {
+  function recordedCapture(context: Harness, call = 0): unknown {
+    const device = context.record.mock.calls[call]?.[0] as
+      { capture: unknown } | undefined
+    return device?.capture
+  }
+
+  it('records a touch preset with the 1.5x reserve by default', async () => {
+    const { code, harness: context } = await run([
+      'run',
+      'a.ts',
+      '--devices',
+      'iphone',
+    ])
+    expect(code).toBe(0)
+    expect(recordedCapture(context)).toMatchObject({
+      height: 2880,
+      width: 1620,
+    })
+  })
+
+  it('records exactly the delivery with --reserve 1', async () => {
+    const { code, harness: context } = await run([
+      'run',
+      'a.ts',
+      '--devices',
+      'iphone,tablet',
+      '--reserve',
+      '1',
+    ])
+    expect(code).toBe(0)
+    expect(recordedCapture(context, 0)).toMatchObject({
+      height: 1920,
+      width: 1080,
+    })
+    expect(recordedCapture(context, 1)).toMatchObject({
+      height: 1600,
+      width: 1200,
+    })
+    // The flag changes how a device is recorded, not what it is called.
+    expect(context.record.mock.calls[0]?.[1]).toBe('artifacts/a/iphone')
+  })
+
+  it('lays the flag over the devices a script names', async () => {
+    const { code, harness: context } = await run(
+      ['run', 'a.ts', '--reserve', '2'],
+      {
+        loadScript: vi.fn(async () => ({
+          devices: [{ as: 'phone', extends: 'iphone' }],
+          recording: async () => undefined,
+        })),
+      } as Partial<PipelineDependencies>,
+    )
+    expect(code).toBe(0)
+    expect(recordedCapture(context)).toMatchObject({
+      height: 3840,
+      width: 2160,
+    })
+  })
+
+  it('fails the device whose script already names a capture size', async () => {
+    const { code, harness: context } = await run(
+      ['run', 'a.ts', '--reserve', '1.5'],
+      {
+        loadScript: vi.fn(async () => ({
+          devices: [
+            {
+              as: 'phone',
+              capture: { height: 2880, width: 1620 },
+              extends: 'iphone',
+            },
+          ],
+          recording: async () => undefined,
+        })),
+      } as Partial<PipelineDependencies>,
+    )
+    expect(code).toBe(1)
+    expect(context.record).not.toHaveBeenCalled()
+    expect(context.text.out).toContain('both set the capture area')
+  })
+
+  it('refuses a reserve that is not a number of at least 1', async () => {
+    for (const raw of ['0.5', '1,5', 'lots', '']) {
+      const { code, harness: context } = await run([
+        'run',
+        'a.ts',
+        '--devices',
+        'iphone',
+        '--reserve',
+        raw,
+      ])
+      expect(code).toBe(2)
+      expect(context.text.err).toContain(
+        '--reserve must be a number of at least 1',
+      )
+    }
+  })
+})
