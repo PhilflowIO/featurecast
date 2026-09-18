@@ -12,7 +12,7 @@ import type { RecordPage } from '../src/record.js'
  * Four scripts film the same application: `raven-meetings.ts`,
  * `raven-startseite.ts`, `raven-besprechen.ts` and `raven-auto-aufnahme.ts`.
  * The target, the saved session, the areas no viewer may see, the fixed clock,
- * the visibility poller and the sign-in step are the same for all of them. They
+ * the framing permission, the visibility poller and the sign-in step are the same for all of them. They
  * live here once so that the four cannot drift apart. The failure that drift
  * causes is a privacy leak, not a style problem: a selector added to one hide
  * list and forgotten in the three others puts an internal address into a
@@ -54,6 +54,17 @@ export const RAVEN_HIDE_SELECTORS: readonly string[] = [
   '#cookie-banner',
   '[data-testid="personal-room-card"]',
 ]
+
+/**
+ * Raven forbids framing (`X-Frame-Options: DENY`, `frame-ancestors 'none'`),
+ * which is right for the product and stays so. A phone or tablet is filmed
+ * through the framed shell (`src/framed.ts`), and the shell needs a frame, so
+ * every Raven script lets the recording browser relax exactly those two
+ * headers on the filmed document. Nothing changes in Raven or in any browser
+ * a user has; what is relaxed and why that is safe is in the header of
+ * `src/framed.ts`. Decided 2026-09-18 (featurecast issue 138, variant A).
+ */
+export const RAVEN_ALLOW_FRAMING = true
 
 /**
  * A fixed clock, so two recordings show the same relative times ("3 days ago"

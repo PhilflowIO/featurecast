@@ -1,5 +1,6 @@
 import type { Demo, RecordPage } from '../src/record.js'
 import {
+  RAVEN_ALLOW_FRAMING,
   RAVEN_FIXED_TIME,
   RAVEN_HIDE_SELECTORS,
   RAVEN_URL,
@@ -42,13 +43,12 @@ import {
  * keeps wall time and trims only idle stretches, so a slow scroll is not
  * compressed away.
  *
- * THE PHONE DOES NOT WORK AGAINST RAVEN YET. `iphone` films through the framed
- * shell (`src/framed.ts`), which puts the application into an iframe on its
- * own origin and relies on `X-Frame-Options: SAMEORIGIN`. Raven sends
- * `X-Frame-Options: DENY` and `frame-ancestors 'none'`, so Chromium refuses
- * the frame (`net::ERR_BLOCKED_BY_RESPONSE`). `devices` still names the phone,
- * because that is the clip this script is for. Until the framed capture can
- * film an application that forbids framing, pass `--devices desktop-wide`.
+ * THE PHONE. `iphone` films through the framed shell (`src/framed.ts`), which
+ * puts the application into an iframe on its own origin. Raven sends
+ * `X-Frame-Options: DENY` and `frame-ancestors 'none'`, so without
+ * `allowFramingOfApp` Chromium refuses the frame
+ * (`net::ERR_BLOCKED_BY_RESPONSE`). With it the recording browser relaxes
+ * exactly those two headers on the filmed document (featurecast issue 138).
  */
 
 /** The application that is filmed. Required for the phone: see `src/framed.ts`. */
@@ -62,6 +62,12 @@ export const hideSelectors = RAVEN_HIDE_SELECTORS
 
 /** A fixed clock, so nothing time-dependent moves between two runs. */
 export const fixedTime = RAVEN_FIXED_TIME
+
+/**
+ * Raven forbids framing; the phone is filmed through a frame. See
+ * `RAVEN_ALLOW_FRAMING` in `raven-common.ts`.
+ */
+export const allowFramingOfApp = RAVEN_ALLOW_FRAMING
 
 /**
  * The page is loaded before the camera rolls, so the clip opens on the hero
