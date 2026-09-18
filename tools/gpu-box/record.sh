@@ -27,6 +27,14 @@
 #   FEATURECAST_BOX_IMAGE    image tag             default featurecast-record:1
 #   FEATURECAST_BOX_MAX_UTIL refuse above this GPU utilization in %, default 20
 #   FEATURECAST_BOX_SYNC_AUTH=1  also copy auth/ (signed-in recordings)
+#   FEATURECAST_BOX_ENV      comma-separated names of variables of THIS shell
+#                            the script reads, e.g. RAVEN_ROOM_LINK. Only the
+#                            named ones reach the container, which otherwise
+#                            sees none of this shell's environment. They
+#                            travel over ssh stdin into a 0600 env file that
+#                            is deleted after the run, so a value (a room link
+#                            carries its token) never appears in a process
+#                            list on the host.
 #
 # The host needs docker with the NVIDIA container toolkit and nothing else;
 # nothing is installed on it outside the checkout directory and the image.
@@ -76,15 +84,39 @@ if ! "${SSH[@]}" docker image inspect "$IMAGE" >/dev/null 2>&1; then
   "${SSH[@]}" docker build -t "$IMAGE" - <"$ROOT/tools/gpu-box/Dockerfile"
 fi
 
+env_file=.box-env
+env_flag=
+if [[ -n ${FEATURECAST_BOX_ENV:-} ]]; then
+  IFS=, read -r -a env_names <<<"$FEATURECAST_BOX_ENV"
+  for name in "${env_names[@]}"; do
+    if [[ ! $name =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "FEATURECAST_BOX_ENV: '$name' is not a variable name" >&2
+      exit 2
+    fi
+    if [[ -z ${!name+set} ]]; then
+      echo "FEATURECAST_BOX_ENV names $name, which is not set here" >&2
+      exit 2
+    fi
+    if [[ ${!name} == *$'\n'* ]]; then
+      echo "FEATURECAST_BOX_ENV: $name spans lines; an env file cannot carry it" >&2
+      exit 2
+    fi
+  done
+  for name in "${env_names[@]}"; do printf '%s=%s\n' "$name" "${!name}"; done |
+    "${SSH[@]}" "umask 077 && cat > $DIR/$env_file"
+  env_flag="--env-file $env_file"
+fi
+
 remote_out=$(printf '%q' "$out")
 remote_args=$(printf '%q ' "${args[@]}")
 "${SSH[@]}" "cd $DIR && rm -rf $remote_out && docker run --rm \
-  --gpus device=$GPU -e NVIDIA_DRIVER_CAPABILITIES=all --ipc=host \
+  --gpus device=$GPU -e NVIDIA_DRIVER_CAPABILITIES=all --ipc=host $env_flag \
   --user \$(id -u):\$(id -g) -e HOME=/tmp -e SKIP_INSTALL_SIMPLE_GIT_HOOKS=1 \
   -v \$PWD:/work -w /work -e PLAYWRIGHT_BROWSERS_PATH=/work/.box-browsers \
   $IMAGE bash -c 'pnpm install --frozen-lockfile --reporter=silent \
     && pnpm exec playwright install chromium >/dev/null \
-    && pnpm exec tsx src/cli.ts run $(printf '%q' "$script") --out $remote_out $remote_args'"
+    && pnpm exec tsx src/cli.ts run $(printf '%q' "$script") --out $remote_out $remote_args'; \
+  status=\$?; rm -f $env_file; exit \$status"
 
 mkdir -p "$ROOT/$out"
 rsync -a --delete -e "ssh -o IdentitiesOnly=yes" "$BOX:$DIR/$out/" "$ROOT/$out/"
