@@ -21,6 +21,11 @@ import {
   type RecordRuntime,
 } from './record.js'
 import { pinClockAndRandomness, hideOverlay } from './recipes.js'
+import {
+  assertHardwareRenderer,
+  detectRenderer,
+  HARDWARE_GL_LAUNCH_ARGS,
+} from './renderer.js'
 import { recordPageFor } from './surface.js'
 
 /**
@@ -308,10 +313,18 @@ async function openSurface(
 export async function recordSession(
   request: SessionRequest,
 ): Promise<SessionResult> {
+  // Hardware GL, always. Without these flags headless Chromium rasterizes in
+  // SwiftShader even on a machine with a working GPU, and a page with photos
+  // and gradients then paints a scroll at ~20 fps and at under half its
+  // scripted pace. Every duration and frame-count check still passes; the
+  // clip just judders (featurecast#150). `assertHardwareRenderer` below turns
+  // that silent fallback into a failure.
+  const launchArgs = [
+    ...HARDWARE_GL_LAUNCH_ARGS,
+    ...(request.fakeMedia === true ? FAKE_MEDIA_LAUNCH_ARGS : []),
+  ]
   const { browser, provenance } = await launchChromium(
-    request.fakeMedia === true
-      ? { args: [...FAKE_MEDIA_LAUNCH_ARGS], headless: true }
-      : { headless: true },
+    { args: launchArgs, headless: true },
     resolveBrowserRequest(process.env),
   )
   // The screencast delivers CSS pixels and ignores `deviceScaleFactor`
@@ -345,6 +358,10 @@ export async function recordSession(
         await pinClockAndRandomness(context, request.fixedTime)
       }
       const page = await context.newPage()
+      // On the blank page, before anything is filmed: a software renderer is
+      // a reason not to record at all, so the check costs no capture time.
+      const renderer = await detectRenderer(page, launchArgs)
+      assertHardwareRenderer(renderer)
       const { app, scale } = await openSurface(
         context,
         page,
@@ -384,7 +401,10 @@ export async function recordSession(
       // The capture creates the output directory, so this is the first
       // moment the provenance can be written next to the frames it
       // describes.
-      await writeBrowserProvenance(request.outputDirectory, provenance)
+      await writeBrowserProvenance(request.outputDirectory, {
+        ...provenance,
+        renderer,
+      })
       return {
         captureDirectory: request.outputDirectory,
         timestampsPath: capture.timestampsPath,
