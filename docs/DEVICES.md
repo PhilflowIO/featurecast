@@ -67,6 +67,17 @@ application loses its storage and draws nothing. Capture and output area are
 **the same size** here, without the desktop reserve; both measured and argued
 in [M3-VERDICT.md](M3-VERDICT.md).
 
+**A phone recording presents at 60 Hz, like desktop.** Until 2026-09-18 it did
+not: every phone video was 30 Hz content in a 60 fps file, behind a yield gate
+that stayed green (issue #116). The cause was not the shell, the scale, the
+pixel density or the emulated device, but the finger. Chromium acknowledges a
+touch move only after the frame it lands in — 33 ms — and the swipe waited for
+each acknowledgement before sending the next step, so the page moved on every
+second frame. The steps now go out on the clock. Measured with the yield
+harness on `iphone` at 1080×1920: median gap between presented frames 33.34 ms
+before, 16.69 ms after, with 84 % of gaps a single refresh against 88 % for a
+pointer profile at the same size.
+
 ## Ordering a device, not just naming one
 
 A run is given its devices in one of two places, and the command line wins over
