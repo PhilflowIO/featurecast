@@ -45,6 +45,30 @@ import {
  * the fingerprint the second would stumble on. The script refuses to film the
  * "bereits aktuell" answer rather than record a button that does nothing.
  *
+ * THE DELIVERED TAKES START FROM AN EMPTY SUMMARY, on both devices. On a phone
+ * the button sits under ~6,000 px of old summary. Raven keeps the old text,
+ * dimmed, until the first token; then the card shrinks to the new draft and
+ * the reader is left in the transcript, thousands of pixels below the text
+ * being written (measured on the GPU host, 2026-09-18, two takes). The summary
+ * streams in about four seconds, so no scroll at the shot list's 400 px/s
+ * reaches it in time; the phone take showed no typewriter at all. With no
+ * summary the card is short, and "Das Modell liest das Transkript …" and the
+ * typewriter stand in view. Before each such take (staging; `meetings` needs
+ * tenant AND owner under row-level security)::
+ *
+ *     BEGIN;
+ *     SELECT set_config('app.current_tenant',
+ *                       '4caf12d9-c51f-41a0-9a96-40a18b50cd7b', true);
+ *     SELECT set_config('app.user_id',
+ *                       'be6bc3c5-2348-46ea-9875-13bb66e10ce0', true);
+ *     UPDATE meetings SET summary = NULL
+ *      WHERE id = '623f6852-b219-5550-899f-1caadb4b2ca5';
+ *     COMMIT;
+ *
+ * The take writes the new summary itself. No fingerprint DELETE is needed
+ * then: without a summary the server always regenerates. The replace variant
+ * above works on a desktop and is kept as an alternative take.
+ *
  * INVOCATION (GPU host), once per device, the DELETE above before each::
  *
  *     FEATURECAST_BOX_SYNC_AUTH=1 \
