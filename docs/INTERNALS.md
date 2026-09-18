@@ -535,12 +535,13 @@ that, for example
 `pnpm demo:m1-capture https://example.com/ artifacts/m1-capture-001`.
 
 **Which browser captures.** With no further instruction, Playwright's bundled
-Chromium starts. A different binary — the self-built, patched Chromium from
-ticket 17, for instance — is chosen through `CHROME_BIN`:
+Chromium starts — a stock Chrome for Testing 154, pinned through the exact
+Playwright version in `package.json`, the first release whose screencast takes
+the frames-in-flight bound (ticket 137). A different binary is chosen through
+`CHROME_BIN`:
 
 ```sh
-CHROME_BIN=/path/to/chromium/src/out/Release/chrome \
-  pnpm demo:m1-capture
+CHROME_BIN=/path/to/chrome pnpm demo:m1-capture
 ```
 
 A `CHROME_BIN` that is empty or does not name an executable binary aborts

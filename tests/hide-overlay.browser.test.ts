@@ -2,6 +2,7 @@ import { chromium, type Browser } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { hideOverlay } from '../src/recipes.js'
+import { BUNDLE_CHANNEL } from '../src/browser.js'
 
 /**
  * What `hideOverlay` has to do, measured in a real browser rather than read
@@ -33,7 +34,7 @@ describe('hideOverlay', () => {
   let browser: Browser
 
   beforeAll(async () => {
-    browser = await chromium.launch({ headless: true })
+    browser = await chromium.launch({ channel: BUNDLE_CHANNEL, headless: true })
   })
 
   afterAll(async () => {

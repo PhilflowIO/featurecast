@@ -16,7 +16,10 @@ describe('openHelloPage', () => {
 
     await openHelloPage(chromium)
 
-    expect(chromium.launch).toHaveBeenCalledWith({ headless: true })
+    expect(chromium.launch).toHaveBeenCalledWith({
+      channel: 'chromium',
+      headless: true,
+    })
     expect(browser.newPage).toHaveBeenCalledOnce()
     expect(goto).toHaveBeenCalledWith('data:text/html,<h1>Featurecast</h1>')
     expect(close).toHaveBeenCalledOnce()

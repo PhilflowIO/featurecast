@@ -2,6 +2,7 @@ import { chromium, type Browser, type Page } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { waitForStableScrollGeometry } from '../src/m1-benchmark.js'
+import { BUNDLE_CHANNEL } from '../src/browser.js'
 
 /**
  * Reproduces the layout transient that made the M1 benchmark's scroll target
@@ -35,7 +36,7 @@ describe('waitForStableScrollGeometry', () => {
   let page: Page
 
   beforeAll(async () => {
-    browser = await chromium.launch({ headless: true })
+    browser = await chromium.launch({ channel: BUNDLE_CHANNEL, headless: true })
     page = await browser.newPage()
   })
 

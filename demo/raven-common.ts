@@ -122,12 +122,12 @@ export async function anmelden(): Promise<void> {
   }
 
   // The same browser the recording drives later (`CHROME_BIN`, otherwise the
-  // bundled one). This is not taste. On the measurement box the patched build
-  // is the only one that renders the interface at all. A `chromium.launch()`
-  // without this resolution starts a different browser that never builds the
-  // sign-in form, and after 30 seconds it aborts with a timeout on `#email`
-  // that looks like a network problem. And as a principle, a session should
-  // come from the browser that replays it later.
+  // bundled one). This is not taste. A bare `chromium.launch()` can start a
+  // different browser than the recording; on the measurement box it once
+  // started one that never built the sign-in form, and after 30 seconds it
+  // aborted with a timeout on `#email` that looked like a network problem.
+  // And as a principle, a session should come from the browser that replays
+  // it later.
   const { browser } = await launchChromium(
     { headless: true },
     resolveBrowserRequest(process.env),

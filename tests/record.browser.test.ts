@@ -13,6 +13,7 @@ import {
   type RecordPage,
 } from '../src/record.js'
 import { parseEventTimes } from '../src/render/events.js'
+import { BUNDLE_CHANNEL } from '../src/browser.js'
 
 /**
  * M2 acceptance: proves the wrapper's contract against a real headless
@@ -278,7 +279,10 @@ describe('record against a real headless Chromium', () => {
     }
     expect(maxStep).toBeLessThanOrEqual(20)
 
-    const browser = await chromium.launch({ headless: true })
+    const browser = await chromium.launch({
+      channel: BUNDLE_CHANNEL,
+      headless: true,
+    })
     try {
       const page = await (await browser.newContext()).newPage()
       await page.goto(FIXTURE_URL)

@@ -42,6 +42,19 @@ import type { Browser, LaunchOptions } from 'playwright'
  */
 
 export const BROWSER_ENV_VARIABLE = 'CHROME_BIN'
+
+/**
+ * Which of Playwright's two bundled Chromium binaries a bundle launch uses.
+ *
+ * `playwright install chromium` downloads both a full Chrome for Testing and
+ * the stripped-down headless shell, and a `headless: true` launch without a
+ * channel picks the shell. Every capture number this project publishes was
+ * measured on the full binary — the stock Chromium 154 that Playwright's
+ * download is byte-identical to (ticket 137) — so a bundle launch asks for
+ * that one. The shell is a different program, and a published number is only
+ * as good as the binary it was measured on.
+ */
+export const BUNDLE_CHANNEL = 'chromium'
 export const BROWSER_PROVENANCE_FILE_NAME = 'browser.json'
 
 export type BrowserRequest =
@@ -135,7 +148,7 @@ export async function launchChromium(
   const before = await dependencies.listChildExecutables()
   const browser = await dependencies.launch(
     requestedExecutable === undefined
-      ? launchOptions
+      ? { channel: BUNDLE_CHANNEL, ...launchOptions }
       : { ...launchOptions, executablePath: requestedExecutable },
   )
   try {

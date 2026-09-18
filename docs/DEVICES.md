@@ -209,7 +209,7 @@ yet — how it is intended is described in the module's header comment.
 
 Four points that had to be decided concretely while building:
 
-**The registry is larger than noted here.** The checked-out `playwright` 1.63.0
+**The registry is larger than noted here.** The checked-out `playwright` 1.64
 supplies **207** names (107 devices plus 100 `… landscape` variants), not the
 143 noted above. The twelve curated names and all the characteristics in the
 table still match the registry exactly — checked in the test. That discrepancy

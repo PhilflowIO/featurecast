@@ -24,8 +24,8 @@ importers:
         specifier: ^17.5.1
         version: 17.5.1
       playwright:
-        specifier: ^1.59.0
-        version: 1.63.0
+        specifier: 1.64.0-alpha-2026-09-18
+        version: 1.64.0-alpha-2026-09-18
       prettier:
         specifier: ^3.6.2
         version: 3.9.6
@@ -844,13 +844,13 @@ packages:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
 
-  playwright-core@1.63.0:
-    resolution: {integrity: sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==}
+  playwright-core@1.64.0-alpha-2026-09-18:
+    resolution: {integrity: sha512-7BkKuCYyNBrVGtMKkcnUQqi+/Y8KO4oU395pTeCOqSUKVTjSXE/yXoE7ihLiO/JrU+vljL1hMmw/ArvuWOUPLQ==}
     engines: {node: '>=20'}
     hasBin: true
 
-  playwright@1.63.0:
-    resolution: {integrity: sha512-+7ziBLidS4NaNCdt57SUDT+wYmmd5fmiQejUic/kb+YsYSCPyOOE9sebzMjNmQrsnNpDJqd4WHvV/8lfKfUDUg==}
+  playwright@1.64.0-alpha-2026-09-18:
+    resolution: {integrity: sha512-90N+GRyQZGvujyIxbSDt+3I0UoOw3M/Uq0cuJlWKsW9teGnc2DhXmNea9mIv78M0VmzHxH4o4dfjA30brJhGdw==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -1778,11 +1778,11 @@ snapshots:
 
   picomatch@4.0.7: {}
 
-  playwright-core@1.63.0: {}
+  playwright-core@1.64.0-alpha-2026-09-18: {}
 
-  playwright@1.63.0:
+  playwright@1.64.0-alpha-2026-09-18:
     dependencies:
-      playwright-core: 1.63.0
+      playwright-core: 1.64.0-alpha-2026-09-18
 
   postcss@8.5.28:
     dependencies:

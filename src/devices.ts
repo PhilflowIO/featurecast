@@ -18,7 +18,7 @@ import {
  * 1. Playwright's registry — viewport, deviceScaleFactor, isMobile, hasTouch,
  *    userAgent, defaultBrowserType. Read from the installed `playwright` at
  *    runtime, never transcribed. docs/DEVICES.md counted 143 profiles; the
- *    playwright 1.63.0 in this worktree exposes 207 (107 base + 100
+ *    playwright 1.64 in this worktree exposes 207 (107 base + 100
  *    `… landscape` variants), which is exactly why the list is read and not
  *    copied.
  * 2. Capture — the area actually recorded, plus fps, JPEG quality and the
