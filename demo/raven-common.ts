@@ -13,7 +13,8 @@ import type { Demo, RecordPage } from '../src/record.js'
  * `raven-startseite.ts`, `raven-besprechen.ts`, `raven-auto-aufnahme.ts` and
  * the three product-film scenes on the Steinkauz meeting
  * (`raven-protokoll.ts`, `raven-transkript-sprung.ts`,
- * `raven-steinkauz-fragen.ts`).
+ * `raven-steinkauz-fragen.ts`), and the live-meeting scene
+ * `raven-live-meeting.ts`.
  * The target, the saved session, the areas no viewer may see, the fixed clock,
  * the framing permission, the visibility poller and the sign-in step are the same for all of them. They
  * live here once so that they cannot drift apart. The failure that drift
