@@ -1,9 +1,15 @@
-import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { launchChromium, resolveBrowserRequest } from '../src/browser.js'
 import type { Demo, RecordPage } from '../src/record.js'
+import {
+  anmelden,
+  ERSTE_ZEILE,
+  RAVEN_FIXED_TIME,
+  RAVEN_HIDE_SELECTORS,
+  RAVEN_STATE,
+  RAVEN_URL,
+  warteAuf,
+} from './raven-common.js'
 
 /**
  * The first recording that films our own product rather than someone else's.
@@ -54,140 +60,28 @@ import type { Demo, RecordPage } from '../src/record.js'
  * the sign-in again.
  */
 
-const BASIS = process.env.RAVEN_DEMO_URL ?? 'https://staging.raven.ceo'
-const ZUSTAND = process.env.RAVEN_DEMO_STATE ?? 'auth/state.json'
+const BASIS = RAVEN_URL
 
 /** The word the list shrinks down to in the video. */
 const SUCHWORT = 'Steinkauz'
 
-/**
- * The first row of the list.
- *
- * The `nth=0` is not cosmetic: `a[href^="/meetings/"]` matches every visible
- * row, and Playwright refuses to report geometry for an ambiguous locator. But
- * that is exactly what the recorder needs in order to travel the pointer
- * there — without the restriction the recording aborts with a timeout that
- * looks like a loading problem and is not one.
- */
-const ERSTE_ZEILE = 'a[href^="/meetings/"] >> nth=0'
-
 /** The application that is filmed. */
-export const url = BASIS
+export const url = RAVEN_URL
 
 /**
- * The path to the saved session — never its contents.
- *
- * What is written here is a file name; the file itself is read only by the
- * browser. A `storageState` file contains the cookies and local storage of a
- * signed-in account and is therefore the access itself. That is why it lives
- * under `auth/`, which `.gitignore` excludes, and why this file contains not a
- * single credential.
+ * The path to the saved session, never its contents. The file itself is read
+ * only by the browser (see `RAVEN_STATE` in `raven-common.ts`).
  */
-export const storageStatePath = ZUSTAND
+export const storageStatePath = RAVEN_STATE
 
 /**
- * Two areas no viewer should see: the cookie notice (noise) and the
- * personal-room card (internal address, see the header comment).
+ * The cookie notice and the personal-room card (internal address, see the
+ * header comment). One list for every Raven recording, in `raven-common.ts`.
  */
-export const hideSelectors = [
-  '#cookie-banner',
-  '[data-testid="personal-room-card"]',
-]
+export const hideSelectors = RAVEN_HIDE_SELECTORS
 
-/**
- * A fixed clock, so that two recordings show the same relative times
- * ("3 days ago" otherwise moves between two runs).
- */
-export const fixedTime = '2026-09-16T09:00:00Z'
-
-/**
- * Waits until a node genuinely has an area.
- *
- * `RecordPage` is deliberately a narrow surface and has no `waitFor` — it
- * reaches exactly as far as the recorder needs it to. A `boundingBox()` that
- * no longer returns `null` answers the better question here anyway: not "is
- * the node in the document" but "is it visible" — and only a visible node can
- * be clicked or pointed at.
- */
-async function warteAuf(
-  page: RecordPage,
-  selector: string,
-  fristMs = 30_000,
-): Promise<void> {
-  const ende = Date.now() + fristMs
-  for (;;) {
-    const box = await page.locator(selector).boundingBox()
-    if (box !== null) return
-    if (Date.now() > ende) {
-      throw new Error(
-        `Did not become visible within ${fristMs} ms: ${selector}`,
-      )
-    }
-    await new Promise((fertig) => setTimeout(fertig, 250))
-  }
-}
-
-/**
- * Signs in through the form and writes the session state.
- *
- * Through the form and not through the sign-in API: Better-Auth sets its
- * session cookies the same way either route, but the interface also lays down
- * state in the browser (the section last chosen, notices that have been
- * dismissed once). Anyone who only fetches the cookie films, on the first run,
- * a state no human ever sees.
- *
- * Deliberately not a `prepare` export: the main chain knows a step of that
- * name which runs against the already-opened page — this one is an operation
- * of its own with its own browser, which may run weeks before a recording and
- * whose result is a file.
- */
-async function anmelden(): Promise<void> {
-  const email = process.env.RAVEN_DEMO_EMAIL
-  const passwort = process.env.RAVEN_DEMO_PW
-  if (email === undefined || passwort === undefined) {
-    throw new Error(
-      'RAVEN_DEMO_EMAIL and RAVEN_DEMO_PW have to be set. They are in the ' +
-        'secret store, not in this repository.',
-    )
-  }
-
-  // The same browser the recording drives later (`CHROME_BIN`, otherwise the
-  // bundled one). Not taste: on the measurement box the patched build is the
-  // only one that renders the interface at all — a `chromium.launch()` without
-  // this resolution starts a different browser that never builds the sign-in
-  // form and aborts after 30 seconds with a timeout on `#email` that looks
-  // like a network problem. And as a matter of principle: a session should
-  // come from the browser that replays it afterwards.
-  const { browser } = await launchChromium(
-    { headless: true },
-    resolveBrowserRequest(process.env),
-  )
-  try {
-    const context = await browser.newContext({
-      viewport: { height: 720, width: 1280 },
-    })
-    const page = await context.newPage()
-    await page.goto(`${BASIS}/login`)
-    await page.locator('#email').fill(email)
-    await page.locator('#password').fill(passwort)
-    await page.getByRole('button', { exact: true, name: 'Anmelden' }).click()
-    await page.waitForURL('**/meetings', { timeout: 60_000 })
-    // The heading, not the address, is the proof: the address changes before
-    // the list has loaded, and a state saved before the first successful fetch
-    // can contain half a login.
-    await page
-      .getByRole('heading', { name: 'Meetings' })
-      .waitFor({ timeout: 30_000 })
-
-    await mkdir(dirname(ZUSTAND), { recursive: true })
-    const state = await context.storageState()
-    await writeFile(ZUSTAND, JSON.stringify(state, null, 2))
-    await context.close()
-  } finally {
-    await browser.close()
-  }
-  console.log(`Session state written: ${ZUSTAND}`)
-}
+/** A fixed clock, so relative times do not move between two runs. */
+export const fixedTime = RAVEN_FIXED_TIME
 
 /**
  * Records the list: arrive, let it be read, search, open the result.
