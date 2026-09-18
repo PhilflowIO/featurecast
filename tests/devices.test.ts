@@ -72,7 +72,7 @@ const CURATED_TABLE = [
     playwrightName: 'iPhone 15 Pro',
     pointer: 'touch',
     preset: 'iphone',
-    reserve: 'exact',
+    reserve: 'one-and-a-half',
 
     touch: true,
     viewport: { height: 659, width: 393 },
@@ -84,7 +84,7 @@ const CURATED_TABLE = [
     playwrightName: 'iPhone 15 Pro Max',
     pointer: 'touch',
     preset: 'iphone-max',
-    reserve: 'exact',
+    reserve: 'one-and-a-half',
 
     touch: true,
     viewport: { height: 739, width: 430 },
@@ -96,7 +96,7 @@ const CURATED_TABLE = [
     playwrightName: 'iPhone SE',
     pointer: 'touch',
     preset: 'iphone-small',
-    reserve: 'exact',
+    reserve: 'one-and-a-half',
 
     touch: true,
     viewport: { height: 568, width: 320 },
@@ -108,7 +108,7 @@ const CURATED_TABLE = [
     playwrightName: 'iPhone 15 Pro landscape',
     pointer: 'touch',
     preset: 'iphone-quer',
-    reserve: 'exact',
+    reserve: 'one-and-a-half',
 
     touch: true,
     viewport: { height: 343, width: 734 },
@@ -120,7 +120,7 @@ const CURATED_TABLE = [
     playwrightName: 'Pixel 7',
     pointer: 'touch',
     preset: 'android',
-    reserve: 'exact',
+    reserve: 'one-and-a-half',
 
     touch: true,
     viewport: { height: 839, width: 412 },
@@ -132,7 +132,7 @@ const CURATED_TABLE = [
     playwrightName: 'Galaxy S24',
     pointer: 'touch',
     preset: 'android-small',
-    reserve: 'exact',
+    reserve: 'one-and-a-half',
 
     touch: true,
     viewport: { height: 780, width: 360 },
@@ -144,7 +144,7 @@ const CURATED_TABLE = [
     playwrightName: 'iPad Pro 11',
     pointer: 'touch',
     preset: 'tablet',
-    reserve: 'exact',
+    reserve: 'one-and-a-half',
 
     touch: true,
     viewport: { height: 1194, width: 834 },
@@ -156,7 +156,7 @@ const CURATED_TABLE = [
     playwrightName: 'iPad Mini',
     pointer: 'touch',
     preset: 'tablet-small',
-    reserve: 'exact',
+    reserve: 'one-and-a-half',
 
     touch: true,
     viewport: { height: 1024, width: 768 },
@@ -187,15 +187,24 @@ describe('curated presets', () => {
   )
 
   it('records each preset with the reserve its row declares', () => {
-    // Two rules, and the second one is new. Most desktop presets record more
-    // than they output: that margin is what M4 cuts its second and third
-    // format out of, and what the zoom spring pans inside. `desktop-4k` and
-    // every touch preset record exactly what they deliver, and therefore have
-    // no margin at all — the render stage clamps their push-in to 1.00x and
+    // Three rules. Most desktop presets record one fixed area larger than
+    // they output: that margin is what M4 cuts its second and third format
+    // out of, and what the zoom spring pans inside. Every touch preset records
+    // 1.5 times its output on both axes, the reserve measured to cost no
+    // frame rate (#149). `desktop-4k` records exactly what it delivers and
+    // has no margin at all — the render stage clamps its push-in to 1.00x and
     // says so. Which class a preset is in is a documented property, so it is
     // declared in the table rather than inferred here.
     for (const row of CURATED_TABLE) {
       const resolved = resolveDevice(row.preset)
+      if (row.reserve === 'one-and-a-half') {
+        expect(resolved.capture).toMatchObject({
+          height: row.output.height * 1.5,
+          strategy: 'framed-scale',
+          width: row.output.width * 1.5,
+        })
+        continue
+      }
       if (row.reserve === 'over-sized') {
         expect(resolved.capture).toEqual({
           fps: 60,
@@ -211,9 +220,7 @@ describe('curated presets', () => {
       }
       expect(resolved.capture.width).toBe(resolved.output.width)
       expect(resolved.capture.height).toBe(resolved.output.height)
-      expect(resolved.capture).toMatchObject({
-        strategy: row.touch ? 'framed-scale' : 'screencast',
-      })
+      expect(resolved.capture).toMatchObject({ strategy: 'screencast' })
     }
   })
 })
@@ -366,18 +373,18 @@ describe('capture per device class (M3)', () => {
     expect(resolveDevice('desktop').capture.width).toBe(2560)
   })
 
-  it('records every touch preset at its own output size, framed', () => {
+  it('records every touch preset at 1.5 times its output, framed', () => {
     for (const name of listPresetNames()) {
       const resolved = resolveDevice(name)
       if (!resolved.device.hasTouch) continue
       expect({ preset: name, ...resolved.capture }).toEqual({
         fps: 60,
-        height: resolved.output.height,
+        height: resolved.output.height * 1.5,
         preset: name,
         quality: 90,
         status: 'decided',
         strategy: 'framed-scale',
-        width: resolved.output.width,
+        width: resolved.output.width * 1.5,
       })
     }
   })
@@ -386,8 +393,8 @@ describe('capture per device class (M3)', () => {
     const resolved = resolveDevice('Galaxy S9+')
     expect(resolved.preset).toBeNull()
     expect(resolved.capture.strategy).toBe('framed-scale')
-    expect(resolved.capture.width).toBe(1080)
-    expect(resolved.capture.height).toBe(1920)
+    expect(resolved.capture.width).toBe(1620)
+    expect(resolved.capture.height).toBe(2880)
   })
 
   it('accepts a partial capture override on a touch preset', () => {
@@ -397,11 +404,84 @@ describe('capture per device class (M3)', () => {
     })
     expect(resolved.capture).toEqual({
       fps: 60,
-      height: 1920,
+      height: 2880,
       quality: 90,
       status: 'decided',
       strategy: 'framed-scale',
       width: 1440,
+    })
+  })
+})
+
+describe('capture reserve', () => {
+  it('records a phone at exactly its delivery with reserve 1', () => {
+    const resolved = resolveDevice({ extends: 'iphone', reserve: 1 })
+    expect(resolved.capture).toEqual({
+      fps: 60,
+      height: 1920,
+      quality: 90,
+      status: 'decided',
+      strategy: 'framed-scale',
+      width: 1080,
+    })
+    expect(resolved.output).toMatchObject({ height: 1920, width: 1080 })
+  })
+
+  it('sizes a desktop capture from its output when asked', () => {
+    // A desktop preset keeps its fixed 2560x1600 unless the reserve is named;
+    // named, it means the same thing it means on a phone.
+    const resolved = resolveDevice({ extends: 'desktop', reserve: 2 })
+    expect(resolved.capture).toMatchObject({
+      height: 2160,
+      strategy: 'screencast',
+      width: 3840,
+    })
+    expect(resolved.output).toMatchObject({ height: 1080, width: 1920 })
+  })
+
+  it('takes the reserve against the resolved output, not the preset', () => {
+    const resolved = resolveDevice({
+      aspect: '1:1',
+      extends: 'iphone',
+      reserve: 1.5,
+    })
+    expect(resolved.capture).toMatchObject({ height: 1620, width: 1620 })
+  })
+
+  it('rounds to even pixels, which the encoders require', () => {
+    // 1080 x 1.33 = 1436.4 and 1920 x 1.33 = 2553.6.
+    const resolved = resolveDevice({ extends: 'iphone', reserve: 1.33 })
+    expect(resolved.capture).toMatchObject({ height: 2554, width: 1436 })
+  })
+
+  it('refuses a reserve next to a capture size', () => {
+    expect(() =>
+      resolveDevice({
+        capture: { width: 1620 },
+        extends: 'iphone',
+        reserve: 1.5,
+      }),
+    ).toThrow(/reserve 1\.5 and capture 1620x\? both set the capture area/)
+  })
+
+  it('refuses a reserve below 1 or not a number', () => {
+    for (const reserve of [0.5, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => resolveDevice({ extends: 'iphone', reserve })).toThrow(
+        /reserve must be a number of at least 1/,
+      )
+    }
+  })
+
+  it('keeps the other capture fields when the reserve sets the size', () => {
+    const resolved = resolveDevice({
+      capture: { quality: 80 },
+      extends: 'android',
+      reserve: 1,
+    })
+    expect(resolved.capture).toMatchObject({
+      height: 1920,
+      quality: 80,
+      width: 1080,
     })
   })
 })
