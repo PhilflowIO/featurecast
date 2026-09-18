@@ -1,3 +1,5 @@
+import type { Frame } from 'playwright'
+
 import type { Demo, RecordPage } from '../src/record.js'
 import {
   RAVEN_FIXED_TIME,
@@ -11,60 +13,69 @@ import {
  * the recording, joins, and the recording starts without anybody pressing
  * anything.
  *
- * NOT YET RUNNABLE. The consent gate and the automatic start are
- * `flow.raven` PR #6950 (branch `feat/recording-starts-with-the-first-guest`,
- * issue #6942), which is not on staging yet. Every selector below was read
- * from that branch, not from a running page. The first real run is also the
- * first check of the selectors.
+ * The consent gate and the automatic start are `flow.raven` PR #6950; the
+ * one-sentence consent that names the workspace is PR #7175, and the single
+ * notice in consent rooms is PR #7179. The selectors below were read from
+ * `flow.raven` `dev` after all three were merged, and first run against
+ * staging on 2026-09-18.
  *
  * PRECONDITIONS, IN THIS ORDER. Each one is a way to film the wrong thing
  * without any error:
  *
  *   1. As an owner or admin of the workspace, switch on "record meetings
  *      automatically" (the workspace flag `auto_recording_enabled`,
- *      `PUT /api/settings/flags/auto_recording_enabled`). The default is off.
- *   2. Create the room AFTER that. A room freezes the answer when it is
- *      created (`autoRecord` on the room row), so a room made before the switch
+ *      `PUT /api/settings/flags/auto_recording_enabled` with
+ *      `{"value": true}`). The default is off; switch it back afterwards.
+ *   2. Create the room AFTER that (`POST /api/meet/create-room`). A room
+ *      freezes the answer when it is created, so a room made before the switch
  *      never asks for consent and never records by itself. The film would then
  *      show a guest walking into an ordinary meeting.
- *   3. The host is already in the room. Without a host a guest lands in the
- *      waiting screen (the 425 "no host yet" answer), and the recording starts
- *      only when the first guest who is not the host arrives
- *      (`_maybe_autostart_recording`, `api/app/routers/livekit.py` on the
- *      branch). The host's display name appears on the host's tile, so the
- *      host joins under a demo identity and not under a real account.
- *   4. `RAVEN_ROOM_LINK` holds the guest invitation link of that room. It is
- *      the full link as the host copies it, including any token in it.
+ *   3. The host is already in the room, in a second browser that stays open
+ *      for the whole recording. Without a host a guest lands in the waiting
+ *      screen, and the recording starts only when the first participant who
+ *      is not the host arrives. The host's display name is on the host's
+ *      tile, so it is the demo persona, not a real person. Camera off, or the
+ *      tile shows Chromium's green test picture.
+ *   4. `RAVEN_ROOM_LINK` holds the guest invitation link of that room, the
+ *      full address with its token.
+ *   5. Nobody else has joined that room yet. The first guest starts the
+ *      recording; a room that already records films no start.
  *
  * NO SESSION, ON PURPOSE. The guest is a stranger with no account, which is
- * the case the consent gate is for. Without a `storageStatePath` the chain
- * opens a context without cookies. It also keeps the host's account out of
+ * the case the consent gate is for. It also keeps the host's account out of
  * the picture.
+ *
+ * WHAT THE SENTENCE NAMES. The consent sentence carries the workspace's name
+ * ("Ich willige ein, dass <Arbeitsbereich> dieses Meeting …"). That name is
+ * in the video, so the room has to belong to a demo workspace, never to a
+ * customer's.
  *
  * WHAT THE SCRIPT DOES NOT DO: it never opens the user menu, and it never
  * scrolls sideways (capture yield).
  *
- * UNPROVEN: whether the pre-join screen lets a browser without a camera and
- * microphone join. The chain grants no media permissions today. If the join
- * button stays disabled after the tick, that is the first thing to check.
- *
  * INVOCATION::
  *
- *     RAVEN_ROOM_LINK='https://staging.raven.ceo/meet/…' \
+ *     RAVEN_ROOM_LINK='https://staging.raven.ceo/meet/…?t=…&e=…' \
  *         pnpm featurecast run demo/raven-auto-aufnahme.ts
  */
 
 /** An invented name. It is what the other participants see on the guest's tile. */
 const GAST_NAME = process.env.RAVEN_GUEST_NAME ?? 'Jonas Brandt'
 
-/**
- * The agreement box. Its `data-testid` comes from the branch
- * (`ui/src/app/meet/[roomName]/meeting-room.tsx`, #6942).
- */
+/** The agreement box. */
 const EINWILLIGUNG = '[data-testid="prejoin-consent-checkbox"]'
 
-/** The whole agreement block, to point at before ticking it. */
-const EINWILLIGUNG_BLOCK = '[data-testid="prejoin-consent-gate"]'
+/**
+ * The sentence the guest agrees to. Waited for in `prepare`: it is filled
+ * from the room lookup and is the last part of the card to arrive.
+ */
+const EINWILLIGUNG_SATZ = '[data-testid="prejoin-consent-text"]'
+
+/**
+ * The camera switch on the pre-join card (LiveKit's `TrackToggle`).
+ * `aria-pressed="true"` means the camera is on.
+ */
+const KAMERA = 'button[data-lk-source="camera"]'
 
 /** The name field on the pre-join card. */
 const NAME = '#username'
@@ -85,9 +96,9 @@ const AUFNAHME_LAEUFT = '[data-recording-notice="on"]'
 /**
  * The link from the environment, checked before the first frame.
  *
- * It is read when the recording starts and not when the module is loaded, so
- * that the chain's checks of the exports, which only import this file, do not
- * need a room.
+ * It is read when the recording is prepared and not when the module is
+ * loaded, so that the chain's checks of the exports, which only import this
+ * file, do not need a room.
  */
 function einladung(): string {
   const link = process.env.RAVEN_ROOM_LINK
@@ -118,35 +129,76 @@ export const hideSelectors = RAVEN_HIDE_SELECTORS
 /** A fixed clock, so nothing time-dependent moves between two runs. */
 export const fixedTime = RAVEN_FIXED_TIME
 
+/**
+ * A synthetic camera and microphone, already permitted. Without them the
+ * recording browser has no media, and the pre-join card opens with a red
+ * "Du bist ohne Kamera und Mikrofon dabei" banner above everything else
+ * (observed on staging, 2026-09-18). No guest with a working browser sees
+ * that.
+ */
+export const fakeMedia = true
+
+/**
+ * Opens the invitation before the camera rolls, so the clip starts on the
+ * join card and not on a white page. Not `vorbereiten` from
+ * `raven-common.ts`: that takes a path, and this link carries its own token
+ * and comes from the environment.
+ *
+ * It waits for the consent SENTENCE, not for the name field: the field is
+ * there in a room that does not record itself too. If the sentence never
+ * appears, precondition 1 or 2 is missing, and the run stops here instead of
+ * filming an ordinary join.
+ *
+ * Then it switches the camera off. The synthetic camera paints a green test
+ * picture into the preview, the largest thing on the card.
+ */
+export async function prepare(app: Frame): Promise<void> {
+  await app.goto(einladung())
+  await app
+    .locator(EINWILLIGUNG_SATZ)
+    .waitFor({ state: 'visible', timeout: 30_000 })
+  const kamera = app.locator(KAMERA).first()
+  await kamera.waitFor({ state: 'visible', timeout: 15_000 })
+  if ((await kamera.getAttribute('aria-pressed')) === 'true') {
+    await kamera.click()
+  }
+  await app
+    .locator(`${KAMERA}[aria-pressed="false"]`)
+    .first()
+    .waitFor({ timeout: 15_000 })
+}
+
 export default async function autoAufnahme(
   page: RecordPage,
   demo: Demo,
 ): Promise<void> {
-  await page.goto(einladung())
-  // The agreement block, not the name field. The field is there in a room that
-  // does not record itself too. If the block never appears, precondition 1 or
-  // 2 is missing, and the run should stop here instead of filming an ordinary
-  // join.
-  await warteAuf(page, EINWILLIGUNG_BLOCK)
-  await demo.hold(1200)
+  // `prepare` has opened the card and seen the sentence. Long enough to read
+  // it once before anything moves. The pointer stays where it is, in the
+  // corner: pointed at, the block puts the pointer over its own text (the
+  // first take covered "Mehr erfahren" for the whole of this hold).
+  await demo.hold(3500)
 
   await demo.type(NAME, GAST_NAME)
   await demo.hold(600)
-  // Point at the still disabled button first: a name alone no longer opens the
+  // Point at the still disabled button: a name alone no longer opens the
   // room, and that is half of what this clip shows.
   await demo.point(BEITRETEN)
-  await demo.hold(900)
+  await demo.hold(1500)
 
-  await demo.point(EINWILLIGUNG_BLOCK)
-  await demo.hold(1400)
   await demo.click(EINWILLIGUNG)
-  await demo.hold(700)
+  // Straight back to the button, which is enabled now. Left on the box, the
+  // pointer covers the first letters of the sentence's second and third
+  // line, and this is the moment the viewer reads what was agreed to.
+  await demo.point(BEITRETEN)
+  await demo.hold(2500)
   await demo.click(BEITRETEN)
 
   // Getting in is a LiveKit connection, not a page load, so the wait is long.
   await warteAuf(page, IM_RAUM, 60_000)
   // Nobody presses record. The first guest's arrival starts it: webhook,
-  // claim, recording-manager. The e2e spec on the branch allows 90 s.
+  // claim, recording-manager. The e2e spec allows 90 s; measured on staging
+  // on 2026-09-18: about 8 s from the click.
   await warteAuf(page, AUFNAHME_LAEUFT, 90_000)
-  await demo.hold(3000)
+  // The toast that names the recording stays five seconds; the ring stays.
+  await demo.hold(5000)
 }

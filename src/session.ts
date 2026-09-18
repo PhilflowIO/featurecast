@@ -54,6 +54,33 @@ export type RecordingScript = (page: RecordPage, demo: Demo) => Promise<void>
  */
 export type PrepareStep = (app: Frame) => Promise<void>
 
+/**
+ * The two Chromium switches that give a page a camera and a microphone
+ * without a person or a device: one answers every permission prompt with
+ * "allow", the other supplies a synthetic camera picture and a tone.
+ *
+ * A headless browser has neither by default, and `getUserMedia` fails with
+ * `NotAllowedError`. For most pages that is invisible. For a video-call page
+ * it is not: Raven's pre-join card answers it with a red "you are joining
+ * without camera and microphone" banner at the top of the screen, which is a
+ * screen no guest with a working browser ever sees.
+ */
+export const FAKE_MEDIA_LAUNCH_ARGS: readonly string[] = [
+  '--use-fake-ui-for-media-stream',
+  '--use-fake-device-for-media-stream',
+]
+
+/**
+ * The permissions granted alongside the switches. The switches make the
+ * prompt say yes; the grant makes `navigator.permissions.query` say
+ * `granted` before anything has been asked, which is what a page that checks
+ * first (instead of simply calling `getUserMedia`) reads.
+ */
+export const FAKE_MEDIA_PERMISSIONS: readonly string[] = [
+  'camera',
+  'microphone',
+]
+
 export type SessionRequest = {
   /**
    * The application being filmed.
@@ -67,6 +94,15 @@ export type SessionRequest = {
   /** The capture settings `assertCaptureSupported` already approved. */
   capture: CaptureSettings
   device: ResolvedDevice
+  /**
+   * Give the page a synthetic camera and microphone, already permitted
+   * (`FAKE_MEDIA_LAUNCH_ARGS`, `FAKE_MEDIA_PERMISSIONS`).
+   *
+   * Browser-level rather than something a script could do: the switches are
+   * launch arguments, and a script is handed a page of a browser that is
+   * already running.
+   */
+  fakeMedia?: boolean
   /**
    * The wall clock every document of this recording claims, e.g.
    * `2026-01-15T09:00:00Z`; it also seeds the page's own `Math.random`.
@@ -220,13 +256,18 @@ export function contextOptionsFor(
   device: ResolvedDevice,
   captureArea: { height: number; width: number },
   storageStatePath?: string,
+  fakeMedia = false,
 ): BrowserContextOptions {
   // The saved session is the one option here that does not come from the
   // device: it says *who* is being filmed, not *on what*. It is passed
   // through as a file name — Playwright opens it — so this process never
   // holds a cookie of it.
-  const session =
-    storageStatePath === undefined ? {} : { storageState: storageStatePath }
+  const session = {
+    ...(storageStatePath === undefined
+      ? {}
+      : { storageState: storageStatePath }),
+    ...(fakeMedia ? { permissions: [...FAKE_MEDIA_PERMISSIONS] } : {}),
+  }
   if (device.capture.strategy === 'screencast') {
     return { ...device.device, ...session, viewport: captureArea }
   }
@@ -268,7 +309,9 @@ export async function recordSession(
   request: SessionRequest,
 ): Promise<SessionResult> {
   const { browser, provenance } = await launchChromium(
-    { headless: true },
+    request.fakeMedia === true
+      ? { args: [...FAKE_MEDIA_LAUNCH_ARGS], headless: true }
+      : { headless: true },
     resolveBrowserRequest(process.env),
   )
   // The screencast delivers CSS pixels and ignores `deviceScaleFactor`
@@ -282,7 +325,12 @@ export async function recordSession(
   }
   try {
     const context = await browser.newContext(
-      contextOptionsFor(request.device, captureArea, request.storageStatePath),
+      contextOptionsFor(
+        request.device,
+        captureArea,
+        request.storageStatePath,
+        request.fakeMedia === true,
+      ),
     )
     try {
       // Before the first page, not after it. An init script only reaches
