@@ -7,6 +7,7 @@ import {
   qualityNumber,
   type OutputQuality,
 } from './encoders.js'
+import type { PointerStyle } from './render/cursor.js'
 
 /**
  * The device layer described in docs/DEVICES.md: one name in the call,
@@ -110,7 +111,12 @@ export type OutputSettings = {
   width: number
 }
 
-export type PointerStyle = 'arrow' | 'none' | 'touch'
+/**
+ * Re-exported for the same reason as `OutputQuality`: the render stage reads
+ * this value back out of the capture artifacts (`src/recorded-device.ts`) and
+ * must not import the device layer to name it.
+ */
+export type { PointerStyle }
 
 export type PointerSettings = {
   /** CSS color the touch ripple blooms in. */

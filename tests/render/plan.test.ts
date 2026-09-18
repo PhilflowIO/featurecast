@@ -176,6 +176,48 @@ describe('the cursor comes from the log, because the browser draws none', () => 
   })
 })
 
+describe('the cursor is the recording device’s, not a guess (featurecast#155)', () => {
+  // A phone script that only swipes: the real touch log without its tap.
+  const swipeOnly = fixture('run-touch').filter(
+    ({ event }) => event.type !== 'tap',
+  )
+  const drawnKinds = (input: CaptureInput, events: readonly TimedEvent[]) =>
+    new Set(
+      planRender(input, events)
+        .formats.flatMap((format) => format.frames)
+        .map((frame) => frame.cursor?.kind ?? null),
+    )
+
+  it('draws only the touch dot for a swipe-only touch recording', () => {
+    expect(
+      drawnKinds({ ...capture(200), pointerStyle: 'touch' }, swipeOnly),
+    ).toEqual(new Set(['touch']))
+  })
+
+  it('draws no pointer at all for a device whose style is none', () => {
+    expect(
+      drawnKinds({ ...capture(200), pointerStyle: 'none' }, swipeOnly),
+    ).toEqual(new Set([null]))
+  })
+
+  it('keeps the arrow for a desktop recording', () => {
+    const events = fixture('run-scroll-click')
+    expect(
+      drawnKinds({ ...capture(400), pointerStyle: 'arrow' }, events),
+    ).toEqual(new Set(['arrow']))
+  })
+
+  it('falls back to the log for a capture that names no device', () => {
+    // An old capture: the guess, unchanged — which is exactly why a swipe-only
+    // phone recording made before the device was written down still shows an
+    // arrow until it is recorded again.
+    expect(drawnKinds(capture(200), swipeOnly)).toEqual(new Set(['arrow']))
+    expect(drawnKinds(capture(200), fixture('run-touch'))).toEqual(
+      new Set(['touch']),
+    )
+  })
+})
+
 describe('a scripted hold survives idle trimming', () => {
   it('plays the declared length of every hold in the log', () => {
     // Issue 139, end to end through the plan: a click, then the page stands

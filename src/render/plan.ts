@@ -1,11 +1,11 @@
 import { FRAME_RATE } from '../assemble.js'
 import {
   cursorAt,
-  cursorLookFor,
-  inferCursorKind,
+  cursorLookForRecording,
   rippleStarts,
   type CursorKind,
   type CursorLook,
+  type PointerStyle,
 } from './cursor.js'
 import type { TimedEvent } from './events.js'
 import {
@@ -36,6 +36,14 @@ export const PLAN_VERSION = 1
 export type CaptureInput = {
   /** Frame file names in order, as written by `captureScreencast`. */
   frames: ReadonlyArray<{ file: string; timestamp: number }>
+  /**
+   * The pointer of the device that recorded this, as the capture wrote it
+   * down (`src/recorded-device.ts`). Part of the capture and not of the look:
+   * it is a fact about the recording, the way the source size is. Absent only
+   * for a capture made before it was written; the kind is then inferred from
+   * the log (see `cursorLookForRecording`).
+   */
+  pointerStyle?: PointerStyle
   sessionDurationMs: number
   /** Absolute start of the capture session; frame timestamps are on this clock. */
   sessionStartedAt: number
@@ -211,8 +219,12 @@ export function planRender(
     outputMs: mapTime(mapping, frameTimes[index] ?? 0),
   }))
 
-  const cursorLook = cursorLookFor(
-    inferCursorKind(outputEvents),
+  // The device's pointer, not a guess from the log: a phone recording that
+  // only swipes has no tap in it, and reading the kind off the events alone
+  // drew a desktop arrow over it (featurecast#155).
+  const cursorLook = cursorLookForRecording(
+    capture.pointerStyle ?? null,
+    outputEvents,
     options.cursor,
   )
   const zoomLook = resolveLook(options.zoom)

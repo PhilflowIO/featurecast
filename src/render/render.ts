@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import { readRecordedPointerStyle } from '../recorded-device.js'
 import type { CursorLook } from './cursor.js'
 import { parseEventLog, parseEventTimes, toTimedEvents } from './events.js'
 import {
@@ -143,12 +144,17 @@ export async function renderRecording(
           parseEventTimes(await readEventTimes(captureDirectory)),
           manifest.session.startedAt,
         )
+  // Read here, from the capture directory, and not handed in by the chain:
+  // the in-chain render and a later `pnpm render <capture-dir>` then take
+  // the pointer from the same file and cannot disagree about it.
+  const pointerStyle = await readRecordedPointerStyle(captureDirectory)
   const plan = planRender(
     {
       frames: manifest.frames,
       sessionDurationMs: manifest.session.duration,
       sessionStartedAt: manifest.session.startedAt,
       source: manifest.captureSize,
+      ...(pointerStyle === null ? {} : { pointerStyle }),
     },
     timedEvents,
     options,

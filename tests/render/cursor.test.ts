@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { MAX_POINTER_STEP_PX } from '../../src/motion.js'
 import {
   cursorAt,
+  cursorLookForRecording,
   DEFAULT_CURSOR_LOOK,
   IDENTITY_TRANSFORM,
   inferCursorKind,
@@ -249,6 +250,66 @@ describe('the look is a set of numbers that reach the drawing', () => {
     expect(inferCursorKind(events)).toBe('arrow')
     expect(inferCursorKind(fixture('run-touch'))).toBe('touch')
     expect(inferCursorKind(fixture('run-crowded-taps'))).toBe('touch')
+  })
+})
+
+/**
+ * The device decides the pointer, not the log (featurecast#155).
+ *
+ * The material is the real touch recording with its one tap taken out: what a
+ * phone script that only swipes and scrolls leaves behind. Inference reads
+ * that as a mouse recording — which is the defect, and the reason the
+ * recorded style has to win.
+ */
+describe('the pointer is the recording device’s own', () => {
+  const swipeOnly = fixture('run-touch').filter(
+    ({ event }) => event.type !== 'tap',
+  )
+
+  it('is fooled by a swipe-only log when it has to guess', () => {
+    // The legacy path, kept for captures without a device record. Pinned so
+    // the reason the recorded style exists stays visible as a number.
+    expect(inferCursorKind(swipeOnly)).toBe('arrow')
+    expect(cursorLookForRecording(null, swipeOnly).kind).toBe('arrow')
+    expect(cursorLookForRecording(null, fixture('run-touch')).kind).toBe(
+      'touch',
+    )
+  })
+
+  it('draws a finger for a touch device even when nothing was tapped', () => {
+    const look = cursorLookForRecording('touch', swipeOnly)
+    expect(look.kind).toBe('touch')
+    expect(look.visible).toBe(true)
+    const swipeSamples = pointerSamples(swipeOnly)
+    expect(swipeSamples.length).toBeGreaterThan(20)
+    for (const sample of swipeSamples) {
+      expect(cursorAt(sample.timeMs, swipeSamples, [], look)?.kind).toBe(
+        'touch',
+      )
+    }
+  })
+
+  it('keeps the arrow for a mouse device', () => {
+    expect(cursorLookForRecording('arrow', events).kind).toBe('arrow')
+    expect(cursorLookForRecording('arrow', events)).toEqual(
+      cursorLookForRecording(null, events),
+    )
+  })
+
+  it('draws nothing for a device without a pointer, whatever the caller asks', () => {
+    const look = cursorLookForRecording('none', fixture('run-touch'), {
+      visible: true,
+    })
+    expect(look.visible).toBe(false)
+    expect(cursorAt(samples[10]?.timeMs ?? 0, samples, [], look)).toBe(
+      undefined,
+    )
+  })
+
+  it('still takes the caller’s size for the device’s pointer', () => {
+    expect(cursorLookForRecording('touch', swipeOnly, { sizePx: 60 })).toEqual(
+      expect.objectContaining({ kind: 'touch', sizePx: 60 }),
+    )
   })
 })
 

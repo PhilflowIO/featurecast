@@ -21,6 +21,7 @@ import {
   type RecordRuntime,
 } from './record.js'
 import { pinClockAndRandomness, hideOverlay } from './recipes.js'
+import { writeRecordedDevice } from './recorded-device.js'
 import {
   assertHardwareRenderer,
   detectRenderer,
@@ -420,6 +421,9 @@ export async function recordSession(
         ...provenance,
         renderer,
       })
+      // Beside it, the device: the render stage has no device layer, and the
+      // pointer it draws has to be the one this device has (featurecast#155).
+      await writeRecordedDevice(request.outputDirectory, request.device)
       return {
         captureDirectory: request.outputDirectory,
         timestampsPath: capture.timestampsPath,

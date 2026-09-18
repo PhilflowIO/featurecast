@@ -13,6 +13,7 @@ import {
   type FixtureServer,
   startFixtureServer,
 } from '../src/fixture-server.js'
+import { readRecordedPointerStyle } from '../src/recorded-device.js'
 import { HARDWARE_GL_LAUNCH_ARGS } from '../src/renderer.js'
 import { recordSession } from '../src/session.js'
 
@@ -75,6 +76,10 @@ describe('recording renderer', () => {
       )
       expect(provenance.renderer?.renderer).not.toMatch(/swiftshader/i)
       expect(provenance.renderer?.softwareRendering).toBe(false)
+      // The one real recording in this file, so the one place that proves
+      // the recorder — and not only a test calling the writer — leaves the
+      // device's pointer beside the frames for the render (featurecast#155).
+      expect(await readRecordedPointerStyle(outputDirectory)).toBe('arrow')
     },
   )
 })

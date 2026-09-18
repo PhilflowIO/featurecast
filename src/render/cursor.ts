@@ -74,6 +74,24 @@ export function screenToVideoUV(
 /** How the pointer is drawn. Headless Chromium draws none, so this is all of it. */
 export type CursorKind = 'arrow' | 'touch'
 
+/**
+ * The pointer a device has, as the device layer states it: an arrow on a
+ * mouse device, a finger on a touch device, or none at all.
+ *
+ * Defined here and re-exported by `src/devices.ts`, the same arrangement as
+ * `OutputQuality`: the render stage is handed this value through the capture
+ * artifacts and must not import the device layer to name it. It is a wider
+ * set than `CursorKind` on purpose — `none` is not a third sprite, it is the
+ * absence of one, and is spelled `visible: false` once it reaches the look.
+ */
+export type PointerStyle = 'arrow' | 'none' | 'touch'
+
+export const POINTER_STYLES: readonly PointerStyle[] = [
+  'arrow',
+  'none',
+  'touch',
+]
+
 export type CursorLook = {
   /** Height of the arrow, or diameter of the touch dot, in output pixels. */
   sizePx?: number
@@ -224,11 +242,54 @@ export function rippleStarts(events: readonly TimedEvent[]): number[] {
 }
 
 /**
- * Picks the kind of pointer that fits the recording: a tap anywhere in the log
- * means a touch device, where an arrow would be a lie.
+ * Guesses the kind of pointer from the log alone: a tap anywhere in it means a
+ * touch device, where an arrow would be a lie.
+ *
+ * Only a guess, and only for a recording that does not say which device made
+ * it (see `cursorLookForRecording`). A phone recording that only swipes and
+ * scrolls logs pointer moves and scrolls and not a single tap, so this answers
+ * `arrow` for it — a desktop cursor walking across a phone screen
+ * (featurecast#155). The absence of a tap says nothing about the device.
  */
 export function inferCursorKind(events: readonly TimedEvent[]): CursorKind {
   return events.some(({ event }) => event.type === 'tap') ? 'touch' : 'arrow'
+}
+
+/**
+ * The look for one recording, decided by the device that recorded it.
+ *
+ * The device layer already knows the answer — every touch preset resolves to
+ * `pointer.style: 'touch'`, every mouse preset to `arrow`, and a script may
+ * override either or ask for `none` — and the capture writes it beside the
+ * frames. That statement wins over anything read off the log: a swipe is a
+ * finger on a phone whether or not the script also tapped.
+ *
+ * `recorded` is `null` only for a capture made before the device was written
+ * down. Those still render, with the pointer inferred from the log as before;
+ * refusing them would throw away recordings that are correct in every other
+ * respect, and the inference is right for every one of them that tapped.
+ *
+ * `none` is final: the caller's overrides cannot switch a pointer back on that
+ * the device said it does not have. A script that wants one on such a device
+ * says so in the device layer, where the style is overridable.
+ */
+export function cursorLookForRecording(
+  recorded: PointerStyle | null,
+  events: readonly TimedEvent[],
+  overrides: CursorLook = {},
+): Required<CursorLook> {
+  if (recorded === null)
+    return cursorLookFor(inferCursorKind(events), overrides)
+  if (recorded === 'none') {
+    // The kind is irrelevant to a pointer that is never drawn; the inferred
+    // one keeps the stored look describing the recording rather than a
+    // constant picked for no reason.
+    return {
+      ...cursorLookFor(inferCursorKind(events), overrides),
+      visible: false,
+    }
+  }
+  return cursorLookFor(recorded, overrides)
 }
 
 /** What to draw at one moment. Pure in time. */
