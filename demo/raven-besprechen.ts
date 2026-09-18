@@ -19,30 +19,19 @@ import {
  * one automatic turn (`ui/src/app/assistant/assistant-page-client.tsx:1435-1488`
  * in `flow.raven`).
  *
- * WHY THE SCRIPT ASKS FOR THE GRANT BEFORE IT CHOOSES A PATH. The button exists
- * only for accounts with the `verstehen_chat` grant
- * (`ui/src/app/meetings/[id]/page.tsx:1275`). Without the grant, the backend
- * refuses a pinned turn (`api/app/routers/chat.py:393-412`) and the assistant
- * prints "Das Meeting wurde nicht gefunden". That line is an
- * `assistant-message` too, so a script that just waited for one would film the
- * refusal and report success. The page answers the question itself through the
- * same `/api/entitlements` call the interface makes, and there are two paths:
- *
- *   with the grant: the button, the chip, the pinned answer;
- *   without it:    the general assistant, asked about the Steinkauz meeting
- *                  by name. That chat is not behind the grant, and it finds
- *                  the meeting through its own search.
- *
- * Deciding by polling for the button would be the fragile version. The
- * entitlements load after the meeting, so "not visible yet" and "never coming"
- * look the same for a while.
+ * The button is shown to every account since flow.raven PR #7035; before it,
+ * it needed the `verstehen_chat` grant and the script had a second path for
+ * accounts without it. That path is gone with the gate. If the button does not
+ * appear, `warteAuf` fails the recording rather than filming something else.
  *
  * WHAT DOES NOT HAPPEN, FOR DATA-PROTECTION REASONS: the user menu is never
  * opened (it shows the real account address), and nothing scrolls sideways
  * (capture yield).
  *
- * The answer can take up to 90 seconds to stream. That wait costs no video
- * time, because the renderer trims idle stretches.
+ * The answer can take up to 90 seconds to stream. The still part of that wait
+ * costs no video time, because the renderer trims idle stretches. The closing
+ * `hold` does stay in full (featurecast#139): it is the reading time for the
+ * answer.
  *
  * INVOCATION::
  *
@@ -53,9 +42,6 @@ import {
 
 /** The staged meeting: has a transcript and is not encrypted. */
 const SUCHWORT = 'Steinkauz'
-
-/** What the general assistant is asked when the pinned path is not available. */
-const FRAGE = 'Worum ging es im Steinkauz-Meeting, und was ist offen geblieben?'
 
 /**
  * The link that opens the first Steinkauz meeting.
@@ -96,6 +82,9 @@ const ANTWORT =
   '[data-testid="assistant-message"]' +
   ':not(:has([data-testid="assistant-message-failed"]))' +
   ':not(:has([data-testid="assistant-message-interrupted"])) >> nth=0'
+
+/** The composer at the bottom, where the pointer waits for the answer. */
+const EINGABE = 'textarea >> nth=0'
 
 /** The marker of a turn that did not produce an answer. */
 const FEHLSCHLAG =
@@ -170,40 +159,19 @@ export default async function besprechen(
   await warteAuf(page, `h1:has-text("${SUCHWORT}")`)
   await demo.hold(1400)
 
-  // An anonymous arrow passed straight in. A named function would be wrapped
-  // in tsx's `__name(...)`, which does not exist in the page (see "The trap
-  // that catches every injected script" in docs/RECORDING-SCRIPTS.md).
-  const gewaehrt = await page.evaluate(() =>
-    fetch('/api/entitlements')
-      .then((antwort) => (antwort.ok ? antwort.json() : null))
-      .then(
-        (daten: { features?: unknown } | null) =>
-          Array.isArray(daten?.features) &&
-          daten.features.includes('verstehen_chat'),
-      ),
-  )
+  await warteAuf(page, BESPRECHEN)
+  await demo.point(BESPRECHEN)
+  await demo.hold(700)
+  await demo.click(BESPRECHEN)
+  await warteAuf(page, KONTEXT_CHIP)
+  await demo.point(KONTEXT_CHIP)
+  await demo.hold(1200)
 
-  if (gewaehrt) {
-    await warteAuf(page, BESPRECHEN)
-    await demo.point(BESPRECHEN)
-    await demo.hold(700)
-    await demo.click(BESPRECHEN)
-    await warteAuf(page, KONTEXT_CHIP)
-    await demo.point(KONTEXT_CHIP)
-    await demo.hold(1200)
-  } else {
-    // The same assistant, reached through the navigation instead of the
-    // meeting. A `goto` would be a hard cut; a click is a move the viewer can
-    // follow.
-    await demo.click('a[href="/assistant"] >> nth=0')
-    const eingabe = 'textarea >> nth=0'
-    await warteAuf(page, eingabe)
-    await demo.type(eingabe, FRAGE)
-    await demo.hold(500)
-    await demo.click('role=button[name="Senden"]')
-  }
+  // Out of the way before the answer lands: a pointer resting on the chip or
+  // on the answer covers exactly the words the viewer is meant to read.
+  await demo.point(EINGABE)
 
   await warteAufAntwort(page)
-  await demo.point(ANTWORT)
-  await demo.hold(3500)
+  // Reading time. A scripted hold is kept in full by the renderer.
+  await demo.hold(6000)
 }
