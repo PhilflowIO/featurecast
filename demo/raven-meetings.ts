@@ -8,6 +8,7 @@ import {
   RAVEN_HIDE_SELECTORS,
   RAVEN_STATE,
   RAVEN_URL,
+  vorbereiten,
   warteAuf,
 } from './raven-common.js'
 
@@ -60,8 +61,6 @@ import {
  * the sign-in again.
  */
 
-const BASIS = RAVEN_URL
-
 /** The word the list shrinks down to in the video. */
 const SUCHWORT = 'Steinkauz'
 
@@ -84,6 +83,15 @@ export const hideSelectors = RAVEN_HIDE_SELECTORS
 export const fixedTime = RAVEN_FIXED_TIME
 
 /**
+ * The list is loaded before the camera rolls, so the clip opens on it and not
+ * on a white page (see `vorbereiten`). It waits for the first row, not for
+ * the header line: the header line is in the document immediately and says
+ * "0 meetings" for a second, because the list only fetches its number from
+ * the server afterwards.
+ */
+export const prepare = vorbereiten('/meetings', ERSTE_ZEILE)
+
+/**
  * Records the list: arrive, let it be read, search, open the result.
  *
  * The change of state IS the content — the header line counts over from
@@ -100,12 +108,7 @@ export default async function aufnahme(
   page: RecordPage,
   demo: Demo,
 ): Promise<void> {
-  await page.goto(`${BASIS}/meetings`)
-  // Wait for the first row, not for the header line: the header line is in the
-  // document immediately and says "0 meetings" for a second, because the list
-  // only fetches its number from the server afterwards. Anyone who waits for
-  // it films the zero.
-  await warteAuf(page, ERSTE_ZEILE)
+  // `prepare` has opened the list and seen its first row.
   await demo.point('[data-testid="meeting-count"]')
   await demo.hold(1400)
 
