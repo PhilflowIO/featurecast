@@ -188,30 +188,26 @@ frames. Nothing else differs — same script, same page, same browser.
 Capture yield is the share of frames the browser presented that actually
 reached the file.
 
-| Browser                                     | Yield                                   |
-| ------------------------------------------- | --------------------------------------- |
-| **Chromium 154 or newer** (any stock build) | **98.8 %** (338 of 342, three of three) |
-| The Chromium that ships with Playwright     | **84-88 %**, and it fails the 95 % gate |
+| Browser                                         | Yield                                   |
+| ----------------------------------------------- | --------------------------------------- |
+| **The one `pnpm browsers:install` gives you**   | **98.8 %** (338 of 342, three of three) |
+| Chromium 153, the bundle before Playwright 1.64 | **84-88 %**, and it fails the 95 % gate |
 
 Measured on the benchmark machine, 2026-09-17, at 2560×1600 with the same tour
 and three repeats per arm.
 
-**Point `CHROME_BIN` at a Chromium 154 or newer and you get the top row.** No
-patched build, no compiling anything — a
-[Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/)
-download is enough. Without that step you get whatever Playwright bundles, which
-is currently 153.
-
-```bash
-CHROME_BIN=/path/to/chrome-154/chrome pnpm featurecast run demo/feature-xy.ts
-```
+**The top row is what you get out of the box.** featurecast pins a Playwright
+that ships a stock Chrome for Testing 154 — no patched build, nothing to
+compile. `CHROME_BIN` still points a run at any other Chromium; one older than
+154 records fine, it just lands in the second row.
 
 **What changed, and why the number moves so much.** Chromium stops handing out
 screencast frames once too many are unacknowledged, and its default bound of
 three is too low for a 2560×1600 capture: the same run scores 82-90 % at three
 and 98.8 % at twelve. Playwright's screencast wrapper cannot pass that bound at
 all, so featurecast drives the recording over the browser protocol directly.
-This used to require a self-built Chromium; it no longer does.
+This used to require a self-built Chromium; since Chromium 154 it no longer
+does.
 
 **There is no longer a second reason to build your own browser.** The patched
 build also switched off Chromium's `AnimatedContentSampler`, which locks onto

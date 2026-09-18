@@ -32,3 +32,12 @@ Three things changed on adoption, all of them parameters that were constants ups
 - `detectSilenceZones` in upstream `src/auto-zoom.ts` hard-wires a 2px threshold and takes nanosecond timestamps. Both are arguments, and time is the renderer's millisecond clock.
 
 The stateful viewport-panning spring from upstream `src/zoom.ts` was deliberately **not** adopted: it exists to chase a live cursor across a recorded screen, whereas our zoom targets are the logged bounding boxes of the elements that were actually hit, which are known ahead of time and must not move while the element animates.
+
+## Browser
+
+featurecast ships no browser. `pnpm browsers:install` has Playwright download
+an unmodified [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/)
+build, which comes with its own license notices; `CHROME_BIN` points a run at
+any other Chromium instead. An earlier plan to distribute a self-built, patched
+Chromium was dropped once a stock Chromium 154 reached the same capture yield
+(ticket 137), so no Chromium source or binary is redistributed from here.

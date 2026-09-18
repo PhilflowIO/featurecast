@@ -84,10 +84,9 @@ const passes = Number(values.passes ?? '1')
  * bound it compiled in, and I know that is what I am doing.
  *
  * The refusal further down exists against a *silent* unknown regime, not
- * against a named one. A self-built browser is the only way to reach some
- * questions at all - the animated-content lock-in has no switch outside a
- * patched build - and those runs would otherwise be locked out by a guard
- * meant to protect them.
+ * against a named one. Some questions can only be asked of a browser older
+ * than 154 - the README's comparison row is one - and those runs would
+ * otherwise be locked out by a guard meant to protect them.
  */
 const acceptBrowserDefault = values.framesInFlight === 'browser-default'
 const framesInFlight =

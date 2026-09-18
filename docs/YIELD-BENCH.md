@@ -69,10 +69,10 @@ twelve characters of the running binary's SHA-256. Both are needed: the word
 names the _kind_ of regime, the hash names _which_ one — a patched and an
 unpatched build compile in different bounds and report the same version string.
 
-The switch exists because a self-built browser is the only way to reach some
-questions at all: the animated-content lock-in has no switch outside a patched
-build, and such a build has no `maxFramesInFlight` parameter to satisfy the
-guard with. The guard is against a _silent_ unknown regime, not a named one.
+The switch exists because some questions can only be asked of an older
+browser: the README's comparison row is Chromium 153, which has no
+`maxFramesInFlight` parameter to satisfy the guard with. The guard is against a
+_silent_ unknown regime, not a named one.
 
 This matters more than it looks. `src/browser.ts` verifies through
 `/proc/<pid>/exe` which binary actually started, and writes its path, version
