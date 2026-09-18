@@ -58,7 +58,7 @@
     "eslint": "^9.39.1",
     "globals": "^15.14.0",
     "lint-staged": "^17.5.1",
-    "playwright": "^1.59.0",
+    "playwright": "1.64.0-alpha-2026-09-18",
     "prettier": "^3.6.2",
     "simple-git-hooks": "^2.14.0",
     "tsx": "^4.20.6",
