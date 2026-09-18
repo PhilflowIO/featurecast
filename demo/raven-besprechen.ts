@@ -14,8 +14,8 @@ import {
  * "Talk it over with Raven": from a finished meeting straight into a
  * conversation about it.
  *
- * The story runs meetings list → search "Steinkauz" → open the meeting →
- * "Mit Raven besprechen" → the assistant, pinned to that one meeting
+ * The story runs meetings list → scroll down through the list → open one
+ * meeting by its title → "Mit Raven besprechen" → the assistant, pinned to that one meeting
  * ("Kontext: <title>"), writes a first answer by itself → the viewer's own
  * question, typed into the composer, and Raven's answer to it. Opening the
  * assistant with `?meeting=<id>` and an empty history fires one automatic turn
@@ -50,23 +50,40 @@ import {
  *         tools/gpu-box/record.sh demo/raven-besprechen.ts --devices iphone,desktop-wide
  */
 
-/** The staged meeting: has a transcript and is not encrypted. */
-const SUCHWORT = 'Steinkauz'
+/**
+ * The staged meeting that is opened: has a transcript, a summary, and is not
+ * encrypted.
+ *
+ * The list is scrolled, not searched. The first takes typed "Steinkauz" into
+ * the search, and the list then showed sixteen rows that all read "Projekt
+ * Steinkauz — Sta…" at phone width: a monotonous list is the opposite of what
+ * the opening shot should say. The demo account holds 115 fictional meetings of
+ * a fictional firm (staging DB, 2026-09-18), and the unfiltered list from the
+ * top down to this one passes customer talks, trainings, weekly rounds and a
+ * supplier talk. It is the sixteenth row by date, so reaching it is a real
+ * scroll on every device (document y ≈1550 on a 390×844 phone, ≈1350 at
+ * 1920×1200).
+ *
+ * Its content, read before the question below was kept: Ockerbach tells its
+ * foundry that a second source is being built (decided, 80:20 for now); who
+ * pays the tooling a second time, 22,000 euros that only fit the current
+ * foundry's moulding line, is left open.
+ */
+const TITEL = 'Hirtenscheibe Guss'
 
 /**
- * The link that opens the first Steinkauz meeting.
+ * The link that opens that meeting.
  *
  * NOT the shared first-row selector. A meetings row is a clickable `div` that
  * opens the preview pane. The only `a[href^="/meetings/"]` in it is the
  * 28 px chevron "Details öffnen" (`ui/src/components/meetings/meeting-list-item.tsx:121,294-301`
- * in `flow.raven`). The first trial clicked the first row's chevron while the
- * search was still in flight, and opened a meeting that had nothing to do with
- * Steinkauz. This selector names the row by its title and takes that row's
- * chevron. The search then only narrows what the viewer sees; it no longer
- * decides which meeting opens.
+ * in `flow.raven`). An early trial clicked the first row's chevron while a
+ * search was still in flight and opened the wrong meeting. This selector names
+ * the row by its title and takes that row's chevron, so which meeting opens
+ * never depends on where the list happens to stand.
  */
-const STEINKAUZ_ZEILE =
-  `h3:has-text("${SUCHWORT}") >> nth=0 >> ` +
+const ZEILE =
+  `h3:has-text("${TITEL}") >> nth=0 >> ` +
   'xpath=ancestor::div[contains(concat(" ", @class, " "), " group ")][1]' +
   '//a[starts-with(@href, "/meetings/")] >> nth=0'
 
@@ -112,16 +129,44 @@ const SENDEN = 'role=button[name="Senden"]'
  * The question the viewer asks.
  *
  * Chosen against the meeting's own content, read from its summary and
- * transcript before it was written down (Projekt Steinkauz, Statusrunde KW 37):
- * three decisions (technical release end of October; no development price for
- * Salmweide Energie but a volume discount of 240 euros bound to 600 units in
- * twelve months; the right of first refusal cut to six months and one size)
- * and one question explicitly left open (who trains the second shift). So the
- * question asks for exactly that split. "Who does what by when" was the first
- * idea and was dropped: the meeting assigns almost no tasks, and a question
- * whose honest answer is "nobody was named" films Raven saying no.
+ * transcript (see `TITEL`): one decision (a second foundry, 80:20 for now) and
+ * one question explicitly left open (the 22,000 euros of tooling that would be
+ * paid again). So the question asks for exactly that split. It was first
+ * written for the Steinkauz status round, which has the same shape. "Who does
+ * what by when" was dropped early: these meetings assign almost no tasks, and a
+ * question whose honest answer is "nobody was named" films Raven saying no.
  */
 const FRAGE = 'Was wurde entschieden, und was ist noch offen?'
+
+/**
+ * Scrolls until `selector` stands at about 45 % of the viewport height, with a
+ * visible scroll the renderer keeps (swipe on a phone, wheel on a desktop).
+ *
+ * A tap on something at the screen's edge is filmed as a dot on a sliver of
+ * button: in the first phone take the tap on "Mit Raven besprechen" landed on
+ * the bottom 6 px of the button, the rest hidden under Raven's own player strip
+ * (flow.raven #7217, fixed in PR #7220). Bringing the target to the middle
+ * first puts it where the zoom centres anyway, with room above and below.
+ * Up to three passes, because a lazily grown list can move the target while
+ * the first scroll runs; a target already within 60 px of the mark is left
+ * alone, so a desktop layout that shows it at once does not scroll for show.
+ */
+async function inDieMitte(
+  page: RecordPage,
+  demo: Demo,
+  selector: string,
+): Promise<void> {
+  for (let durchgang = 0; durchgang < 3; durchgang += 1) {
+    const box = await page.locator(selector).boundingBox()
+    const hoehe = page.viewportSize()?.height
+    if (box === null || hoehe === undefined) {
+      throw new Error(`Cannot place ${selector}: no geometry`)
+    }
+    const abstand = Math.round(box.y + box.height / 2 - hoehe * 0.45)
+    if (Math.abs(abstand) <= 60) return
+    await demo.scroll(0, abstand)
+  }
+}
 
 /** The marker of a turn that did not produce an answer. */
 const FEHLSCHLAG =
@@ -198,19 +243,20 @@ export default async function besprechen(
   // `prepare` has opened the list and seen its first row.
   await demo.hold(1000)
 
-  await demo.type('input[placeholder*="durchsuchen"]', SUCHWORT)
-  // The list fetches the result 300 ms after the last keystroke
-  // (`useDebounce`). The hold lets the viewer see the list shrink. Which
-  // meeting opens does not depend on it (see `STEINKAUZ_ZEILE`).
-  await demo.hold(1800)
-  await warteAuf(page, STEINKAUZ_ZEILE)
-  await demo.click(STEINKAUZ_ZEILE)
+  // Down the unfiltered list to the meeting: the viewer sees a firm's week,
+  // not one project's series. The row is attached from the first page load
+  // (twenty rows arrive at once), so no lazy loading is waited on here.
+  await inDieMitte(page, demo, ZEILE)
+  await demo.hold(900)
+  await warteAuf(page, ZEILE)
+  await demo.click(ZEILE)
   // The meeting's own title, not any `h1`: the list page has one too
   // ("Meetings"), and a bare `h1` is visible before the click has navigated.
-  await warteAuf(page, `h1:has-text("${SUCHWORT}")`)
+  await warteAuf(page, `h1:has-text("${TITEL}")`)
   await demo.hold(1400)
 
   await warteAuf(page, BESPRECHEN)
+  await inDieMitte(page, demo, BESPRECHEN)
   await demo.point(BESPRECHEN)
   await demo.hold(700)
   await demo.click(BESPRECHEN)
