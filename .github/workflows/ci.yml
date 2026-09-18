@@ -37,20 +37,27 @@ jobs:
         run: pnpm lint
       - name: Format
         run: pnpm format
-      - name: Unit tests
-        run: pnpm test
 
-      # The unit suite mocks the browser; this step proves a real Chromium starts.
+      # Most of the suite drives a real Chromium and encodes with a real
+      # ffmpeg, so both are installed before it runs, not after.
       - name: Install Chromium
         run: pnpm exec playwright install --with-deps chromium
-      - name: Browser smoke test
-        run: pnpm demo:hello
-
       # ffmpeg is not on the hosted image, and the smoothness suite generates
       # its own calibration clips with it.
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - uses: astral-sh/setup-uv@v5
+
+      # The hosted image exports CHROME_BIN for its own Google Chrome, and
+      # featurecast honours CHROME_BIN. Left set, the check would run on
+      # whatever Chrome the image ships instead of the pinned Chromium every
+      # published number was measured on, so it is removed for the steps that
+      # launch a browser. (Setting it empty is not an option: featurecast
+      # refuses an empty CHROME_BIN rather than guess.)
+      - name: Tests
+        run: env -u CHROME_BIN pnpm test
+      - name: Browser smoke test
+        run: env -u CHROME_BIN pnpm demo:hello
 
       - name: Lint smoothness (ruff)
         run: uv run --project tools/smoothness ruff check tools/smoothness
