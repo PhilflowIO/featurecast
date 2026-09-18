@@ -58,10 +58,10 @@ frames a second at that size: the median gap between presented frames is
 20.52 ms against 16.76 ms at 2560×1600. So: 4K, yes. 4K at 60, no.
 
 **At 4K the camera holds still.** The output is the whole capture area, so
-there is no reserve to crop into and every push-in clamps to 1.00× — the same
-trade the phone presets make. For a large picture _and_ a moving camera, give
-the standard `desktop` preset a 3840×2160 capture area and keep its 1920×1080
-delivery: that leaves a 2× reserve instead of the usual 1.33×.
+there is no reserve to crop into and every push-in clamps to 1.00×. For a
+large picture _and_ a moving camera, give the standard `desktop` preset
+`reserve: 2`: it records 3840×2160 for its 1920×1080 delivery, a 2× reserve
+instead of the usual 1.33×.
 
 <!--
   Two further comparisons and a full product video exist as full-resolution
@@ -89,8 +89,10 @@ pnpm render artifacts/tour/desktop dist/tour --zoom 2.2 --padding 90
 
 It moves in by cropping into the original picture, never by blowing it up, so
 it only goes as close as the recording stays sharp — and it tells you when you
-have asked for more than that. On a phone it stays put: a phone is filmed at
-exactly the size it is delivered, so there is nothing spare to move into.
+have asked for more than that. A phone is filmed at 1.5× the size it is
+delivered, so the camera can move in up to 1.5× there too, at the full 60
+frames a second; `--reserve 1` films it at exactly its delivery size when disk
+and time matter more than the camera.
 
 ---
 

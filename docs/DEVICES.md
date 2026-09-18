@@ -63,9 +63,20 @@ A touch profile is filmed through a shell: the captured document has the size
 of the video, the application inside it sits at the width of the device and is
 drawn scaled up by a CSS transform — and is re-rasterised in the process, so it
 is sharp. The shell is served from the application's own origin, otherwise the
-application loses its storage and draws nothing. Capture and output area are
-**the same size** here, without the desktop reserve; both measured and argued
-in [M3-VERDICT.md](M3-VERDICT.md).
+application loses its storage and draws nothing.
+
+**A phone records 1.5× what it delivers.** `iphone` delivers 1080×1920 and
+records 1620×2880, so the camera can push in up to 1.5× at full sharpness; at
+1× every mobile push-in is clamped to 1.00×. The larger area costs no frame
+rate — measured 2026-09-18 on the AI box, 13 passes: 16.70 ms median gap and
+97.0 % yield at 1620×2880, against 16.69 ms and 96.7 % at 1080×1920 (#149).
+It costs 2.25 times the pixels per frame (322 KB per stored frame against 187)
+and about 13 % more recording time, and the render has to resample every
+portrait frame instead of copying it. A run that does not want it says so:
+`reserve: 1` on the device, or `--reserve 1` on the command line. Until
+2026-09-18 the phone presets recorded exactly their output, because the larger
+area looked like it halved the frame rate; [M3-VERDICT.md](M3-VERDICT.md)
+records that measurement and why its explanation was wrong.
 
 **A phone recording presents at 60 Hz, like desktop.** Until 2026-09-18 it did
 not: every phone video was 30 Hz content in a 60 fps file, behind a yield gate
@@ -91,13 +102,16 @@ pnpm featurecast run demo/fixture-tour.ts --devices desktop,tablet,iphone
 // in the recording script
 export const devices = [
   'desktop-wide',
-  {
-    extends: 'iphone',
-    as: 'phone-with-reserve',
-    capture: { width: 1620, height: 2880 },
-  },
+  { extends: 'iphone', as: 'phone-exact', reserve: 1 },
 ]
 ```
+
+`reserve` is the capture area as a multiple of the output, on both axes, and
+the usual way to ask for zoom room: `1` records exactly the delivery, `2` on
+`desktop` records 3840×2160 for its 1920×1080. It is taken against the output
+after `aspect` and `output` are applied, rounded to even pixels. Naming both
+`reserve` and a capture size is refused — they answer the same question.
+`--reserve <x>` sets it for every device of one run.
 
 The script export is where anything beyond a name belongs, for the same reason
 `url`, `storageStatePath`, `hideSelectors` and `fixedTime` live there: it is
@@ -120,13 +134,10 @@ fields instead was considered and dropped — it answers "which fields count"
 with a guess, and a changed pointer colour would silently produce a second
 directory nobody asked for.
 
-Two things this unlocks that were previously unreachable without writing
-TypeScript against the API: a capture area larger than 2560×1600, and a mobile
-capture with room for the camera to move into. A phone preset records at
-exactly its delivery size, which is why the renderer clamps every mobile zoom
-to 1.00× — give it reserve and the push-in becomes possible. What that costs in
-frame rate is measured, not assumed; see [M3-VERDICT.md](M3-VERDICT.md) and the
-capture-area measurements referenced from it.
+What this unlocks without writing TypeScript against the API: a capture area
+larger than 2560×1600, a different reserve than the default on any device, and
+a phone recorded at exactly its delivery size when disk and time matter more
+than the camera.
 
 ---
 
@@ -140,14 +151,14 @@ our own settings; both have now been proven (M1 for desktop, M3 for mobile).
 | `desktop` → Desktop Chrome HiDPI        | 1280×720       | 2     | –     | chromium | 2560×1600   | 1920×1080 | arrow   |
 | `desktop-wide` → Desktop Chrome         | 1280×720       | 1     | –     | chromium | 2560×1600   | 1920×1200 | arrow   |
 | `safari` → Desktop Safari               | 1280×720       | 2     | –     | webkit   | 2560×1600   | 1920×1080 | arrow   |
-| `iphone` → iPhone 15 Pro                | 393×659        | 3     | yes   | webkit   | 1080×1920 S | 1080×1920 | touch   |
-| `iphone-max` → iPhone 15 Pro Max        | 430×739        | 3     | yes   | webkit   | 1080×1920 S | 1080×1920 | touch   |
-| `iphone-small` → iPhone SE              | 320×568        | 2     | yes   | webkit   | 1080×1920 S | 1080×1920 | touch   |
-| `iphone-quer` → iPhone 15 Pro landscape | 734×343        | 3     | yes   | webkit   | 1920×1080 S | 1920×1080 | touch   |
-| `android` → Pixel 7                     | 412×839        | 2.625 | yes   | chromium | 1080×1920 S | 1080×1920 | touch   |
-| `android-small` → Galaxy S24            | 360×780        | 3     | yes   | chromium | 1080×1920 S | 1080×1920 | touch   |
-| `tablet` → iPad Pro 11                  | 834×1194       | 2     | yes   | webkit   | 1200×1600 S | 1200×1600 | touch   |
-| `tablet-small` → iPad Mini              | 768×1024       | 2     | yes   | webkit   | 1200×1600 S | 1200×1600 | touch   |
+| `iphone` → iPhone 15 Pro                | 393×659        | 3     | yes   | webkit   | 1620×2880 S | 1080×1920 | touch   |
+| `iphone-max` → iPhone 15 Pro Max        | 430×739        | 3     | yes   | webkit   | 1620×2880 S | 1080×1920 | touch   |
+| `iphone-small` → iPhone SE              | 320×568        | 2     | yes   | webkit   | 1620×2880 S | 1080×1920 | touch   |
+| `iphone-quer` → iPhone 15 Pro landscape | 734×343        | 3     | yes   | webkit   | 2880×1620 S | 1920×1080 | touch   |
+| `android` → Pixel 7                     | 412×839        | 2.625 | yes   | chromium | 1620×2880 S | 1080×1920 | touch   |
+| `android-small` → Galaxy S24            | 360×780        | 3     | yes   | chromium | 1620×2880 S | 1080×1920 | touch   |
+| `tablet` → iPad Pro 11                  | 834×1194       | 2     | yes   | webkit   | 1800×2400 S | 1200×1600 | touch   |
+| `tablet-small` → iPad Mini              | 768×1024       | 2     | yes   | webkit   | 1800×2400 S | 1200×1600 | touch   |
 
 `S` marks the captures that run through the shell (strategy `framed-scale`) —
 exactly the touch profiles. Each of the 143 Playwright names also works
@@ -170,18 +181,11 @@ median and 84.8 % of the gaps are one full 60 Hz interval; at 3840×2160 it is
 more than was measured.
 
 **The camera holds still.** Output equals capture area, so there is no reserve
-to crop into and every push-in is clamped to 1.00× — the same trade the mobile
-presets make. A run that wants a large picture _and_ a moving camera asks for
+to crop into and every push-in is clamped to 1.00×. A run that wants a large picture _and_ a moving camera asks for
 the two sizes separately:
 
 ```ts
-export const devices = [
-  {
-    extends: 'desktop',
-    as: 'desktop-roomy',
-    capture: { width: 3840, height: 2160 },
-  },
-]
+export const devices = [{ extends: 'desktop', as: 'desktop-roomy', reserve: 2 }]
 ```
 
 That keeps `desktop`'s own 1920×1080 delivery and leaves a 2× reserve — a

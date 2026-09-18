@@ -189,8 +189,9 @@ export function resample(
     Number.isInteger(crop.x) &&
     Number.isInteger(crop.y)
   ) {
-    // Not an optimisation: the portrait deliverable has no zoom reserve at all,
-    // so its crop is always the size of its frame. It must stay a true copy —
+    // Not an optimisation: a format with no zoom reserve — `desktop-4k`, or a
+    // phone recorded with `reserve: 1` — has a crop always the size of its
+    // frame. It must stay a true copy —
     // running it through any kernel, however good, would cost sharpness the
     // format cannot spare.
     copyRows(source, crop, target, rowStart, rowEnd)
@@ -290,8 +291,8 @@ export function resample(
 /**
  * The no-scale case: a crop already the size of the frame it fills is a copy,
  * row by row. It is not an optimisation detail but the normal case for a format
- * with no zoom reserve — the portrait deliverable pans across the raster at
- * 1:1 and never resamples at all, so it stays as sharp as the capture.
+ * with no zoom reserve — such a format pans across the raster at 1:1 and never
+ * resamples at all, so it stays as sharp as the capture.
  */
 function copyRows(
   source: Raster,

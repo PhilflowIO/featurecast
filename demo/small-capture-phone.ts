@@ -10,9 +10,9 @@ import { renderRecording } from '../src/render/render.js'
  *
  * This exists to produce one half of a comparison, and it is the half that
  * cannot be produced any other way. `featurecast run --devices iphone` takes
- * its capture area from the preset — 1080x1920, the output size, no reserve —
- * and the command line has no flag to shrink it, on purpose: nobody wants to
- * ship a soft video by typo. The device layer does take the override
+ * its capture area from the preset — 1620x2880, 1.5 times the output — and
+ * the command line can lower that to the output size (`--reserve 1`) but not
+ * below it, on purpose: nobody wants to ship a soft video by typo. The device layer does take the override
  * (`resolveDevice({ extends: 'iphone', capture: { … } })`, documented there),
  * so the small capture is expressible in code and nowhere else.
  *
