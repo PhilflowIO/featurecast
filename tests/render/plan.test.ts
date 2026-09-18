@@ -7,6 +7,7 @@ import {
   serializePlan,
   type CaptureInput,
 } from '../../src/render/plan.js'
+import type { TimedEvent } from '../../src/render/events.js'
 import { recordedFixture as fixture } from './timed.js'
 
 const STARTED_AT = 1_700_000_000_000
@@ -172,5 +173,36 @@ describe('the cursor comes from the log, because the browser draws none', () => 
         (frame) => frame.cursor === null || frame.cursor.kind === 'touch',
       ),
     ).toBe(true)
+  })
+})
+
+describe('a scripted hold survives idle trimming', () => {
+  it('plays the declared length of every hold in the log', () => {
+    // Issue 139, end to end through the plan: a click, then the page stands
+    // still for five seconds, of which the script asked for three.
+    const input: CaptureInput = {
+      frames: [0, 16, 33, 5033, 5050].map((ms, index) => ({
+        file: `frame-${String(index).padStart(6, '0')}.jpg`,
+        timestamp: STARTED_AT + ms,
+      })),
+      sessionDurationMs: 5100,
+      sessionStartedAt: STARTED_AT,
+      source: { width: 1280, height: 720 },
+    }
+    const bbox: BoundingBox = { x: 100, y: 100, width: 50, height: 20 }
+    const events: TimedEvent[] = [
+      { event: { type: 'pointer', tick: 0, x: 120, y: 110 }, timeMs: 0 },
+      { event: { type: 'click', tick: 1, x: 120, y: 110, bbox }, timeMs: 16 },
+      { event: { type: 'hold', tick: 60, milliseconds: 3000 }, timeMs: 1000 },
+    ]
+    const plan = planRender(input, events)
+    // Without the hold, all of 33..5033 minus the click's guard would be
+    // squeezed to 250ms. With it, the three seconds stay.
+    expect(plan.idle.outputDurationMs).toBeGreaterThanOrEqual(3000)
+    for (const stretch of plan.idle.trimmed) {
+      const overlap =
+        Math.min(stretch.endMs, 4000) - Math.max(stretch.startMs, 1000)
+      expect(overlap).toBeLessThanOrEqual(0)
+    }
   })
 })
