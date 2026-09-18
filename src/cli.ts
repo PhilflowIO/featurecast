@@ -66,6 +66,12 @@ const USAGE = `featurecast run <script> [options]
   path of a Playwright storage state and never the state itself: the file is
   the access, it stays under \`auth/\`, which git ignores.
 
+  A touch recording of an application that forbids framing (X-Frame-Options:
+  DENY, frame-ancestors 'none') needs one more. It relaxes exactly those
+  headers on the filmed document, inside the recording browser only:
+
+    export const allowFramingOfApp = true
+
 Options
   --devices <a,b>   Comma-separated device or preset names. Overrides the
                     script's own \`devices\` export for this run. Required only

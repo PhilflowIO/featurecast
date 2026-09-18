@@ -46,16 +46,27 @@ export const SCRIPT_EXPORT_NAMES = ['default', 'recording'] as const
  * does the pointer travel of those clicks, which is the part that actually
  * ruins a recording of a real application.
  *
- * Next to it stand four exports that describe the *browser context* rather
- * than the recording: `storageStatePath`, `hideSelectors`, `fixedTime` and `fakeMedia`.
- * They are here rather than in a script's own hands because a script cannot
- * reach them — it is handed a page, and all four have to be true before
- * that page exists. Until they were part of this contract there was a
+ * Next to it stand five exports that describe the *browser context* rather
+ * than the recording: `storageStatePath`, `hideSelectors`, `fixedTime`,
+ * `fakeMedia` and `allowFramingOfApp`. They are here rather than in a
+ * script's own hands because a script cannot reach them — it is handed a
+ * page, and all five have to be true before that page exists. Until they were part of this contract there was a
  * second, cameraless recording path in `demo/` that owned its own browser
  * just to set them, and the one script that films this product ran on it
  * and produced an event log instead of a video.
  */
 export type LoadedScript = {
+  /**
+   * `allowFramingOfApp`: `true` lets a phone or tablet recording film an
+   * application that forbids framing, by relaxing its framing headers on the
+   * framed application document inside the recording browser (src/framed.ts,
+   * "An application that forbids framing altogether").
+   *
+   * Opt-in per script because it lowers a security header, however narrowly:
+   * an application that allows same-origin framing never needs it, and one
+   * that forbids it should be filmed that way only where somebody said so.
+   */
+  allowFramingOfApp?: boolean
   /**
    * `devices`: which devices this script is meant to be filmed on, with any
    * field of the device layer overridden.
@@ -357,9 +368,14 @@ export function readContextSettings(
   path = 'the script',
 ): Pick<
   LoadedScript,
-  'fakeMedia' | 'fixedTime' | 'hideSelectors' | 'storageStatePath'
+  | 'allowFramingOfApp'
+  | 'fakeMedia'
+  | 'fixedTime'
+  | 'hideSelectors'
+  | 'storageStatePath'
 > {
   const settings: {
+    allowFramingOfApp?: boolean
     fakeMedia?: boolean
     fixedTime?: string
     hideSelectors?: readonly string[]
@@ -423,6 +439,20 @@ export function readContextSettings(
     settings.fakeMedia = fakeMedia
   }
 
+  const allowFramingOfApp = module_['allowFramingOfApp']
+  if (allowFramingOfApp !== undefined) {
+    // The same strictness as `fakeMedia`, for a sharper reason: this one
+    // lowers a security header, and `'false'` switching it on is the last
+    // way that should happen.
+    if (typeof allowFramingOfApp !== 'boolean') {
+      throw new Error(
+        `"${path}" exports \`allowFramingOfApp\`, which has to be a boolean: ` +
+          '`export const allowFramingOfApp = true`.',
+      )
+    }
+    settings.allowFramingOfApp = allowFramingOfApp
+  }
+
   return settings
 }
 
@@ -475,6 +505,9 @@ const DEFAULT_DEPENDENCIES: PipelineDependencies = {
       outputDirectory,
       recording: script.recording,
       seed,
+      ...(script.allowFramingOfApp === undefined
+        ? {}
+        : { allowFramingOfApp: script.allowFramingOfApp }),
       ...(script.fakeMedia === undefined
         ? {}
         : { fakeMedia: script.fakeMedia }),

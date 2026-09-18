@@ -136,17 +136,18 @@ before a browser starts.
 
 ### What a script may say about the browser context
 
-Four further exports describe not the recording but the context it takes
+Five further exports describe not the recording but the context it takes
 place in. They are part of the contract because a script simply _cannot_ set
-them itself: it receives an already-opened page, and all four have to hold
+them itself: it receives an already-opened page, and all five have to hold
 before that page exists.
 
-| Export             | Type       | Meaning                                                       |
-| ------------------ | ---------- | ------------------------------------------------------------- |
-| `storageStatePath` | `string`   | path to a saved sign-in (`storageState`) — never its contents |
-| `hideSelectors`    | `string[]` | areas that disappear before the page runs its own scripts     |
-| `fixedTime`        | `string`   | the moment every recording claims; also freezes `Math.random` |
-| `fakeMedia`        | `boolean`  | a synthetic camera and microphone, already permitted          |
+| Export              | Type       | Meaning                                                       |
+| ------------------- | ---------- | ------------------------------------------------------------- |
+| `storageStatePath`  | `string`   | path to a saved sign-in (`storageState`) — never its contents |
+| `hideSelectors`     | `string[]` | areas that disappear before the page runs its own scripts     |
+| `fixedTime`         | `string`   | the moment every recording claims; also freezes `Math.random` |
+| `fakeMedia`         | `boolean`  | a synthetic camera and microphone, already permitted          |
+| `allowFramingOfApp` | `boolean`  | a phone/tablet may film an app that forbids framing           |
 
 ```ts
 import type { Demo, RecordPage } from '../src/record.js'
@@ -178,6 +179,18 @@ Raven's join card a red banner. With `fakeMedia = true` the browser starts
 with Chromium's synthetic devices (a test picture and a tone) and the context
 holds the permission, so the page sees a working browser. Turn the camera off
 in `prepare` if its test picture should not be in the video.
+
+`allowFramingOfApp` is for filming a phone or a tablet of an application that
+forbids framing (`X-Frame-Options: DENY`, `frame-ancestors 'none'`). Those
+devices are filmed through a shell that holds the application in a frame on
+its own origin, and such an application refuses every frame. With
+`allowFramingOfApp = true` the recording browser relaxes exactly those two
+headers — `X-Frame-Options` to `SAMEORIGIN`, `frame-ancestors` to `'self'`,
+every other CSP directive untouched — and only on the filmed document, not on
+its subresources or on frames it opens itself. Nothing changes in the
+application or in any browser a user has. Without it, such a recording stops
+before the first frame and names this export. What is relaxed and why that is
+safe: the header of [`src/framed.ts`](../src/framed.ts).
 
 A complete example that runs against the real application is
 [`demo/raven-meetings.ts`](../demo/raven-meetings.ts).

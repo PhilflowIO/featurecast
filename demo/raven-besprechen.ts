@@ -1,5 +1,6 @@
 import type { Demo, RecordPage } from '../src/record.js'
 import {
+  RAVEN_ALLOW_FRAMING,
   ERSTE_ZEILE,
   RAVEN_FIXED_TIME,
   RAVEN_HIDE_SELECTORS,
@@ -172,6 +173,12 @@ export const hideSelectors = RAVEN_HIDE_SELECTORS
 
 /** A fixed clock, so relative times do not move between two runs. */
 export const fixedTime = RAVEN_FIXED_TIME
+
+/**
+ * Raven forbids framing; the phone is filmed through a frame. See
+ * `RAVEN_ALLOW_FRAMING` in `raven-common.ts`.
+ */
+export const allowFramingOfApp = RAVEN_ALLOW_FRAMING
 
 /**
  * The list is loaded before the camera rolls, so the clip opens on it and not

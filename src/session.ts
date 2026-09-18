@@ -83,6 +83,18 @@ export const FAKE_MEDIA_PERMISSIONS: readonly string[] = [
 
 export type SessionRequest = {
   /**
+   * Let the framed shell hold an application that forbids framing
+   * (`X-Frame-Options: DENY`, `frame-ancestors 'none'`), by relaxing exactly
+   * those headers on the framed application document inside this recording
+   * browser. What is relaxed and why that is safe: src/framed.ts, "An
+   * application that forbids framing altogether".
+   *
+   * Meaningless under the direct strategy, which has no frame, and ignored
+   * there rather than refused: a script meant for a phone and a desktop
+   * carries it for the phone.
+   */
+  allowFramingOfApp?: boolean
+  /**
    * The application being filmed.
    *
    * Required by the framed strategy and unused by the direct one: the shell
@@ -289,6 +301,7 @@ async function openSurface(
   page: Page,
   device: ResolvedDevice,
   appUrl: string | undefined,
+  allowFramingOfApp: boolean,
 ): Promise<{ app: Frame; scale: number }> {
   if (device.capture.strategy === 'screencast') {
     return { app: page.mainFrame(), scale: 1 }
@@ -300,6 +313,7 @@ async function openSurface(
       page,
       framedAppUrl(device, appUrl),
       geometry,
+      { allowFramingOfApp },
     ),
     scale: geometry.scale,
   }
@@ -350,6 +364,7 @@ export async function recordSession(
         page,
         request.device,
         request.appUrl,
+        request.allowFramingOfApp === true,
       )
       // Before the capture, not inside it. `captureScreencast` starts
       // recording the moment it is called, so anything that must not appear

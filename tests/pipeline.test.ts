@@ -626,9 +626,40 @@ describe('importScript', () => {
     await expect(importScript(path)).rejects.toThrow(/fakeMedia.*a boolean/s)
   })
 
+  it('reads allowFramingOfApp as a boolean', async () => {
+    const directory = await temporaryDirectory()
+    const path = join(directory, 'recording-framing.mjs')
+    await writeFile(
+      path,
+      'export const allowFramingOfApp = true\nexport default async () => undefined\n',
+    )
+    expect((await importScript(path)).allowFramingOfApp).toBe(true)
+  })
+
+  it('leaves allowFramingOfApp off for a script that does not export it', async () => {
+    const directory = await temporaryDirectory()
+    const path = join(directory, 'recording-no-framing.mjs')
+    await writeFile(path, 'export default async () => undefined\n')
+    expect((await importScript(path)).allowFramingOfApp).toBeUndefined()
+  })
+
+  it('refuses an allowFramingOfApp that only looks like a boolean', async () => {
+    // It lowers a security header; the word "false" must not switch it on.
+    const directory = await temporaryDirectory()
+    const path = join(directory, 'recording-framing-string.mjs')
+    await writeFile(
+      path,
+      "export const allowFramingOfApp = 'false'\nexport default async () => undefined\n",
+    )
+    await expect(importScript(path)).rejects.toThrow(
+      /allowFramingOfApp.*a boolean/s,
+    )
+  })
+
   it('hands the context settings to the browser leg intact', async () => {
     const recording = async (): Promise<void> => undefined
     const script = {
+      allowFramingOfApp: true,
       fakeMedia: true,
       fixedTime: '2026-01-15T09:00:00Z',
       hideSelectors: ['#room-card'],

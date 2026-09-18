@@ -2,6 +2,7 @@ import type { Frame } from 'playwright'
 
 import type { Demo, RecordPage } from '../src/record.js'
 import {
+  RAVEN_ALLOW_FRAMING,
   RAVEN_FIXED_TIME,
   RAVEN_HIDE_SELECTORS,
   RAVEN_URL,
@@ -128,6 +129,12 @@ export const hideSelectors = RAVEN_HIDE_SELECTORS
 
 /** A fixed clock, so nothing time-dependent moves between two runs. */
 export const fixedTime = RAVEN_FIXED_TIME
+
+/**
+ * Raven forbids framing; the phone is filmed through a frame. See
+ * `RAVEN_ALLOW_FRAMING` in `raven-common.ts`.
+ */
+export const allowFramingOfApp = RAVEN_ALLOW_FRAMING
 
 /**
  * A synthetic camera and microphone, already permitted. Without them the
