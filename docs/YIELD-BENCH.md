@@ -87,7 +87,7 @@ still produces a technically valid video at a much lower real frame rate, so
 ## Reading the output
 
 ```
-browser: /crbuild/chrome (Chromium 153.0.8010.12; requested: CHROME_BIN)
+browser: /pwb/chromium-1246/chrome-linux64/chrome (Google Chrome for Testing 154.0.8037.0; requested: playwright-bundle)
 capture area: 2560x1600, strategy screencast, fps 60, jpeg q90
 renderer: ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL ES 3.2)
 DIAG presentedInstants=342 capturedFrames=338 sessionMs=31204 paintTicks=0
