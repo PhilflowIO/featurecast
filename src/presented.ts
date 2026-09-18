@@ -419,6 +419,59 @@ export function resolveRefreshHz(
   return 1000 / intervalMs
 }
 
+export type PresentationCadence = {
+  /** Share of gaps that are two refreshes long: the page moved on every second one. */
+  doubledRefreshShare: number
+  gapCount: number
+  medianGapMs: number
+  /** Share of gaps that are one refresh long: the page moved on every one. */
+  singleRefreshShare: number
+}
+
+/**
+ * How often the browser put a new picture on screen, stated against the
+ * display's own refresh.
+ *
+ * Capture efficiency answers a different question — how much of what was
+ * presented reached the file — and a run can clear its gate at 98 % while
+ * the browser presents only half as often as it could. Issue #116 is exactly
+ * that: every phone recording was 30 Hz content in a 60 fps file behind a
+ * green gate. So the cadence is a number of its own, not something read off
+ * the yield.
+ *
+ * The bands are fractions of the refresh interval rather than milliseconds,
+ * for the reason `resolveRefreshHz` reads the rate from the data at all.
+ * Every gap counts in the denominator, including sub-refresh partial
+ * presentations and longer stalls, so the two shares need not add up to one.
+ */
+export function summarizePresentationCadence(
+  presentedTimestamps: readonly number[],
+  refreshHz: number,
+): PresentationCadence {
+  const sorted = [...presentedTimestamps].sort((a, b) => a - b)
+  const gaps = sorted.slice(1).map((at, index) => at - (sorted[index] ?? 0))
+  if (gaps.length === 0) {
+    throw new Error(
+      'Cannot state a presentation cadence without at least two presentation instants.',
+    )
+  }
+  const intervalMs = 1000 / refreshHz
+  const share = (low: number, high: number): number =>
+    gaps.filter((gap) => gap >= low * intervalMs && gap <= high * intervalMs)
+      .length / gaps.length
+  const ordered = [...gaps].sort((a, b) => a - b)
+  const middle = Math.floor(ordered.length / 2)
+  return {
+    doubledRefreshShare: share(1.7, 2.4),
+    gapCount: gaps.length,
+    medianGapMs:
+      ordered.length % 2 === 1
+        ? (ordered[middle] ?? 0)
+        : ((ordered[middle - 1] ?? 0) + (ordered[middle] ?? 0)) / 2,
+    singleRefreshShare: share(0.7, 1.3),
+  }
+}
+
 /** 200Hz; below this gap a pair of instants is a sub-refresh partial presentation, not a refresh interval. */
 const MIN_PLAUSIBLE_REFRESH_GAP_MS = 5
 /** 33Hz; above this gap the compositor skipped at least one refresh, so the gap is a multiple. */

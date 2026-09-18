@@ -7,6 +7,7 @@ import {
   extractPresentedFrameTimes,
   PRESENTED_FRAME_TRACE_CATEGORIES,
   resolveRefreshHz,
+  summarizePresentationCadence,
   type TraceEvent,
 } from '../src/presented.js'
 
@@ -554,6 +555,52 @@ describe('resolveRefreshHz', () => {
     // fabricated one silently widens or closes the ceiling built on it.
     expect(() => resolveRefreshHz([0, 16.7, 33.3])).toThrow(
       /Cannot read a refresh interval/,
+    )
+  })
+})
+
+describe('summarizePresentationCadence', () => {
+  /** Instants `every` refreshes apart on a display running at `hz`. */
+  function everyNth(hz: number, every: number, count: number): number[] {
+    return Array.from(
+      { length: count },
+      (_, index) => (index * every * 1000) / hz,
+    )
+  }
+
+  it('tells a page that moves every refresh from one that moves every second', () => {
+    // Issue #116: both of these clear a 95 % yield gate, and only the
+    // cadence tells them apart.
+    const full = summarizePresentationCadence(everyNth(60, 1, 200), 60)
+    expect(full.medianGapMs).toBeCloseTo(16.67, 2)
+    expect(full.singleRefreshShare).toBe(1)
+    expect(full.doubledRefreshShare).toBe(0)
+
+    const halved = summarizePresentationCadence(everyNth(60, 2, 200), 60)
+    expect(halved.medianGapMs).toBeCloseTo(33.33, 2)
+    expect(halved.singleRefreshShare).toBe(0)
+    expect(halved.doubledRefreshShare).toBe(1)
+  })
+
+  it('measures against the display it ran on, not against 60', () => {
+    // Every second refresh on a 120Hz display is 60 a second - halved
+    // relative to what that display could show, which is what matters.
+    const halved = summarizePresentationCadence(everyNth(120, 2, 200), 120)
+    expect(halved.doubledRefreshShare).toBe(1)
+    expect(halved.singleRefreshShare).toBe(0)
+  })
+
+  it('counts every gap, so stalls and partial presentations lower both shares', () => {
+    const instants = [0, 16.7, 33.4, 35, 51.7, 151.7]
+    const cadence = summarizePresentationCadence(instants, 60)
+    expect(cadence.gapCount).toBe(5)
+    expect(cadence.singleRefreshShare).toBeCloseTo(3 / 5, 6)
+    expect(cadence.doubledRefreshShare).toBe(0)
+  })
+
+  it('refuses when there is no gap to read', () => {
+    expect(() => summarizePresentationCadence([5], 60)).toThrow(
+      'at least two presentation instants',
     )
   })
 })
