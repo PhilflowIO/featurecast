@@ -151,7 +151,19 @@ export async function jetztSichtbar(
 ): Promise<boolean> {
   const knoten = page.locator(selector)
   if ((await knoten.count()) === 0) return false
-  return (await knoten.boundingBox()) !== null
+  try {
+    return (await knoten.boundingBox()) !== null
+  } catch {
+    // A node that IS in the document but has no box yet — mid-navigation, or
+    // still at the first keyframe of the animation that mounts it — makes
+    // `boundingBox()` wait out its OWN timeout and then throw, rather than
+    // answer "not visible". Without this catch that throw escapes `warteAuf`
+    // and ends the take after 30 s, whatever deadline the caller asked for:
+    // scene M2 asked for 120 s for a gate card that mounts animated, and died
+    // at 30 with a Playwright stack instead of its own message. "Not yet" is
+    // the honest answer to the question this function asks.
+    return false
+  }
 }
 
 /**

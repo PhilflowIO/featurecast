@@ -157,7 +157,19 @@ export default async function aufZuruf(
   await ruhigKlicken(demo, KOMPOSER_SENDEN)
   await demo.point(EINGABE)
 
-  await warteAuf(page, TERMIN_KARTE, KARTEN_FRIST_MS)
+  // If the gate never comes, the message has to carry Raven's own last words.
+  // "The card did not appear" fits a refused permission, a meeting that was
+  // not found, a calendar that is not connected and a turn that simply failed
+  // — and the frames of a refused take are deleted, so this is the only
+  // witness there will be.
+  try {
+    await warteAuf(page, TERMIN_KARTE, KARTEN_FRIST_MS)
+  } catch (fehler) {
+    throw new Error(
+      `${fehler instanceof Error ? fehler.message : String(fehler)} — Raven ` +
+        `last said: ${await letzteAntwort(page)}`,
+    )
+  }
   await inDieMitte(page, demo, TERMIN_KARTE, { tempo: FILM_SCROLL_TEMPO })
   await demo.point(TERMIN_KARTE)
   await demo.hold(LESEZEIT_MS)
@@ -168,6 +180,31 @@ export default async function aufZuruf(
   // scene — waiting for a phrase would pin the model's wording.
   await warteAufVerschwunden(page, TERMIN_KARTE, 90_000)
   await demo.hold(4000)
+}
+
+/**
+ * The tail of the conversation, for a failure message.
+ *
+ * Read from the page rather than from a locator, because at the moment this
+ * runs the interesting node may be a refusal, an error banner or nothing at
+ * all — and a selector written for one of those three cannot report the other
+ * two. Trimmed, and it carries no field values.
+ */
+async function letzteAntwort(page: RecordPage): Promise<string> {
+  try {
+    return await page.evaluate(() => {
+      const nodes = Array.from(
+        document.querySelectorAll('[data-testid="assistant-message"]'),
+      )
+      const letzte = nodes[nodes.length - 1]
+      const text = ((letzte?.textContent ?? document.body.innerText) || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+      return `"${text.slice(-320)}"`
+    })
+  } catch {
+    return '(the page would not answer)'
+  }
 }
 
 /**

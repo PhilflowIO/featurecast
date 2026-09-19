@@ -196,9 +196,11 @@ export default async function kalenderAndocken(
   await demo.hold(VOR_KLICK_MS)
   await ruhigKlicken(demo, VERBINDEN)
 
-  // The provider asks which account first.
-  await warteImFlug(page, KONTO_WAEHLEN, ANBIETER_FRIST_MS)
-  await demo.hold(1500)
+  // The provider asks which account first. Waited out to STILLNESS, for the
+  // reason spelled out on `zustimmenKnopf`: this page reflows after it first
+  // paints, and a pointer aimed at the old geometry clicks past the tile.
+  await warteAufRuhe(page, KONTO_WAEHLEN, ANBIETER_FRIST_MS)
+  await demo.hold(1000)
   await ruhigKlicken(demo, KONTO_WAEHLEN)
 
   // Then its consent, which is not reliably ONE screen.
@@ -213,13 +215,30 @@ export default async function kalenderAndocken(
   // The first screen is the one worth watching (it lists what Raven asks for),
   // so it gets the long look; any follow-up is a confirmation and gets a short
   // one.
+  // `spur` is the take's own account of what it did on the provider's pages.
+  // Four takes reported only where they ended up, which never distinguished
+  // "found no button", "clicked and nothing happened" and "clicked and was
+  // sent back to the same page". The frames of a refused take are deleted, so
+  // the exception is the only witness that will exist.
+  const spur: string[] = []
   for (let schritt = 0; schritt < ANBIETER_SCHRITTE; schritt += 1) {
-    if (!(await beimAnbieter(page))) break
+    if (!(await beimAnbieter(page))) {
+      spur.push(`${String(schritt)}: back on Raven`)
+      break
+    }
+    const vorher = pfad(await adresse(page))
     const zustimmen = await zustimmenKnopf(page)
-    if (zustimmen === null) break
+    if (zustimmen === null) {
+      spur.push(`${String(schritt)}: ${vorher} — no still grant button`)
+      break
+    }
     await demo.hold(schritt === 0 ? 3500 : 1500)
     await ruhigKlicken(demo, zustimmen)
     await demo.hold(1500)
+    spur.push(
+      `${String(schritt)}: ${vorher} — clicked ${zustimmen} → ` +
+        `${pfad(await adresse(page))}`,
+    )
   }
 
   // Back in Raven, connected, with the account named. Still `warteImFlug`:
@@ -234,9 +253,10 @@ export default async function kalenderAndocken(
   } catch (fehler) {
     throw new Error(
       `${fehler instanceof Error ? fehler.message : String(fehler)} — the ` +
-        `page is standing at ${await adresse(page)}. Still on the provider ` +
-        'means the grant was never answered; back in Raven and not connected ' +
-        'means the callback failed.',
+        `page is standing at ${pfad(await adresse(page))} and shows: ` +
+        `${await wasStehtDa(page)}. On the way there: ${spur.join(' | ')}. ` +
+        'Still on the provider means the grant was never answered; back in ' +
+        'Raven and not connected means the callback failed.',
     )
   }
   await warteAuf(page, KONTO, 20_000)
@@ -259,11 +279,28 @@ export default async function kalenderAndocken(
  * not navigate under the question.
  */
 async function stehtDa(page: RecordPage, selector: string): Promise<boolean> {
+  return (await kasten(page, selector)) !== null
+}
+
+/**
+ * The element's box as a comparable string, or `null` when it has none.
+ *
+ * A string rather than the object, so two readings can be compared with `===`
+ * — the caller's question is "did this move", and a deep compare of four
+ * numbers written out by hand is the kind of code that grows a bug later.
+ */
+async function kasten(
+  page: RecordPage,
+  selector: string,
+): Promise<string | null> {
   try {
-    return (await page.locator(selector).boundingBox()) !== null
+    const box = await page.locator(selector).boundingBox()
+    return box === null
+      ? null
+      : `${String(box.x)},${String(box.y)},${String(box.width)},${String(box.height)}`
   } catch {
     // Mid-navigation. Not an answer, and not a failure either.
-    return false
+    return null
   }
 }
 
@@ -288,6 +325,41 @@ async function warteImFlug(
       )
     }
     await new Promise((fertig) => setTimeout(fertig, 250))
+  }
+}
+
+/**
+ * A failed take has to say what it was LOOKING at, not only where it stood.
+ *
+ * Three takes reported a provider URL and nothing else, and a URL cannot tell
+ * a consent screen from an identity check from an error page. The frames are
+ * deleted when a take is refused, so this message is the only witness there
+ * will ever be. Text and button labels, trimmed, and no values from any field.
+ */
+async function wasStehtDa(page: RecordPage): Promise<string> {
+  try {
+    return await page.evaluate(() => {
+      const text = (document.body.innerText || '')
+        .replace(/\s+/g, ' ')
+        .slice(0, 220)
+      const knoepfe = Array.from(document.querySelectorAll('button'))
+        .map((node) => (node.textContent || '').replace(/\s+/g, ' ').trim())
+        .filter((label) => label !== '')
+        .slice(0, 8)
+      return `"${text}" buttons=${JSON.stringify(knoepfe)}`
+    })
+  } catch {
+    return '(the page would not answer)'
+  }
+}
+
+/** A provider URL without its token soup, which is unreadable and secret-ish. */
+function pfad(url: string): string {
+  try {
+    const gelesen = new URL(url)
+    return `${gelesen.origin}${gelesen.pathname}`
+  } catch {
+    return url
   }
 }
 
@@ -319,29 +391,62 @@ async function beimAnbieter(page: RecordPage): Promise<boolean> {
 }
 
 /**
+ * Waits until `selector` has a box that stops moving.
+ *
+ * The provider's pages paint before they are laid out. See `zustimmenKnopf`
+ * for what that cost; this is the same gate for a single named target.
+ */
+async function warteAufRuhe(
+  page: RecordPage,
+  selector: string,
+  fristMs: number,
+): Promise<void> {
+  const ende = Date.now() + fristMs
+  for (;;) {
+    const vorher = await kasten(page, selector)
+    if (vorher !== null) {
+      await new Promise((fertig) => setTimeout(fertig, 1200))
+      if ((await kasten(page, selector)) === vorher) return
+    }
+    if (Date.now() > ende) {
+      throw new Error(
+        `Did not come to rest within ${String(fristMs)} ms: ${selector}`,
+      )
+    }
+    await new Promise((fertig) => setTimeout(fertig, 250))
+  }
+}
+
+/**
  * Waits for the consent screen to STAND STILL and returns its grant button.
  *
  * Two spellings, one screen: see `ZULASSEN` / `WEITER`. Whichever is there is
  * taken — a fixed guess would wait out the full deadline on the other one.
  *
- * The stillness is the part that was missing. Between the account tile and the
- * consent screen the provider runs one or two interstitials, and one of them
- * carries a "Weiter" of its own. The second take grabbed that button, clicked
- * a page that was about to redirect anyway, and then sat in front of the real
- * consent screen without ever answering it — the take died 90 s later on a
- * connection that was never made, with nothing in the message about why.
- * So the button only counts once it has been there across two checks with the
- * address unchanged between them: an interstitial moves on, a consent screen
- * waits for a person.
+ * The stillness is the part that was missing, and it has to be stillness of
+ * the BUTTON, not of the address. The provider's identity step arrives with
+ * its body still reading "Wird geladen…" and reflows a moment later while the
+ * address never changes. `demo.click` reads a target's geometry, then walks
+ * the pointer there over about a second, then clicks where the target WAS — so
+ * three takes in a row clicked empty space next to a "Weiter" that had since
+ * moved, ran out the loop, and reported a connection nobody had made.
+ *
+ * A button therefore only counts once its box is byte-for-byte the same across
+ * an interval, with the address unchanged too: a page that is still laying
+ * itself out moves, a screen waiting for a person does not.
  */
 async function zustimmenKnopf(page: RecordPage): Promise<string | null> {
   const ende = Date.now() + EIN_SCHRITT_FRIST_MS
   for (;;) {
     for (const knopf of [ZULASSEN, WEITER]) {
-      if (!(await stehtDa(page, knopf))) continue
+      const vorherKasten = await kasten(page, knopf)
+      if (vorherKasten === null) continue
       const vorher = await adresse(page)
       await new Promise((fertig) => setTimeout(fertig, 1200))
-      if ((await adresse(page)) === vorher && (await stehtDa(page, knopf))) {
+      if (
+        (await adresse(page)) === vorher &&
+        (await kasten(page, knopf)) === vorherKasten
+      ) {
         return knopf
       }
     }
