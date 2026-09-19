@@ -109,37 +109,74 @@ export default async function teilen(
   await inDieMitte(page, demo, OEFFENTLICH, { tempo: FILM_SCROLL_TEMPO })
   await ruhigKlicken(demo, OEFFENTLICH)
   await warteAuf(page, LEITER)
+  // The pointer moves INTO the dialog before anything is scrolled. A scroll is
+  // a wheel on a desktop and a swipe on a phone, and both act where the
+  // pointer stands: left on the trigger button behind the overlay, every
+  // scroll below would move the page instead of the dialog.
+  await demo.point(LEITER)
   await demo.hold(1200)
 
-  // The ladder, and the readout that answers it.
+  // The ladder, and the readout that answers it. On a phone the readout sits
+  // under the ladder rather than beside it, far below the fold — hence the
+  // trip for every one of these, and `imBild` rather than a bare point.
+  await imBild(page, demo, EMPFAENGER)
   await demo.point(EMPFAENGER)
   await demo.hold(1800)
+  await imBild(page, demo, RUNG_TRANSKRIPT)
   await ruhigKlicken(demo, RUNG_TRANSKRIPT)
   await demo.hold(1500)
 
   // The password, and the line the readout gains because of it.
+  await imBild(page, demo, OPTIONEN)
   await ruhigKlicken(demo, OPTIONEN)
   await warteAuf(page, PASSWORT, 15_000)
+  await imBild(page, demo, PASSWORT)
   await demo.hold(VOR_KLICK_MS)
   await demo.type(PASSWORT, PASSWORT_TEXT)
   await warteAuf(page, GESCHUETZT, 10_000)
+  await imBild(page, demo, GESCHUETZT)
   await demo.point(GESCHUETZT)
   await demo.hold(2200)
 
+  await imBild(page, demo, ERSTELLEN)
   await ruhigKlicken(demo, ERSTELLEN)
   await warteAuf(page, ERSTELLT, 30_000)
+  await imBild(page, demo, ERSTELLT)
   await demo.hold(1800)
+  await imBild(page, demo, KOPIEREN)
   await ruhigKlicken(demo, KOPIEREN)
 
   // And back again. The row under "Aktive Links" says what the link carries
   // and that it is protected; the click takes it away.
   await warteAuf(page, AKTIVE, 10_000)
-  await inDieMitte(page, demo, WIDERRUFEN, { tempo: FILM_SCROLL_TEMPO })
+  await imBild(page, demo, WIDERRUFEN)
   await demo.point(AKTIVE)
   await demo.hold(1800)
   await ruhigKlicken(demo, WIDERRUFEN)
   await warteBisWeg(page, WIDERRUFEN, 20_000)
   await demo.hold(NACH_KLICK_MS + 2500)
+}
+
+/**
+ * Brings `selector` into the picture if it is not already comfortably in it.
+ *
+ * `inDieMitte` with a guard in front: it places a target that is off screen or
+ * close to an edge, and leaves one that already stands well inside alone, so a
+ * desktop layout that shows the whole dialog at once does not scroll for show.
+ * Without it the phone take aborts on the first thing the dialog puts below
+ * the fold — measured: the readout at y=3697 in a 2880 px picture.
+ */
+async function imBild(
+  page: RecordPage,
+  demo: Demo,
+  selector: string,
+): Promise<void> {
+  const box = await page.locator(selector).boundingBox()
+  const hoehe = page.viewportSize()?.height
+  if (box === null || hoehe === undefined) return
+  const rand = hoehe * 0.15
+  if (box.y >= rand && box.y + box.height <= hoehe - rand) return
+  await inDieMitte(page, demo, selector, { tempo: FILM_SCROLL_TEMPO })
 }
 
 /**
