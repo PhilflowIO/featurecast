@@ -167,7 +167,7 @@ export default async function kalenderAndocken(
   await ruhigKlicken(demo, VERBINDEN)
 
   // The provider asks which account first.
-  await warteAuf(page, KONTO_WAEHLEN, ANBIETER_FRIST_MS)
+  await warteImFlug(page, KONTO_WAEHLEN, ANBIETER_FRIST_MS)
   await demo.hold(1500)
   await ruhigKlicken(demo, KONTO_WAEHLEN)
 
@@ -177,12 +177,59 @@ export default async function kalenderAndocken(
   await demo.hold(3500)
   await ruhigKlicken(demo, zustimmen)
 
-  // Back in Raven, connected, with the account named.
-  await warteAuf(page, VERBUNDEN, ANBIETER_FRIST_MS)
+  // Back in Raven, connected, with the account named. Still `warteImFlug`:
+  // the way home runs through the provider's redirect and Raven's own reload.
+  await warteImFlug(page, VERBUNDEN, ANBIETER_FRIST_MS)
   await warteAuf(page, KONTO, 20_000)
   await inDieMitte(page, demo, GOOGLE, { tempo: FILM_SCROLL_TEMPO })
   await demo.point(VERBUNDEN)
   await demo.hold(4000)
+}
+
+/**
+ * "Is this on screen right now" — for a page that is still navigating.
+ *
+ * `boundingBox()` does not answer `null` while a navigation is in flight; it
+ * THROWS after its own 30 s timeout with "waiting for navigation to finish".
+ * The first M4 take died exactly there: the provider puts one or two redirects
+ * between the account tile and the consent screen, the poller asked during
+ * one, and a question meaning "not yet" came back as a failed recording.
+ *
+ * Everything that polls a foreign, navigating origin has to go through here.
+ * Inside Raven the plain `warteAuf` is fine — a single-page application does
+ * not navigate under the question.
+ */
+async function stehtDa(page: RecordPage, selector: string): Promise<boolean> {
+  try {
+    return (await page.locator(selector).boundingBox()) !== null
+  } catch {
+    // Mid-navigation. Not an answer, and not a failure either.
+    return false
+  }
+}
+
+/**
+ * `warteAuf` for a page that may navigate under the question.
+ *
+ * Same contract as the shared one — wait until it is there, throw when the
+ * deadline passes — but it asks through `stehtDa`, so a redirect in flight
+ * postpones the answer instead of ending the take.
+ */
+async function warteImFlug(
+  page: RecordPage,
+  selector: string,
+  fristMs: number,
+): Promise<void> {
+  const ende = Date.now() + fristMs
+  for (;;) {
+    if (await stehtDa(page, selector)) return
+    if (Date.now() > ende) {
+      throw new Error(
+        `Did not become visible within ${String(fristMs)} ms: ${selector}`,
+      )
+    }
+    await new Promise((fertig) => setTimeout(fertig, 250))
+  }
 }
 
 /**
@@ -197,7 +244,7 @@ async function zustimmenKnopf(page: RecordPage): Promise<string> {
   const ende = Date.now() + ANBIETER_FRIST_MS
   for (;;) {
     for (const knopf of [ZULASSEN, WEITER]) {
-      if ((await page.locator(knopf).boundingBox()) !== null) return knopf
+      if (await stehtDa(page, knopf)) return knopf
     }
     if (Date.now() > ende) {
       throw new Error(
