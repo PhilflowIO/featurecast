@@ -27,9 +27,9 @@ import {
  *   2. "Put an appointment in the calendar." Raven fills in title, time and
  *      target calendar and stops again, on its own card, with "Bestätigen".
  *
- * WHY NOTHING LEAVES THE HOUSE. The recipient is on `e2e.raven.ceo`, Raven's
- * own end-to-end domain: it publishes neither an MX nor an A record, so no
- * mail addressed there can be delivered anywhere. On top of that, staging's
+ * WHY NOTHING LEAVES THE HOUSE. The recipient is on `demo.raven.ceo`, which
+ * does not exist in DNS at all — no MX, no A, not even an SOA — so no mail
+ * addressed there can be delivered anywhere. On top of that, staging's
  * API resolves `SMTP_HOST=mailpit` — every mail it sends is sunk into the
  * Mailpit container on the staging box and reaches no mailbox at all. Both
  * facts were measured before this script was written; either one alone would
@@ -60,10 +60,24 @@ import {
  */
 
 /**
- * The recipient — a name on Raven's own e2e domain, which resolves nowhere.
- * Read the second paragraph of the module comment before changing this.
+ * The recipient.
+ *
+ * Two requirements, and they pull in different directions. It has to be
+ * PROVABLY undeliverable, and it has to look like an ordinary colleague —
+ * the first take used `…@e2e.raven.ceo`, and on the phone that address is set
+ * 27 to 58 px tall: the one thing the eye lands on is the word "e2e", which
+ * tells the audience it is watching a fixture.
+ *
+ * `demo.raven.ceo` satisfies both. It is the domain the filmed account itself
+ * lives on, so a second name there reads as a colleague rather than a test
+ * rig; and it does not exist in DNS at all — no MX, no A, not even an SOA
+ * (checked 2026-09-19) — so nothing addressed to it can be delivered
+ * anywhere. Staging's own sink is the second, independent guarantee (see the
+ * module comment).
+ *
+ * Do NOT put a customer, a colleague or any reachable address here.
  */
-const EMPFAENGER = 'hanne.kordt@e2e.raven.ceo'
+const EMPFAENGER = 'jana.reuter@demo.raven.ceo'
 
 /** The meeting whose summary is mailed. Its title carries these words. */
 const MEETING_WORT = 'Abnahme Linie 3'
