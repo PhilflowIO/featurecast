@@ -38,27 +38,35 @@ jobs:
       # ffmpeg, so both are installed before it runs, not after.
       - name: Install Chromium
         run: pnpm exec playwright install --with-deps chromium
-      # ffmpeg is not on the hosted image, and the smoothness suite generates
-      # its own calibration clips with it.
+      # ffmpeg is not on the hosted image, and the suite encodes with a real
+      # one.
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-      - uses: astral-sh/setup-uv@v5
 
-      # The hosted image exports CHROME_BIN for its own Google Chrome, and
-      # featurecast honours CHROME_BIN. Left set, the check would run on
-      # whatever Chrome the image ships instead of the pinned Chromium every
-      # published number was measured on, so it is removed for the steps that
-      # launch a browser. (Setting it empty is not an option: featurecast
-      # refuses an empty CHROME_BIN rather than guess.)
       - name: Tests
         run: env -u CHROME_BIN pnpm test
       - name: Browser smoke test
         run: env -u CHROME_BIN pnpm demo:hello
 
-      - name: Lint smoothness (ruff)
+  # The smoothness instrument is a separate program with its own toolchain,
+  # and it is checked in its own job so that a red product check does not
+  # hide it — and does not stop it from running at all, which is what a
+  # single job does.
+  smoothness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Lint (ruff)
         run: uv run --project tools/smoothness ruff check tools/smoothness
-      # Includes the slow video cases (ffmpeg-generated calibration clips,
-      # cached under tools/smoothness/.eichvideos/) — this tool's whole premise
-      # is that its tests prove the instrument moves, so nothing gets skipped.
-      - name: Smoothness tests
+      # Includes the slow video cases (calibration clips built with the
+      # pinned ffmpeg from this repository's release assets, cached under
+      # tools/smoothness/.eichvideos/) — this tool's whole premise is that
+      # its tests prove the instrument moves, so nothing gets skipped.
+      # GITHUB_TOKEN only so that pinned encoder can be fetched while this
+      # repository is private; once public the download needs no token.
+      - name: Tests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: uv run --project tools/smoothness pytest tools/smoothness

@@ -2,6 +2,10 @@
 # nicht im Repo -- ein eingechecktes MP4 ist ein Binaerklotz ohne Herkunft.
 .eichvideos/
 
+# Der festgenagelte Kodierer, geladen von tests/synth_fixtures.py und ueber
+# seine sha256 gepruefte Kopie eines Release-Anhangs -- kein Quelltext.
+.ffmpeg/
+
 # Von uv angelegte Umgebung und Zwischenstaende der Werkzeuge.
 .venv/
 __pycache__/

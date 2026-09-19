@@ -7,7 +7,9 @@ Punkt: ein Messgeraet, dessen Antwort man nicht gegen eine bekannte Antwort
 halten kann, ist kein Beleg. Modelliert ist die Oberflaeche, die das Produkt
 aufnimmt (demo/m1-capture.ts: MUI DataGrid, Spaltenraster um 111 px), in der
 Aufloesung eines Feldes der Vergleichsvideos (960x540, 60 fps, libx264
-crf 18 -- dieselbe Kodierung wie src/assemble.ts sie erzeugt).
+crf 18 -- dieselbe Kodierung wie src/assemble.ts sie erzeugt), und zwar mit
+einem festgenagelten ffmpeg (siehe FFMPEG_URL weiter unten), nicht mit dem
+des jeweiligen Systems: der Kodierer gehoert zur Herkunft dieser Videos.
 
 Warum erzeugt statt eingecheckt: ein eingechecktes MP4 ist ein Binaerklotz,
 dessen Herkunft nach zwei Monaten niemand mehr nachvollzieht, und .gitignore
@@ -23,9 +25,13 @@ nicht ueber ihn.
 
 from __future__ import annotations
 
+import hashlib
 import json
-import shutil
+import lzma
+import os
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import cv2
@@ -38,8 +44,80 @@ X0, Y0 = 700, 500
 KEIM = 20260912
 
 
+# ------------------------------------------------------------ Kodierer-Pin
+# Die Eichvideos sind Referenzmaterial, also gehoert der Kodierer zu ihrer
+# Herkunft. Mit dem ffmpeg des jeweiligen Systems ist er das nicht: Ubuntu
+# 24.04 liefert dauerhaft ffmpeg 6.1 von 2024, Arch derzeit 9.0.1, und die
+# x264-Staende dazwischen kodieren dasselbe Rohbild verschieden. Gemessen
+# (Ticket 158): der Eichfall c12 liegt absichtlich an der Grenze des
+# Verfahrens, und mit Ubuntus x264 verweigerte das Messgeraet 28 statt der
+# geforderten Mehrheit von 59 Bildpaaren -- gruen oder rot entschied damit
+# die Maschine, nicht der Code.
+#
+# Deshalb laedt dieses Modul EINEN festgenagelten ffmpeg und benutzt nur
+# ihn. Absichtlich ohne Notausgang auf das System-ffmpeg: ein Ausweichen,
+# das keiner sieht, ist genau die Herkunftsluecke, die es zu schliessen
+# gilt. Fehlt der Download, wird uebersprungen, nicht geraten.
+FFMPEG_VERSION = "n9.0.1-84-g946fcce07b"
+# Ueber die API-Adresse des Anhangs, nicht ueber die Browser-Adresse: die
+# funktioniert auch, solange das Spiegel-Repository privat ist (mit
+# GITHUB_TOKEN), und ebenso ohne Marke, sobald es oeffentlich ist.
+FFMPEG_URL = "https://api.github.com/repos/PhilflowIO/featurecast/releases/assets/574810843"
+# sha256 der ENTPACKTEN Programmdatei. Quelle des Builds:
+# BtbN/FFmpeg-Builds, autobuild-2026-09-18-13-22, linux64-gpl-9.0.
+FFMPEG_SHA256 = "d91cd09bb030a283768600d097febb909f9ff6cd8bf7978e93e01eb9abc144b9"
+FFMPEG_CACHE = Path(__file__).resolve().parent.parent / ".ffmpeg"
+
+
+def _sha256(pfad: Path) -> str:
+    h = hashlib.sha256()
+    with pfad.open("rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _lade_ffmpeg(ziel: Path) -> None:
+    kopf = {"Accept": "application/octet-stream"}
+    marke = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if marke:
+        kopf["Authorization"] = f"Bearer {marke}"
+    anfrage = urllib.request.Request(FFMPEG_URL, headers=kopf)
+    roh = ziel.with_suffix(".xz.teil")
+    with urllib.request.urlopen(anfrage, timeout=300) as antwort:
+        roh.write_bytes(antwort.read())
+    entpackt = ziel.with_suffix(".teil")
+    entpackt.write_bytes(lzma.decompress(roh.read_bytes()))
+    roh.unlink()
+    gemessen = _sha256(entpackt)
+    if gemessen != FFMPEG_SHA256:
+        entpackt.unlink()
+        raise RuntimeError(
+            f"Festgenagelter ffmpeg hat sha256 {gemessen}, erwartet "
+            f"{FFMPEG_SHA256} -- der Download ist nicht der Kodierer, mit "
+            "dem die Eichvideos gebaut werden")
+    entpackt.chmod(0o755)
+    entpackt.rename(ziel)
+
+
+def eich_ffmpeg() -> Path:
+    """Pfad zum festgenagelten ffmpeg; laedt ihn beim ersten Mal."""
+    ziel = FFMPEG_CACHE / f"ffmpeg-{FFMPEG_VERSION}"
+    if ziel.exists() and _sha256(ziel) == FFMPEG_SHA256:
+        return ziel
+    FFMPEG_CACHE.mkdir(exist_ok=True)
+    ziel.unlink(missing_ok=True)
+    _lade_ffmpeg(ziel)
+    return ziel
+
+
 def ffmpeg_vorhanden() -> bool:
-    return shutil.which("ffmpeg") is not None
+    """Wahr, wenn der festgenagelte Kodierer bereitsteht oder ladbar ist."""
+    try:
+        eich_ffmpeg()
+    except (OSError, urllib.error.URLError, RuntimeError):
+        return False
+    return True
 
 
 # ----------------------------------------------------------------- Leinwaende
@@ -129,8 +207,16 @@ def encode(frames: list[np.ndarray], pfad: Path, fps: int = FPS) -> None:
     denen src/assemble.ts das echte Erzeugnis baut."""
     h, w = frames[0].shape[:2]
     p = subprocess.Popen(
-        ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "gray",
-         "-s", f"{w}x{h}", "-r", str(fps), "-i", "-", "-c:v", "libx264",
+        [str(eich_ffmpeg()), "-y", "-v", "error",
+         "-f", "rawvideo", "-pix_fmt", "gray",
+         "-s", f"{w}x{h}", "-r", str(fps), "-i", "-",
+         # Ein Faden, weil x264 seine Fadenzahl sonst nach der Kernzahl der
+         # Maschine waehlt und damit andere Bits schreibt: gemessen ergab
+         # dasselbe Rohmaterial auf 16 Kernen und auf 4 Kernen verschiedene
+         # Dateien (Ticket 158). Referenzmaterial darf nicht davon abhaengen,
+         # wie gross der Rechner ist.
+         "-threads", "1",
+         "-c:v", "libx264",
          "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", str(pfad)],
         stdin=subprocess.PIPE)
     assert p.stdin is not None
