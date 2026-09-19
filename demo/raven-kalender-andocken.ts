@@ -6,7 +6,6 @@ import { launchChromium, resolveBrowserRequest } from '../src/browser.js'
 import type { Demo, RecordPage } from '../src/record.js'
 import {
   FILM_SCROLL_TEMPO,
-  RAVEN_FIXED_TIME,
   RAVEN_HIDE_SELECTORS,
   RAVEN_LOCALE,
   RAVEN_STATE,
@@ -157,8 +156,22 @@ export const url = RAVEN_URL
 export const devices = ['desktop-wide']
 export const storageStatePath = KALENDER_STATE
 export const hideSelectors = RAVEN_HIDE_SELECTORS
-export const fixedTime = RAVEN_FIXED_TIME
 export const locale = RAVEN_LOCALE
+
+// NO `fixedTime` HERE, AND THAT IS THE POINT.
+//
+// Every other Raven scene pins the clock so "3 days ago" reads the same in two
+// takes. This one must not, and it cost three takes to find out why: the pin is
+// an init script on the whole browser CONTEXT (`pinClockAndRandomness` in
+// `src/recipes.ts`), so it replaces `Date` on the PROVIDER's pages too. Their
+// sign-in runs on a browser claiming a date three days in the past, and it
+// answers the way you would expect: it stops trusting the session and bounces
+// the flow into re-identification (`…/signin/oauth/id`), where there is no
+// consent screen to answer and the take dies on a connection nobody made.
+//
+// Every headless probe passed because it had the real clock; every take failed
+// because it did not. Nothing is lost by dropping it: this scene is a settings
+// page and a consent screen, and neither shows a relative time.
 
 /** The integrations page, loaded before the camera rolls. */
 export const prepare = vorbereiten('/settings/integrations', GOOGLE)
