@@ -19,6 +19,7 @@ import {
   type FakeMedia,
   fakeMediaLaunchArgs,
   installFakeMicrophone,
+  installFakeScreen,
   wantsFakeMedia,
 } from './fake-media.js'
 import { framedGeometry, openFramedSurface } from './framed.js'
@@ -385,6 +386,12 @@ export async function recordSession(
       }
       if (request.fixedTime !== undefined) {
         await pinClockAndRandomness(context, request.fixedTime)
+      }
+      if (
+        typeof request.fakeMedia === 'object' &&
+        request.fakeMedia.screen !== undefined
+      ) {
+        await installFakeScreen(context, request.fakeMedia.screen)
       }
       if (
         typeof request.fakeMedia === 'object' &&
