@@ -171,15 +171,15 @@ export const fixedTime = STEINKAUZ_FIXED_TIME
 export const allowFramingOfApp = RAVEN_ALLOW_FRAMING
 
 /**
- * Opens the meeting with the button in the lower half, the end of the old
- * summary above it: the viewer sees there is a protocol, and that it is
- * about to be written anew.
+ * Opens the meeting with the summary card's head near the top. The takes start
+ * from an empty summary, so the card is short and its button stands in the
+ * same frame; the new text then grows downward in view, and nothing scrolls
+ * while it streams (about four seconds). The first phone takes opened on the
+ * button instead and scrolled up to the head after the first token, and the
+ * video team could not read the writing (featurecast#168). The replace
+ * variant, with a full old summary above the button, does not fit this frame.
  */
-export const prepare = vorbereitenBei(
-  `/meetings/${STEINKAUZ_ID}`,
-  NEU_ZUSAMMENFASSEN,
-  0.62,
-)
+export const prepare = vorbereitenBei(`/meetings/${STEINKAUZ_ID}`, KOPF, 0.15)
 
 export default async function protokoll(
   page: RecordPage,
@@ -189,10 +189,8 @@ export default async function protokoll(
   await ruhigKlicken(demo, NEU_ZUSAMMENFASSEN)
   await warteAufStreamStart(page)
 
-  // The new text grows from the card's top: go there while it is still short,
-  // and keep the pointer off the words.
-  await warteAuf(page, KOPF)
-  await inDieMitte(page, demo, KOPF, { anteil: 0.18, tempo: FILM_SCROLL_TEMPO })
+  // The new text grows below the card's head, which is already in frame: no
+  // scroll now, only the pointer off the words.
   await demo.point(KOPF)
 
   await warteAufStreamEnde(page)
