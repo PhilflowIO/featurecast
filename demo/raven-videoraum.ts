@@ -75,10 +75,20 @@ const NAME = 'input.lk-username-input, input[placeholder*="Name" i]'
 const IM_RAUM = '[data-testid="meeting-leave-button"]'
 
 /**
- * The bars are pinned for this scene, unlike the live-meeting one.
- * There the bars were left to fade so the opening grid showed four name pills;
- * here the whole scene is one control in the top bar, and a bar that fades
- * mid-take takes the subject of the shot with it.
+ * The bars are pinned for this scene, unlike the live-meeting one. There the
+ * bars were left to fade so the opening grid showed four name pills; here the
+ * whole scene is one control in the top bar, and a bar that goes away mid-take
+ * takes the subject of the shot with it.
+ *
+ * ON A PHONE THIS IS NOT A CONVENIENCE, IT IS THE SCENE. Measured on staging
+ * 2026-09-19 at 390x844, plain Playwright without any recording shell: the top
+ * bar starts VISIBLE (`y=15`, `pointer-events: auto`), one tap on the stage
+ * moves it to `y=-12.24` with `pointer-events: none`, and a second tap brings
+ * it back. That is the product working as designed — on a coarse pointer there
+ * is no idle clock and a tap on the stage toggles (`use-chrome-visibility.ts`
+ * in `flow.raven`). What it cost was a take: the recorder's first touch landed
+ * on the stage, the bar went away, and the take aborted on an occluded record
+ * control before filming a frame. Nothing was wrong with Raven.
  */
 const LEISTE_FESTHALTEN = '[data-testid="meeting-chrome-pin-toggle"]'
 
@@ -167,9 +177,25 @@ export async function prepare(app: Frame): Promise<void> {
   await beitreten.click()
   await app.locator(IM_RAUM).waitFor({ state: 'visible', timeout: 60_000 })
 
+  // Pinned by KEYBOARD, not by clicking the pin. The shortcut is a window-level
+  // listener (`chrome-pin-button.tsx`), so it works whether or not the bar is
+  // on screen and whether or not it is hit-testable — while a click on the pin
+  // needs the very bar whose disappearance is the problem. The state is then
+  // read back, because a scene that films an unpinned room fails minutes later
+  // and looks like something else.
   const anheften = app.locator(LEISTE_FESTHALTEN).first()
-  if ((await anheften.count()) > 0 && (await anheften.isVisible())) {
-    await anheften.click()
+  await anheften.waitFor({ state: 'attached', timeout: 20_000 })
+  for (let versuch = 0; versuch < 5; versuch += 1) {
+    if ((await anheften.getAttribute('aria-pressed')) === 'true') break
+    await app.press('body', 'Alt+s')
+    await app.waitForTimeout(600)
+  }
+  if ((await anheften.getAttribute('aria-pressed')) !== 'true') {
+    throw new Error(
+      'The bars are not pinned, so a single touch on the stage takes the ' +
+        'record control off screen mid-take (measured: y=15 → y=-12.24 on a ' +
+        '390x844 phone). Filming without the pin is filming a coin flip.',
+    )
   }
   // The tile paints its placeholder and the name pill a moment after the room
   // is entered; the first frame should already have both.
