@@ -4,6 +4,7 @@ import type { Demo, RecordPage } from '../src/record.js'
 import {
   NACH_KLICK_MS,
   RAVEN_ALLOW_FRAMING,
+  RAVEN_LOCALE,
   RAVEN_HIDE_SELECTORS,
   RAVEN_STATE,
   RAVEN_URL,
@@ -126,6 +127,7 @@ export const devices = ['iphone', 'desktop-wide']
 export const storageStatePath = RAVEN_STATE
 export const hideSelectors = RAVEN_HIDE_SELECTORS
 export const allowFramingOfApp = RAVEN_ALLOW_FRAMING
+export const locale = RAVEN_LOCALE
 
 const startsAt = epoche()
 /** Marlene's face and voice; see the header, "ONE TIMELINE". */

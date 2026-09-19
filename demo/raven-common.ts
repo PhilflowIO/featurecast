@@ -71,6 +71,14 @@ export const RAVEN_HIDE_SELECTORS: readonly string[] = [
 export const RAVEN_ALLOW_FRAMING = true
 
 /**
+ * Raven is a German product, used in German browsers: filmed in an English
+ * one, every correctly spelled German word typed on camera got a red
+ * spellcheck squiggle (featurecast#172). The locale sets the page's language
+ * and the browser's, which is where the dictionary comes from (src/locale.ts).
+ */
+export const RAVEN_LOCALE = 'de-DE'
+
+/**
  * A fixed clock, so two recordings show the same relative times ("3 days ago"
  * otherwise moves between two runs).
  */

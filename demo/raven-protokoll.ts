@@ -2,6 +2,7 @@ import type { Demo, RecordPage } from '../src/record.js'
 import {
   FILM_SCROLL_TEMPO,
   RAVEN_ALLOW_FRAMING,
+  RAVEN_LOCALE,
   RAVEN_HIDE_SELECTORS,
   RAVEN_STATE,
   RAVEN_URL,
@@ -169,6 +170,7 @@ export const storageStatePath = RAVEN_STATE
 export const hideSelectors = RAVEN_HIDE_SELECTORS
 export const fixedTime = STEINKAUZ_FIXED_TIME
 export const allowFramingOfApp = RAVEN_ALLOW_FRAMING
+export const locale = RAVEN_LOCALE
 
 /**
  * Opens the meeting with the summary card's head near the top. The takes start

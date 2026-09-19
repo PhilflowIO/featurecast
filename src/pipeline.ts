@@ -23,6 +23,7 @@ import {
   requireAppUrl,
 } from './session.js'
 import { type FakeMedia, readFakeMedia } from './fake-media.js'
+import { readLocale } from './locale.js'
 import type { PrepareStep, RecordingScript } from './session.js'
 import { uploadFile, resolveUploadConfig } from './upload.js'
 
@@ -48,11 +49,11 @@ export const SCRIPT_EXPORT_NAMES = ['default', 'recording'] as const
  * does the pointer travel of those clicks, which is the part that actually
  * ruins a recording of a real application.
  *
- * Next to it stand five exports that describe the *browser context* rather
+ * Next to it stand six exports that describe the *browser context* rather
  * than the recording: `storageStatePath`, `hideSelectors`, `fixedTime`,
- * `fakeMedia` and `allowFramingOfApp`. They are here rather than in a
- * script's own hands because a script cannot reach them — it is handed a
- * page, and all five have to be true before that page exists. Until they were part of this contract there was a
+ * `fakeMedia`, `allowFramingOfApp` and `locale`. They are here rather than in
+ * a script's own hands because a script cannot reach them — it is handed a
+ * page, and all six have to be true before that page exists. Until they were part of this contract there was a
  * second, cameraless recording path in `demo/` that owned its own browser
  * just to set them, and the one script that films this product ran on it
  * and produced an event log instead of a video.
@@ -127,6 +128,18 @@ export type LoadedScript = {
    * showing an internal address is a leak that no later edit can take back.
    */
   hideSelectors?: readonly string[]
+  /**
+   * `locale`: the language the application is filmed in, as a BCP 47 tag
+   * with a region (`'de-DE'`).
+   *
+   * Browser-level for the same reason as `fakeMedia`: half of it is the
+   * browser process's environment, which decides the UI and the spellcheck
+   * dictionary, and a script is handed a page of a browser already running.
+   * Without it a German application is filmed in an English browser, and
+   * every correctly spelled German word typed on camera gets a red squiggle
+   * (featurecast#172, src/locale.ts).
+   */
+  locale?: string
   prepare?: PrepareStep
   recording: RecordingScript
   /**
@@ -384,6 +397,7 @@ export function readContextSettings(
   | 'fakeMedia'
   | 'fixedTime'
   | 'hideSelectors'
+  | 'locale'
   | 'storageStatePath'
 > {
   const settings: {
@@ -391,6 +405,7 @@ export function readContextSettings(
     fakeMedia?: FakeMedia
     fixedTime?: string
     hideSelectors?: readonly string[]
+    locale?: string
     storageStatePath?: string
   } = {}
 
@@ -454,6 +469,11 @@ export function readContextSettings(
       )
     }
     settings.allowFramingOfApp = allowFramingOfApp
+  }
+
+  const locale = module_['locale']
+  if (locale !== undefined) {
+    settings.locale = readLocale(locale, path)
   }
 
   return settings
@@ -537,6 +557,7 @@ const DEFAULT_DEPENDENCIES: PipelineDependencies = {
       ...(script.hideSelectors === undefined
         ? {}
         : { hideSelectors: script.hideSelectors }),
+      ...(script.locale === undefined ? {} : { locale: script.locale }),
       ...(script.prepare === undefined ? {} : { prepare: script.prepare }),
       ...(script.storageStatePath === undefined
         ? {}

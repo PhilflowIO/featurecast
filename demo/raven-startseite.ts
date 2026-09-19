@@ -1,6 +1,7 @@
 import type { Demo, RecordPage } from '../src/record.js'
 import {
   RAVEN_ALLOW_FRAMING,
+  RAVEN_LOCALE,
   RAVEN_FIXED_TIME,
   RAVEN_HIDE_SELECTORS,
   RAVEN_URL,
@@ -68,6 +69,7 @@ export const fixedTime = RAVEN_FIXED_TIME
  * `RAVEN_ALLOW_FRAMING` in `raven-common.ts`.
  */
 export const allowFramingOfApp = RAVEN_ALLOW_FRAMING
+export const locale = RAVEN_LOCALE
 
 /**
  * The page is loaded before the camera rolls, so the clip opens on the hero
