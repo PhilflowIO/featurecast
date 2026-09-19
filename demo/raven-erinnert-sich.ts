@@ -28,26 +28,35 @@ import {
  * dates. That is the whole point of the scene: not that a machine answers, but
  * that it shows its reading.
  *
- * WHY THIS QUESTION AND NOT ANOTHER. Raven resolves a person reference with a
- * topic through `query_past_meeting_subgraph`
- * (`api/app/services/agent_intents/query_past_meeting_subgraph.py` in
- * `flow.raven`): the person narrows the candidates, the topic ranks them
- * through the full-text index, and at most three conversations are read
- * (`_person_content.MAX_MEETINGS`). More carriers than that and the graph
- * INTERRUPTS with "welches Gespräch?" — a clarification gate, which is a fine
- * product behaviour and a dead scene.
+ * WHY THIS QUESTION AND NOT ANOTHER. The subject has to be a word the people
+ * in the room actually SAID, not a label somebody put on the folder. Raven
+ * ranks a person's conversations by the topic through the full-text index over
+ * the transcripts (`_topic_query` / `query_past_meeting_subgraph.py` in
+ * `flow.raven`); a subject that appears in no transcript still produces an
+ * answer, but the graph appends a line saying so and falls back to the
+ * summaries. That line is honest and it is the opposite of this scene, which is
+ * about Raven carrying an answer out of the conversations themselves.
  *
- * Petra Wüstenhagen and Hirtenscheibe Guss carry exactly three conversations
- * in the demo workspace, and they tell a story on their own: a quality problem
- * (29.05.2026, Lunker in der Gehäuseserie), the argument about who pays for
- * the consequence (10.07.2026, Werkzeugkosten), and the decision that follows
- * from both (28.08.2026, eine zweite Gussquelle). Three staging runs on
- * 2026-09-19 gave the same three dates in the same order every time, with no
- * gate and no second synthesis pass.
+ * "Salmweide" is spoken aloud in thirteen of the demo workspace's
+ * transcripts — it is a customer, and customers get named. Narrowed to Tobias
+ * Reinhardt it is seven, of which the graph reads the three best (28.07.2026
+ * Rückfragen und Reklamationen, 11.08.2026 der Zuschlag über rund 242.000 Euro,
+ * 08.09.2026 die verlorene dritte Position) and NAMES the four it did not read,
+ * with their dates. Three staging runs on 2026-09-19 returned the same three
+ * conversations and the same four it left, every time.
  *
- * The take is ABORTED rather than filmed when the answer does not carry all
- * three dates — an answer off one conversation is not this scene, and an
- * answer that quietly dropped the oldest one is the opposite of it.
+ * Two candidates were tried and dropped. "Hirtenscheibe Guss" is a company
+ * nobody says out loud — the people in those rooms address it as "Sie" — so
+ * every answer closed on the summaries-only line. "Rüstzeit" is said in eight
+ * transcripts but in exactly one segment each, so nothing ranks above anything
+ * else and the graph does the right thing and asks WHICH conversation; the
+ * take came back with no answer at all.
+ *
+ * The take is ABORTED rather than filmed on two counts: when the answer does
+ * not carry all three dates, and when it carries the summaries-only line. The
+ * first guards against an answer off one conversation; the second against the
+ * whole premise of the scene quietly failing while the screen still looks
+ * busy.
  *
  * Each take leaves one assistant thread in the demo account; delete it after
  * (`GET /api/chat/threads`, `DELETE /api/chat/threads/<id>` in a signed-in
@@ -60,17 +69,23 @@ import {
  */
 
 const FRAGE =
-  'Was habe ich mit Petra Wüstenhagen zum Thema Hirtenscheibe Guss besprochen?'
+  'Was habe ich mit Tobias Reinhardt zum Thema Salmweide besprochen?'
 
 /**
  * The three conversations the answer has to name. Dates and not titles: the
- * model phrases the titles freely ("Lunker in der Gehäuseserie von
- * Hirtenscheibe Guss" against the row's own "Hirtenscheibe Guss — Lunker in
- * der Gehäuseserie"), but the date is code-supplied
+ * model phrases a title freely ("In der Vertriebsrunde — KW 31" against the
+ * row's own "Vertriebsrunde — KW 31"), but the date is code-supplied
  * (`%d.%m.%Y` in `query_past_meeting_subgraph.py`) and is therefore the one
- * thing that is stable enough to gate a take on.
+ * thing stable enough to gate a take on.
  */
-const GESPRAECHE = ['29.05.2026', '10.07.2026', '28.08.2026']
+const GESPRAECHE = ['28.07.2026', '11.08.2026', '08.09.2026']
+
+/**
+ * The line the graph appends when the subject appears in no transcript and the
+ * answer therefore rests on summaries. Its presence means the scene failed
+ * even though the screen is full of text, so it ends the take.
+ */
+const NUR_ZUSAMMENFASSUNGEN = 'In keinem Transkript'
 
 /** The hero of the empty assistant: the first frame of the clip. */
 const HERO = 'h1:has-text("Was möchtest du wissen?")'
@@ -140,6 +155,13 @@ export default async function erinnertSich(
         `${fehlend.join(', ')}. This scene is about an answer that reads ` +
         `several conversations and says which; one that read fewer is a ` +
         `different scene. Run the take again.`,
+    )
+  }
+  if (text.includes(NUR_ZUSAMMENFASSUNGEN)) {
+    throw new Error(
+      'The answer rests on the summaries: the subject appears in none of the ' +
+        'transcripts. The scene is about Raven carrying an answer out of the ' +
+        'conversations themselves, so this take is not it.',
     )
   }
 
