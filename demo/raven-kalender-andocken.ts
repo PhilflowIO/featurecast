@@ -136,6 +136,23 @@ const KONTO = `${GOOGLE} >> text=@ >> nth=0`
 /** A round trip through a provider is slower than anything inside Raven. */
 const ANBIETER_FRIST_MS = 90_000
 
+/**
+ * How many screens the provider may put up before it hands us back.
+ *
+ * Three is a backstop, not an expectation: one or two were observed. It exists
+ * so a provider that decides to loop cannot keep the camera running forever.
+ */
+const ANBIETER_SCHRITTE = 3
+
+/**
+ * How long ONE consent screen may take to appear, inside the loop.
+ *
+ * Deliberately shorter than `ANBIETER_FRIST_MS`: at this point the question is
+ * no longer "did the provider answer at all" but "is there ANOTHER screen", and
+ * the answer "no, we are being redirected home" has to be cheap.
+ */
+const EIN_SCHRITT_FRIST_MS = 25_000
+
 export const url = RAVEN_URL
 export const devices = ['desktop-wide']
 export const storageStatePath = KALENDER_STATE
@@ -171,11 +188,26 @@ export default async function kalenderAndocken(
   await demo.hold(1500)
   await ruhigKlicken(demo, KONTO_WAEHLEN)
 
-  // Then its own consent screen. It lists what Raven is asking for — that list
-  // IS the scene, so it gets read before it is answered.
-  const zustimmen = await zustimmenKnopf(page)
-  await demo.hold(3500)
-  await ruhigKlicken(demo, zustimmen)
+  // Then its consent, which is not reliably ONE screen.
+  //
+  // Measured across four test accounts on the recording host: most get a
+  // single "Zulassen"; one was handed a second page (`…/oauth/v2/consentsummary`)
+  // that asks again. A scene that clicks exactly once answered the first and
+  // stood in front of the second until its deadline. So the scene answers
+  // whatever the provider puts up until the browser is back on Raven's origin
+  // — which is the only reliable signal that the provider is finished with us.
+  //
+  // The first screen is the one worth watching (it lists what Raven asks for),
+  // so it gets the long look; any follow-up is a confirmation and gets a short
+  // one.
+  for (let schritt = 0; schritt < ANBIETER_SCHRITTE; schritt += 1) {
+    if (!(await beimAnbieter(page))) break
+    const zustimmen = await zustimmenKnopf(page)
+    if (zustimmen === null) break
+    await demo.hold(schritt === 0 ? 3500 : 1500)
+    await ruhigKlicken(demo, zustimmen)
+    await demo.hold(1500)
+  }
 
   // Back in Raven, connected, with the account named. Still `warteImFlug`:
   // the way home runs through the provider's redirect and Raven's own reload.
@@ -256,6 +288,24 @@ async function adresse(page: RecordPage): Promise<string> {
 }
 
 /**
+ * Is the browser still on the provider, rather than back on Raven?
+ *
+ * Compared by ORIGIN and never by "does the address contain Raven's host":
+ * the provider's own account-chooser URL carries Raven's address inside its
+ * `continue=` parameter, so a substring test says "we are home" while the
+ * chooser is still on screen. A probe written that way reported exactly that.
+ */
+async function beimAnbieter(page: RecordPage): Promise<boolean> {
+  const jetzt = await adresse(page)
+  if (jetzt === '') return false
+  try {
+    return new URL(jetzt).origin !== new URL(RAVEN_URL).origin
+  } catch {
+    return false
+  }
+}
+
+/**
  * Waits for the consent screen to STAND STILL and returns its grant button.
  *
  * Two spellings, one screen: see `ZULASSEN` / `WEITER`. Whichever is there is
@@ -271,8 +321,8 @@ async function adresse(page: RecordPage): Promise<string> {
  * address unchanged between them: an interstitial moves on, a consent screen
  * waits for a person.
  */
-async function zustimmenKnopf(page: RecordPage): Promise<string> {
-  const ende = Date.now() + ANBIETER_FRIST_MS
+async function zustimmenKnopf(page: RecordPage): Promise<string | null> {
+  const ende = Date.now() + EIN_SCHRITT_FRIST_MS
   for (;;) {
     for (const knopf of [ZULASSEN, WEITER]) {
       if (!(await stehtDa(page, knopf))) continue
@@ -282,12 +332,10 @@ async function zustimmenKnopf(page: RecordPage): Promise<string> {
         return knopf
       }
     }
-    if (Date.now() > ende) {
-      throw new Error(
-        `No consent screen that stands still within ` +
-          `${String(ANBIETER_FRIST_MS)} ms. Last address: ${await adresse(page)}`,
-      )
-    }
+    // No still grant button in this window. That is not a failure here — it
+    // is how "the provider is done with us" looks from inside the loop, and
+    // the caller's own wait for a connected card decides the take.
+    if (Date.now() > ende) return null
     await new Promise((fertig) => setTimeout(fertig, 250))
   }
 }
