@@ -179,7 +179,21 @@ export default async function kalenderAndocken(
 
   // Back in Raven, connected, with the account named. Still `warteImFlug`:
   // the way home runs through the provider's redirect and Raven's own reload.
-  await warteImFlug(page, VERBUNDEN, ANBIETER_FRIST_MS)
+  //
+  // If it does not arrive, the message has to say WHERE the take is standing.
+  // A bare "Verbunden did not appear" is true of a missed click, a declined
+  // consent and a broken callback alike, and the frames are gone by the time
+  // anyone reads it.
+  try {
+    await warteImFlug(page, VERBUNDEN, ANBIETER_FRIST_MS)
+  } catch (fehler) {
+    throw new Error(
+      `${fehler instanceof Error ? fehler.message : String(fehler)} — the ` +
+        `page is standing at ${await adresse(page)}. Still on the provider ` +
+        'means the grant was never answered; back in Raven and not connected ' +
+        'means the callback failed.',
+    )
+  }
   await warteAuf(page, KONTO, 20_000)
   await inDieMitte(page, demo, GOOGLE, { tempo: FILM_SCROLL_TEMPO })
   await demo.point(VERBUNDEN)
@@ -232,24 +246,46 @@ async function warteImFlug(
   }
 }
 
+/** The page's own address, for waiting on stillness and for error messages. */
+async function adresse(page: RecordPage): Promise<string> {
+  try {
+    return await page.evaluate(() => window.location.href)
+  } catch {
+    return ''
+  }
+}
+
 /**
- * Waits for the consent screen and returns the selector of ITS grant button.
+ * Waits for the consent screen to STAND STILL and returns its grant button.
  *
- * Two spellings, one screen: see `ZULASSEN` / `WEITER`. Polling for whichever
- * turns up is the only honest way to say "the consent screen is here" — a
- * fixed guess would wait out the full deadline on the other one and report a
- * missing consent screen where there is a perfectly good one on the page.
+ * Two spellings, one screen: see `ZULASSEN` / `WEITER`. Whichever is there is
+ * taken — a fixed guess would wait out the full deadline on the other one.
+ *
+ * The stillness is the part that was missing. Between the account tile and the
+ * consent screen the provider runs one or two interstitials, and one of them
+ * carries a "Weiter" of its own. The second take grabbed that button, clicked
+ * a page that was about to redirect anyway, and then sat in front of the real
+ * consent screen without ever answering it — the take died 90 s later on a
+ * connection that was never made, with nothing in the message about why.
+ * So the button only counts once it has been there across two checks with the
+ * address unchanged between them: an interstitial moves on, a consent screen
+ * waits for a person.
  */
 async function zustimmenKnopf(page: RecordPage): Promise<string> {
   const ende = Date.now() + ANBIETER_FRIST_MS
   for (;;) {
     for (const knopf of [ZULASSEN, WEITER]) {
-      if (await stehtDa(page, knopf)) return knopf
+      if (!(await stehtDa(page, knopf))) continue
+      const vorher = await adresse(page)
+      await new Promise((fertig) => setTimeout(fertig, 1200))
+      if ((await adresse(page)) === vorher && (await stehtDa(page, knopf))) {
+        return knopf
+      }
     }
     if (Date.now() > ende) {
       throw new Error(
-        `No consent screen within ${String(ANBIETER_FRIST_MS)} ms: neither ` +
-          `"${ZULASSEN}" nor "${WEITER}" is on the page.`,
+        `No consent screen that stands still within ` +
+          `${String(ANBIETER_FRIST_MS)} ms. Last address: ${await adresse(page)}`,
       )
     }
     await new Promise((fertig) => setTimeout(fertig, 250))
