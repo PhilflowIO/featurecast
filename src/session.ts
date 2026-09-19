@@ -36,10 +36,7 @@ import {
   detectRenderer,
   HARDWARE_GL_LAUNCH_ARGS,
 } from './renderer.js'
-import {
-  SPELLCHECK_OFF_LAUNCH_ARGS,
-  installSpellcheckOff,
-} from './spellcheck.js'
+import { installSpellcheckOff } from './spellcheck.js'
 import { recordPageFor } from './surface.js'
 
 /**
@@ -339,7 +336,6 @@ export async function recordSession(
   // that silent fallback into a failure.
   const launchArgs = [
     ...HARDWARE_GL_LAUNCH_ARGS,
-    ...SPELLCHECK_OFF_LAUNCH_ARGS,
     ...fakeMediaLaunchArgs(request.fakeMedia),
   ]
   const { browser, provenance } = await launchChromium(
