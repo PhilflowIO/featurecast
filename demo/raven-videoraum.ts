@@ -13,44 +13,44 @@ import {
 } from './raven-common.js'
 
 /**
- * Product film, scene M3 "Dein eigener Videoraum": the recording starts, the
- * recording runs, and the room says so while it does.
+ * Product film, scene M3 "Dein eigener Videoraum": the host puts the meeting's
+ * protocol on the shared screen, starts the recording, and the room says what
+ * it is doing while it does it.
  *
- * ONE PERSON, NO FACES. The four AI faces are out of the film, so this scene is
- * the host alone with her camera off. What the product then shows on her tile
- * is not initials but LiveKit's own silhouette
- * (`lk-participant-placeholder` in `raven-participant-tile.tsx`, `flow.raven`),
- * with her name on the pill beneath it — read from the source before the scene
- * was written, because a scene built on an invented tile is the same lie as an
- * invented face. Her microphone is on and carries her own demo voice file, the
- * one the live-meeting scene already uses, so the speaking indicator lights on
- * real audio rather than on nothing.
+ * NO FACES, AND NOT AN EMPTY ROOM EITHER. The four AI faces are out of the
+ * film, so the host sits alone with her camera off. The first version of this
+ * scene stopped there and was filmed: a single tile is full-bleed, so the frame
+ * was a grey silhouette a metre tall beside "Teilnehmer 0". Every pixel true,
+ * and none of it saying "your own video room". A shared screen fixes that
+ * without inventing anybody — it is also simply what a status round looks like.
  *
- * WHY THE RECORDING IS STARTED BY HAND. Raven can also start it by itself in a
- * room that asks for consent first (`raven-auto-aufnahme.ts`, the other scene).
- * Filming that one here would tell a second story — and it would put the
- * consent gate on screen, which belongs to the guest's side, not the host's.
+ * WHAT IS ON THE SHARED SCREEN IS RAVEN. The file is one of this repository's
+ * own renders of the meeting protocol (scene S2), so the room shows the real
+ * product and nothing staged. The pointer-free render on purpose: a shared
+ * screen carrying a second mouse cursor next to the recording's own reads as a
+ * mistake.
  *
- * WHAT IS DELIBERATELY ABSENT: A CLAIM ABOUT ENCRYPTION. The brief for this
- * scene asked for "the recording is stored encrypted" as its third beat. The
- * product does not say that anywhere a Team-tier workspace can see it. Every
- * encryption string in the app — "Dieses Meeting ist mit deinem Schlüssel
- * verschlüsselt", "Zusammenfassung verschlüsselt", "Dieses Meeting liegt in
- * eigener Obhut (Souverän)" — sits inside a branch that only a `souveraen`
- * tenant in customer custody reaches, and `/settings/encryption` answers this
- * account with an upsell. The one place the product states it for everyone is
- * a row of the public pricing table, "Medien server-seitig AES-256-GCM
- * verschlüsselt (at-rest)", which is a different surface and a different
- * scene. So this take ends on the recording running and stopping, and says
- * nothing about encryption at all.
+ * A HEADLESS BROWSER CANNOT SHARE A REAL SCREEN, which is measured, not
+ * assumed: `getDisplayMedia` does return a live 1280x720@30 track, but with
+ * `--use-fake-device-for-media-stream` its source is Chromium's synthetic
+ * screen under every selection switch. So the share is fed from a file
+ * (`fakeMedia.screen`, featurecast#190) exactly as the microphone is.
+ *
+ * WHAT IS DELIBERATELY ABSENT: A CLAIM ABOUT ENCRYPTION. The product says
+ * nothing about it that a Team-tier workspace can see — every encryption
+ * string in the app sits inside a branch only a `souveraen` tenant in customer
+ * custody reaches, and `/settings/encryption` answers this account with an
+ * upsell. The one place it is stated for everyone is a row of the public
+ * pricing table, which is a different surface and a different scene.
  *
  * PRECONDITIONS:
  *
  *   1. A room created with the demo account (`POST /api/meet/create-room`);
- *      `RAVEN_ROOM_LINK` is its HOST link (the `_ht=` one — the record button
- *      exists only for the host, `recording-button.tsx:61`).
- *   2. `RAVEN_HOST_VOICE` points at Marlene's voice file (default
- *      `artifacts/.media/Marlene Ostwald.wav`, git-ignored).
+ *      `RAVEN_ROOM_LINK` is its HOST link (the `_ht=` one — the record control
+ *      exists only for the host).
+ *   2. Her voice at `artifacts/.media/Marlene Ostwald.wav` and the shared
+ *      picture at `artifacts/.media/geteilter-bildschirm.mp4`. Both are
+ *      git-ignored and have to be placed in the run directory by hand.
  *
  * AFTERWARDS: the take leaves a room session and one meeting per device. End
  * the room (`POST /api/meet/end-room`), wait until the meeting is no longer
@@ -75,22 +75,22 @@ const NAME = 'input.lk-username-input, input[placeholder*="Name" i]'
 const IM_RAUM = '[data-testid="meeting-leave-button"]'
 
 /**
- * The bars are pinned for this scene, unlike the live-meeting one. There the
- * bars were left to fade so the opening grid showed four name pills; here the
- * whole scene is one control in the top bar, and a bar that goes away mid-take
- * takes the subject of the shot with it.
+ * The pin. On a phone this is not a convenience, it is the scene.
  *
- * ON A PHONE THIS IS NOT A CONVENIENCE, IT IS THE SCENE. Measured on staging
- * 2026-09-19 at 390x844, plain Playwright without any recording shell: the top
- * bar starts VISIBLE (`y=15`, `pointer-events: auto`), one tap on the stage
- * moves it to `y=-12.24` with `pointer-events: none`, and a second tap brings
- * it back. That is the product working as designed — on a coarse pointer there
- * is no idle clock and a tap on the stage toggles (`use-chrome-visibility.ts`
- * in `flow.raven`). What it cost was a take: the recorder's first touch landed
- * on the stage, the bar went away, and the take aborted on an occluded record
- * control before filming a frame. Nothing was wrong with Raven.
+ * Measured on staging 2026-09-19 at 390x844, plain Playwright without any
+ * recording shell: the top bar starts VISIBLE (`y=15`, `pointer-events: auto`),
+ * one tap on the stage moves it to `y=-12.24` with `pointer-events: none`, and
+ * a second tap brings it back. That is the product working as designed — on a
+ * coarse pointer there is no idle clock and a tap on the stage toggles
+ * (`use-chrome-visibility.ts` in `flow.raven`). What it cost was a take: the
+ * recorder's first touch landed on the stage, the bar went away, and the take
+ * aborted on an occluded record control. Nothing was wrong with Raven.
  */
 const LEISTE_FESTHALTEN = '[data-testid="meeting-chrome-pin-toggle"]'
+
+/** Sharing. The toggle only renders at all if `getDisplayMedia` exists. */
+const TEILEN = 'button[title="Bildschirm teilen"]'
+const GETEILTE_KACHEL = '[data-lk-source="screen_share"] >> nth=0'
 
 /** The record control. Host-only, and in the TOP bar, not the bottom one. */
 const AUFNEHMEN = 'button[title="Aufnahme starten"]'
@@ -130,15 +130,13 @@ export const hideSelectors = RAVEN_HIDE_SELECTORS
 export const allowFramingOfApp = RAVEN_ALLOW_FRAMING
 export const locale = RAVEN_LOCALE
 
-/**
- * Her voice, not her face. The microphone file is the same one the
- * live-meeting scene uses; no camera is declared, because the scene is about a
- * room with the camera off and a synthetic camera would only paint a green
- * test picture behind the silhouette.
- */
+/** Her voice and the picture she shares — never her face. */
 export const fakeMedia = {
   microphone:
     process.env.RAVEN_HOST_VOICE ?? 'artifacts/.media/Marlene Ostwald.wav',
+  screen:
+    process.env.RAVEN_SHARE_VIDEO ??
+    'artifacts/.media/geteilter-bildschirm.mp4',
 }
 
 /** Joins the room with the camera off, and holds the bars still. */
@@ -177,12 +175,10 @@ export async function prepare(app: Frame): Promise<void> {
   await beitreten.click()
   await app.locator(IM_RAUM).waitFor({ state: 'visible', timeout: 60_000 })
 
-  // Pinned by KEYBOARD, not by clicking the pin. The shortcut is a window-level
-  // listener (`chrome-pin-button.tsx`), so it works whether or not the bar is
-  // on screen and whether or not it is hit-testable — while a click on the pin
-  // needs the very bar whose disappearance is the problem. The state is then
-  // read back, because a scene that films an unpinned room fails minutes later
-  // and looks like something else.
+  // Pinned by KEYBOARD, not by clicking the pin. The shortcut is a
+  // window-level listener (`chrome-pin-button.tsx`), so it works whether or not
+  // the bar is on screen and whether or not it is hit-testable — while a click
+  // on the pin needs the very bar whose disappearance is the problem.
   const anheften = app.locator(LEISTE_FESTHALTEN).first()
   await anheften.waitFor({ state: 'attached', timeout: 20_000 })
   for (let versuch = 0; versuch < 5; versuch += 1) {
@@ -197,8 +193,6 @@ export async function prepare(app: Frame): Promise<void> {
         '390x844 phone). Filming without the pin is filming a coin flip.',
     )
   }
-  // The tile paints its placeholder and the name pill a moment after the room
-  // is entered; the first frame should already have both.
   await app.waitForTimeout(3000)
 }
 
@@ -206,8 +200,13 @@ export default async function videoraum(
   page: RecordPage,
   demo: Demo,
 ): Promise<void> {
-  // The room as it stands: one tile, no camera, the name on the pill.
-  await demo.hold(2500)
+  await demo.hold(2000)
+
+  // The protocol goes on the shared screen first, so the recording that starts
+  // next has something to record and the room has something to look at.
+  await ruhigKlicken(demo, TEILEN)
+  await warteAuf(page, GETEILTE_KACHEL, 45_000)
+  await demo.hold(3500)
 
   await ruhigKlicken(demo, AUFNEHMEN)
   await warteAuf(page, VIDEO_UND_TON, 10_000)
@@ -215,8 +214,7 @@ export default async function videoraum(
   await ruhigKlicken(demo, VIDEO_UND_TON)
 
   // The notice is the proof, not the button's own state: the button flips as
-  // soon as the request is sent, the ring appears when the recorder actually
-  // runs.
+  // soon as the request is sent, the ring appears when the recorder runs.
   await warteAuf(page, LAEUFT, AUFNAHME_FRIST_MS)
   await demo.hold(LAUFZEIT_MS)
 
