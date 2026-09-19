@@ -1,3 +1,5 @@
+import type { Frame } from 'playwright'
+
 import type { Demo, RecordPage } from '../src/record.js'
 import {
   EINGABE,
@@ -85,13 +87,30 @@ export const locale = RAVEN_LOCALE
 export const allowFramingOfApp = RAVEN_ALLOW_FRAMING
 
 /**
- * The assistant, empty and loaded, before the camera rolls.
+ * The assistant, empty and loaded, with the chat history put away.
  *
- * The hero and not the composer: the composer is in the document while the
- * page still measures itself, the heading is there once the empty state has
- * decided it IS the empty state.
+ * The hero and not the composer is the readiness signal: the composer is in
+ * the document while the page still measures itself, the heading is there once
+ * the empty state has decided it IS the empty state.
+ *
+ * WHY THE HISTORY PANEL GOES AWAY. Above `xl` the assistant opens with a
+ * persistent Chatverlauf column, and it lists whatever conversations the demo
+ * account happens to hold — in the first take two rows reading "Unbenannte
+ * Unterhaltung", left by another run against the same shared account earlier
+ * that hour. That is somebody else's leftover standing in a product film. It
+ * is put away rather than deleted: deleting threads on a shared demo account
+ * can take a conversation a parallel run is in the middle of, and the panel
+ * carries nothing this scene is about. Below `xl` it is a drawer that is shut
+ * anyway, so the click is skipped there.
  */
-export const prepare = vorbereiten('/assistant', HERO)
+export const prepare = async (app: Frame): Promise<void> => {
+  await vorbereiten('/assistant', HERO)(app)
+  const einklappen = app.locator('[aria-label="Chatverlauf ausblenden"]')
+  if ((await einklappen.count()) > 0 && (await einklappen.isVisible())) {
+    await einklappen.click()
+    await einklappen.waitFor({ state: 'hidden', timeout: 10_000 })
+  }
+}
 
 export default async function erinnertSich(
   page: RecordPage,
