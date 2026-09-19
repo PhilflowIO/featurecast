@@ -2,7 +2,9 @@
 
 Die Eichvideos werden EINMAL erzeugt und in `.eichvideos/` zwischengelagert
 (nicht im Repo, siehe tools/smoothness/.gitignore). Wer sie neu bauen will:
-`FEATURECAST_EICHUNG_NEU=1 uv run pytest`.
+`FEATURECAST_EICHUNG_NEU=1 uv run pytest`. Erzeugt werden sie mit dem in
+`synth_fixtures.py` festgenagelten ffmpeg, nicht mit dem des Systems --
+sonst haengt der Grenzfall c12 an der Maschine (Ticket 158).
 """
 
 from __future__ import annotations
@@ -23,7 +25,9 @@ CACHE = Path(__file__).resolve().parent.parent / ".eichvideos"
 @pytest.fixture(scope="session")
 def eichcache() -> Path:
     if not ffmpeg_vorhanden():
-        pytest.skip("ffmpeg fehlt -- ohne Kodierer gibt es keine Eichvideos")
+        pytest.skip(
+            "Festgenagelter ffmpeg weder vorhanden noch ladbar -- ohne genau "
+            "diesen Kodierer gibt es keine Eichvideos")
     CACHE.mkdir(exist_ok=True)
     return CACHE
 
