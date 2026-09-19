@@ -49,6 +49,25 @@ export type FakeMediaFiles = {
   /** A Y4M or MJPEG file played as the camera. */
   camera?: string
   microphone?: FakeMicrophone
+  /**
+   * A video file handed to the page when it asks to share a screen
+   * (featurecast#190).
+   *
+   * Chromium's own route does not work here and that is measured, not
+   * assumed: in the headless recording browser `getDisplayMedia` DOES return
+   * a live track — 1280x720@30 — but with `--use-fake-device-for-media-stream`
+   * its source is the synthetic screen, labelled `screen:-3:0` under BOTH
+   * `--auto-select-tab-capture-source-by-title` and
+   * `--auto-select-desktop-capture-source`. A test pattern, not a tab and not
+   * a desktop. (Measured 2026-09-19 on the recording image, against a secure
+   * origin — on `about:blank` there is no `navigator.mediaDevices` at all.)
+   *
+   * So the screen is fed from a file, exactly as the microphone is: the page
+   * gets back a stream captured from a `<video>` playing this file, looped.
+   * What the room then sees is whatever we chose to put in it — and the
+   * honest choice is footage of the product itself.
+   */
+  screen?: string
 }
 
 /**
@@ -98,7 +117,9 @@ export function fakeMediaLaunchArgs(
         `--use-file-for-fake-video-capture=${resolve(fakeMedia.camera)}`,
       )
     }
-    if (fakeMedia.microphone !== undefined) {
+    if (fakeMedia.microphone !== undefined || fakeMedia.screen !== undefined) {
+      // Both the voice and the shared picture are media a headless page has
+      // to start without ever receiving a user gesture.
       args.push('--autoplay-policy=no-user-gesture-required')
     }
   }
@@ -197,6 +218,14 @@ function contentTypeOf(file: string): string {
       return 'audio/ogg'
     case '.flac':
       return 'audio/flac'
+    // The screen file is a video and travels the same route (#190). A wrong
+    // type here is not cosmetic: a `<video>` served `audio/wav` never fires
+    // `playing`, and the share then hangs instead of failing.
+    case '.mp4':
+    case '.m4v':
+      return 'video/mp4'
+    case '.webm':
+      return 'video/webm'
     default:
       return 'audio/wav'
   }
@@ -205,10 +234,11 @@ function contentTypeOf(file: string): string {
 /**
  * Reads a script's `fakeMedia` export, strictly.
  *
- * `true`/`false` as before. An object may name `camera` (a Y4M or MJPEG file)
- * and `microphone` (a file, or `{ file, startsAt }` with `startsAt` as epoch
- * milliseconds or an ISO instant). Files have to exist now: a missing face is
- * a browser that falls back to the green test picture and records it without
+ * `true`/`false` as before. An object may name `camera` (a Y4M or MJPEG file),
+ * `microphone` (a file, or `{ file, startsAt }` with `startsAt` as epoch
+ * milliseconds or an ISO instant) and `screen` (a video handed to the page when
+ * it asks to share a screen). Files have to exist now: a missing face is a
+ * browser that falls back to the green test picture and records it without
  * complaint.
  */
 export function readFakeMedia(value: unknown, path: string): FakeMedia {
@@ -219,7 +249,8 @@ export function readFakeMedia(value: unknown, path: string): FakeMedia {
   const refuse = (why: string): Error =>
     new Error(
       `"${path}" exports \`fakeMedia\`, which has to be a boolean or ` +
-        "`{ camera?: 'face.y4m', microphone?: 'voice.wav' | { file, startsAt } }`: " +
+        "`{ camera?: 'face.y4m', microphone?: 'voice.wav' | { file, startsAt }, " +
+        "screen?: 'geteilt.mp4' }`: " +
         `${why}.`,
     )
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -227,7 +258,7 @@ export function readFakeMedia(value: unknown, path: string): FakeMedia {
   }
   const record = value as Record<string, unknown>
   const unknownKeys = Object.keys(record).filter(
-    (key) => key !== 'camera' && key !== 'microphone',
+    (key) => key !== 'camera' && key !== 'microphone' && key !== 'screen',
   )
   if (unknownKeys.length > 0) {
     throw refuse(
@@ -250,6 +281,22 @@ export function readFakeMedia(value: unknown, path: string): FakeMedia {
     if (!existsSync(camera))
       throw refuse(`\`camera\` "${camera}" does not exist`)
     result.camera = camera
+  }
+
+  const screen = record['screen']
+  if (screen !== undefined) {
+    if (typeof screen !== 'string' || screen === '') {
+      throw refuse('`screen` has to be a file path')
+    }
+    if (!/\.(mp4|m4v|webm)$/i.test(screen)) {
+      throw refuse(
+        `\`screen\` is "${screen}"; it is played in a <video>, so it has to be ` +
+          `.mp4, .m4v or .webm`,
+      )
+    }
+    if (!existsSync(screen))
+      throw refuse(`\`screen\` "${screen}" does not exist`)
+    result.screen = screen
   }
 
   const microphone = record['microphone']
@@ -284,8 +331,94 @@ export function readFakeMedia(value: unknown, path: string): FakeMedia {
     result.microphone = mic
   }
 
-  if (result.camera === undefined && result.microphone === undefined) {
-    throw refuse('the object names neither `camera` nor `microphone`')
+  if (
+    result.camera === undefined &&
+    result.microphone === undefined &&
+    result.screen === undefined
+  ) {
+    throw refuse('the object names no source at all')
   }
   return result
+}
+
+/** Where the page fetches the screen file from; answered by a route. */
+export const SCREEN_PATH = '/__featurecast/screen'
+
+/**
+ * The init script that answers "share your screen" with a file.
+ *
+ * A string, for the reason `docs/RECORDING-SCRIPTS.md` gives under "The trap
+ * that catches every injected script": a compiled function would carry
+ * esbuild's `__name` into a page that has none.
+ *
+ * ONE ELEMENT PER CALL, not one per document. A page that shares, stops and
+ * shares again gets a fresh stream each time, because stopping a track ends
+ * the stream it came from and a shared element would hand back a dead one on
+ * the second ask — which is exactly what a host who stops sharing and starts
+ * again does.
+ *
+ * The element stays IN the document, parked off screen rather than
+ * `display: none`: a display-none video is not guaranteed to produce frames,
+ * and a share that hands over a black stream looks like a product fault.
+ */
+export function screenInitScript(): string {
+  return `(function () {
+  var md = navigator.mediaDevices;
+  if (!md) return;
+  md.getDisplayMedia = function () {
+    return new Promise(function (resolve, reject) {
+      var video = document.createElement('video');
+      video.src = ${JSON.stringify(SCREEN_PATH)};
+      video.loop = true;
+      video.muted = true;
+      video.playsInline = true;
+      video.setAttribute('playsinline', '');
+      video.style.cssText = 'position:fixed;left:-10000px;top:0;width:1280px;height:720px';
+      var fertig = false;
+      var geben = function () {
+        if (fertig) return;
+        fertig = true;
+        try {
+          var stream = video.captureStream();
+          stream.getVideoTracks().forEach(function (t) {
+            t.addEventListener('ended', function () { video.remove(); });
+          });
+          resolve(stream);
+        } catch (e) { reject(e); }
+      };
+      video.addEventListener('playing', geben);
+      video.addEventListener('error', function () {
+        reject(new Error('[featurecast] screen file could not be played'));
+      });
+      (document.body || document.documentElement).appendChild(video);
+      var p = video.play();
+      if (p && p.catch) p.catch(function (e) { reject(e); });
+    });
+  };
+})();`
+}
+
+/**
+ * Installs the file-fed screen on a context.
+ *
+ * Same shape as the microphone: the file is served on the page's own origin,
+ * so neither CORS nor a content-security policy stands in the way, and the
+ * init script reaches every document including a framed application's. Before
+ * the first page, like every other context-level setting.
+ */
+export async function installFakeScreen(
+  context: BrowserContext,
+  file: string,
+): Promise<void> {
+  const body = await readFile(file)
+  if (!/\.(mp4|m4v|webm)$/i.test(file)) {
+    throw new Error(
+      `The screen file has to be a video the browser can play (.mp4, .m4v or ` +
+        `.webm); got "${file}".`,
+    )
+  }
+  await context.route(`**${SCREEN_PATH}`, (route) =>
+    route.fulfill({ body, contentType: contentTypeOf(file) }),
+  )
+  await context.addInitScript(screenInitScript())
 }

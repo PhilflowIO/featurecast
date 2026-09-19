@@ -19,6 +19,7 @@ import {
   type FakeMedia,
   fakeMediaLaunchArgs,
   installFakeMicrophone,
+  installFakeScreen,
   wantsFakeMedia,
 } from './fake-media.js'
 import { framedGeometry, openFramedSurface } from './framed.js'
@@ -36,6 +37,7 @@ import {
   detectRenderer,
   HARDWARE_GL_LAUNCH_ARGS,
 } from './renderer.js'
+import { installSpellcheckOff } from './spellcheck.js'
 import { recordPageFor } from './surface.js'
 
 /**
@@ -374,11 +376,22 @@ export async function recordSession(
       // a surface this way is that it is gone *before* the page's own
       // scripts run — a node removed after the first paint has already been
       // on screen, and the screencast would have it.
+      // Nothing typed on camera is ever wrong, and a dictionary underlines
+      // what it does not know — a customer's name, a colleague's name
+      // (featurecast#183). Before the first page, for the same reason as the
+      // two below it.
+      await installSpellcheckOff(context)
       if (request.hideSelectors !== undefined) {
         await hideOverlay(context, request.hideSelectors)
       }
       if (request.fixedTime !== undefined) {
         await pinClockAndRandomness(context, request.fixedTime)
+      }
+      if (
+        typeof request.fakeMedia === 'object' &&
+        request.fakeMedia.screen !== undefined
+      ) {
+        await installFakeScreen(context, request.fakeMedia.screen)
       }
       if (
         typeof request.fakeMedia === 'object' &&
