@@ -101,13 +101,31 @@ const CALDAV = KARTE('caldav')
 const VERBINDEN = `${GOOGLE} >> role=button[name="Verbinden"]`
 
 /**
- * The provider's consent screen, and the button that grants.
+ * The account chooser, which stands between "Verbinden" and the consent.
  *
- * Deliberately matched on the button and not on a headline: the headline is
- * the provider's wording and changes without warning, while a consent screen
- * that has no grant button is not a consent screen.
+ * A browser that is already signed in does not go to a sign-in form; it goes
+ * to "Konto auswählen" and waits for a tile to be picked. The tile is the one
+ * list entry on that page carrying an address, and it is addressed that way
+ * rather than by the account's name for two reasons: the recording must not
+ * carry a test account's address in the repository, and the name is the
+ * provider's markup, which it rewrites without telling anyone. Measured on the
+ * recording host: `li:has-text("@")` matches exactly one node there, with real
+ * geometry; the provider's own `data-identifier` hook matches none any more.
  */
-const ZUSTIMMEN = 'role=button[name="Weiter"] >> nth=0'
+const KONTO_WAEHLEN = 'li:has-text("@") >> nth=0'
+
+/**
+ * The consent screen's grant button.
+ *
+ * Matched on the button and not on a headline: the headline is the provider's
+ * wording and changes without warning, while a consent screen that has no
+ * grant button is not a consent screen. Two spellings are in the field — the
+ * chooser path ends on "Zulassen", the sign-in-form path on "Weiter" — so the
+ * scene takes whichever is actually there (`zustimmenKnopf`) instead of
+ * betting on one and timing out on the other.
+ */
+const ZULASSEN = 'role=button[name="Zulassen"] >> nth=0'
+const WEITER = 'role=button[name="Weiter"] >> nth=0'
 
 /** The card once the round trip has come back. */
 const VERBUNDEN = `${GOOGLE} >> text=Verbunden >> nth=0`
@@ -148,11 +166,16 @@ export default async function kalenderAndocken(
   await demo.hold(VOR_KLICK_MS)
   await ruhigKlicken(demo, VERBINDEN)
 
-  // The provider's own screen. It lists what Raven is asking for — that list
+  // The provider asks which account first.
+  await warteAuf(page, KONTO_WAEHLEN, ANBIETER_FRIST_MS)
+  await demo.hold(1500)
+  await ruhigKlicken(demo, KONTO_WAEHLEN)
+
+  // Then its own consent screen. It lists what Raven is asking for — that list
   // IS the scene, so it gets read before it is answered.
-  await warteAuf(page, ZUSTIMMEN, ANBIETER_FRIST_MS)
+  const zustimmen = await zustimmenKnopf(page)
   await demo.hold(3500)
-  await ruhigKlicken(demo, ZUSTIMMEN)
+  await ruhigKlicken(demo, zustimmen)
 
   // Back in Raven, connected, with the account named.
   await warteAuf(page, VERBUNDEN, ANBIETER_FRIST_MS)
@@ -160,6 +183,30 @@ export default async function kalenderAndocken(
   await inDieMitte(page, demo, GOOGLE, { tempo: FILM_SCROLL_TEMPO })
   await demo.point(VERBUNDEN)
   await demo.hold(4000)
+}
+
+/**
+ * Waits for the consent screen and returns the selector of ITS grant button.
+ *
+ * Two spellings, one screen: see `ZULASSEN` / `WEITER`. Polling for whichever
+ * turns up is the only honest way to say "the consent screen is here" — a
+ * fixed guess would wait out the full deadline on the other one and report a
+ * missing consent screen where there is a perfectly good one on the page.
+ */
+async function zustimmenKnopf(page: RecordPage): Promise<string> {
+  const ende = Date.now() + ANBIETER_FRIST_MS
+  for (;;) {
+    for (const knopf of [ZULASSEN, WEITER]) {
+      if ((await page.locator(knopf).boundingBox()) !== null) return knopf
+    }
+    if (Date.now() > ende) {
+      throw new Error(
+        `No consent screen within ${String(ANBIETER_FRIST_MS)} ms: neither ` +
+          `"${ZULASSEN}" nor "${WEITER}" is on the page.`,
+      )
+    }
+    await new Promise((fertig) => setTimeout(fertig, 250))
+  }
 }
 
 /**

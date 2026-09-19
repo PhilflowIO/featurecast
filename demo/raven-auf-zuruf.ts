@@ -71,8 +71,16 @@ const MEETING_WORT = 'Abnahme Linie 3'
 
 const FRAGE_MAIL = `Schick die Zusammenfassung von "${MEETING_WORT}" an ${EMPFAENGER}`
 
+/**
+ * "morgen" and not a weekday.
+ *
+ * A weekday is resolved by the server's clock, the card prints the absolute
+ * date it landed on, and the two disagreed on film: "am Montag" came back as
+ * "Di., 22. September". A relative day the viewer cannot check against a
+ * calendar in their head cannot contradict itself.
+ */
 const FRAGE_TERMIN =
-  'Leg mir am Montag um 10 Uhr einen Termin "Nachkontrolle Absaugung" an'
+  'Leg mir morgen um 10 Uhr einen Termin "Nachkontrolle Absaugung" an'
 
 /**
  * The composer's send button.
