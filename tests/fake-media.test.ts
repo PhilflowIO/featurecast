@@ -61,9 +61,7 @@ describe('readFakeMedia', () => {
     expect(() => readFakeMedia('false', 's.ts')).toThrow(
       /"s\.ts".*fakeMedia.*a boolean/s,
     )
-    expect(() => readFakeMedia({}, 's.ts')).toThrow(
-      /neither `camera` nor `microphone`/,
-    )
+    expect(() => readFakeMedia({}, 's.ts')).toThrow(/names no source at all/)
     expect(() => readFakeMedia({ camera: face, mic: voice }, 's.ts')).toThrow(
       /unknown field `mic`/,
     )
@@ -104,5 +102,33 @@ describe('microphoneInitScript', () => {
     expect(script).toContain('performance.timeOrigin + performance.now()')
     expect(script).not.toContain('Date.now')
     expect(microphoneInitScript(undefined)).toContain('var anchor = null;')
+  })
+})
+
+describe('the screen a script asks to share (#190)', () => {
+  it('takes a video file', async () => {
+    const datei = join(directory, 'geteilt.mp4')
+    await writeFile(datei, Buffer.alloc(8))
+    expect(readFakeMedia({ screen: datei }, 'demo/x.ts')).toEqual({
+      screen: datei,
+    })
+  })
+
+  it('refuses a file that is not a video', () => {
+    // The mistake is caught where it is made: a <video> served a wav never
+    // fires `playing`, so the share would hang instead of failing.
+    expect(() => readFakeMedia({ screen: voice }, 'demo/x.ts')).toThrow(/\.mp4/)
+  })
+
+  it('refuses a screen file that is not there', () => {
+    expect(() =>
+      readFakeMedia({ screen: join(directory, 'fehlt.mp4') }, 'demo/x.ts'),
+    ).toThrow(/does not exist/)
+  })
+
+  it('still refuses a field nobody knows', () => {
+    expect(() => readFakeMedia({ bildschirm: 'x.mp4' }, 'demo/x.ts')).toThrow(
+      /unknown field/,
+    )
   })
 })

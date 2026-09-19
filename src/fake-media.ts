@@ -234,10 +234,11 @@ function contentTypeOf(file: string): string {
 /**
  * Reads a script's `fakeMedia` export, strictly.
  *
- * `true`/`false` as before. An object may name `camera` (a Y4M or MJPEG file)
- * and `microphone` (a file, or `{ file, startsAt }` with `startsAt` as epoch
- * milliseconds or an ISO instant). Files have to exist now: a missing face is
- * a browser that falls back to the green test picture and records it without
+ * `true`/`false` as before. An object may name `camera` (a Y4M or MJPEG file),
+ * `microphone` (a file, or `{ file, startsAt }` with `startsAt` as epoch
+ * milliseconds or an ISO instant) and `screen` (a video handed to the page when
+ * it asks to share a screen). Files have to exist now: a missing face is a
+ * browser that falls back to the green test picture and records it without
  * complaint.
  */
 export function readFakeMedia(value: unknown, path: string): FakeMedia {
@@ -248,7 +249,8 @@ export function readFakeMedia(value: unknown, path: string): FakeMedia {
   const refuse = (why: string): Error =>
     new Error(
       `"${path}" exports \`fakeMedia\`, which has to be a boolean or ` +
-        "`{ camera?: 'face.y4m', microphone?: 'voice.wav' | { file, startsAt } }`: " +
+        "`{ camera?: 'face.y4m', microphone?: 'voice.wav' | { file, startsAt }, " +
+        "screen?: 'geteilt.mp4' }`: " +
         `${why}.`,
     )
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -256,7 +258,7 @@ export function readFakeMedia(value: unknown, path: string): FakeMedia {
   }
   const record = value as Record<string, unknown>
   const unknownKeys = Object.keys(record).filter(
-    (key) => key !== 'camera' && key !== 'microphone',
+    (key) => key !== 'camera' && key !== 'microphone' && key !== 'screen',
   )
   if (unknownKeys.length > 0) {
     throw refuse(
@@ -279,6 +281,22 @@ export function readFakeMedia(value: unknown, path: string): FakeMedia {
     if (!existsSync(camera))
       throw refuse(`\`camera\` "${camera}" does not exist`)
     result.camera = camera
+  }
+
+  const screen = record['screen']
+  if (screen !== undefined) {
+    if (typeof screen !== 'string' || screen === '') {
+      throw refuse('`screen` has to be a file path')
+    }
+    if (!/\.(mp4|m4v|webm)$/i.test(screen)) {
+      throw refuse(
+        `\`screen\` is "${screen}"; it is played in a <video>, so it has to be ` +
+          `.mp4, .m4v or .webm`,
+      )
+    }
+    if (!existsSync(screen))
+      throw refuse(`\`screen\` "${screen}" does not exist`)
+    result.screen = screen
   }
 
   const microphone = record['microphone']
@@ -313,8 +331,12 @@ export function readFakeMedia(value: unknown, path: string): FakeMedia {
     result.microphone = mic
   }
 
-  if (result.camera === undefined && result.microphone === undefined) {
-    throw refuse('the object names neither `camera` nor `microphone`')
+  if (
+    result.camera === undefined &&
+    result.microphone === undefined &&
+    result.screen === undefined
+  ) {
+    throw refuse('the object names no source at all')
   }
   return result
 }
