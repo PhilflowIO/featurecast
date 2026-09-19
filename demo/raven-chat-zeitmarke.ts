@@ -44,7 +44,8 @@ import {
  * event, and the citation is a client-side link, so the meeting page inherits
  * the activation and starts the recording itself. A take in which the player
  * does not run, or the highlighted row is not on screen, is aborted rather
- * than filmed.
+ * than filmed — and the shot only ends once the playhead has MOVED, not once
+ * the button claims it plays (ANLAUF_FRIST_MS).
  *
  * Each take leaves one assistant thread in the demo account; delete it after
  * (`GET /api/chat/threads`, `DELETE /api/chat/threads/<id>` in a signed-in
@@ -73,7 +74,19 @@ const SERIENSTART_AKTIV = `${AKTIVE_ZEILE}:has-text("Gut, dann halten wir fest")
 /** The player's control while it plays. */
 const PAUSIEREN = 'button[aria-label="Pausieren"] >> nth=0'
 
-/** How long the recording is filmed playing from the cited sentence. */
+/**
+ * How long the seek may buffer before the playhead moves.
+ *
+ * The player holds the clock at the seek target until every media element has
+ * buffered there (`use-vod-clock.ts`, readiness barrier, 8 s backstop).
+ * Measured on staging in a phone viewport: the control says "Pausieren" and the
+ * cited row is highlighted 1.5 s after the click, but the six elements only
+ * reach `readyState 4` — and the clock only starts counting — 8 s later. Filmed
+ * blind, that whole hold is a frozen clock next to a pause button.
+ */
+const ANLAUF_FRIST_MS = 20_000
+
+/** How long the recording is filmed actually RUNNING (clock moving). */
 const WIEDERGABE_MS = 6000
 
 export const url = RAVEN_URL
@@ -136,7 +149,46 @@ export default async function chatZeitmarke(
   )
   await warteAuf(page, PAUSIEREN, 10_000)
   await warteImBild(page, AKTIVE_ZEILE, 3000)
+  // Not "it says it plays" but "it moves": wait out the buffering, then film.
+  await warteAufLaufendeUhr(page, ANLAUF_FRIST_MS)
   await demo.hold(WIEDERGABE_MS)
+}
+
+/** The playhead's current position in seconds, or NaN while there is none.
+ *  Read in the page: `RecordPage`'s locator carries geometry, not attributes. */
+async function uhrStand(page: RecordPage): Promise<number> {
+  return page.evaluate(() =>
+    Number(
+      document
+        .querySelector('[role="slider"][aria-label="Zeitposition"]')
+        ?.getAttribute('aria-valuenow') ?? Number.NaN,
+    ),
+  )
+}
+
+/**
+ * Waits until the playhead has actually advanced — the proof that the
+ * recording runs, which the pause button alone does not give (see
+ * ANLAUF_FRIST_MS).
+ */
+async function warteAufLaufendeUhr(
+  page: RecordPage,
+  fristMs: number,
+): Promise<void> {
+  const start = await uhrStand(page)
+  const ende = Date.now() + fristMs
+  for (;;) {
+    const jetzt = await uhrStand(page)
+    if (Number.isFinite(jetzt) && Number.isFinite(start) && jetzt > start)
+      return
+    if (Date.now() > ende) {
+      throw new Error(
+        `The playhead did not move within ${String(fristMs)} ms (still at ` +
+          `${String(jetzt)} s): the jump seeks but nothing plays.`,
+      )
+    }
+    await new Promise((fertig) => setTimeout(fertig, 250))
+  }
 }
 
 /**
