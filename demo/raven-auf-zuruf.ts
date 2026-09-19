@@ -116,6 +116,16 @@ const KARTEN_FRIST_MS = 120_000
 /** Reading time on a card the viewer is meant to actually read. */
 const LESEZEIT_MS = 3500
 
+/**
+ * Film act one only — the mail Raven writes and the human releases.
+ *
+ * Default ON while flow.raven#7466 is open, because the second act cannot be
+ * filmed today (see its own comment further down). Set
+ * `RAVEN_M2_MIT_TERMIN=1` to film the whole scene once that is fixed; that is
+ * the only step needed to get the appointment back.
+ */
+const OHNE_TERMIN = process.env.RAVEN_M2_MIT_TERMIN !== '1'
+
 export const url = RAVEN_URL
 export const devices = ['desktop-wide', 'iphone']
 export const storageStatePath = RAVEN_STATE
@@ -171,6 +181,24 @@ export default async function aufZuruf(
   await demo.hold(2500)
 
   // ── Act two: the appointment, gated the same way ─────────────────────────
+  //
+  // Switched OFF by default until flow.raven#7466 is fixed, and switched off
+  // by a value rather than by deleting the act, so the scene becomes whole
+  // again by removing an environment variable rather than by someone
+  // reconstructing this code from a handoff.
+  //
+  // Why it is off: the appointment is the SECOND agent turn of the
+  // conversation, and a second turn does not survive a recording today — the
+  // recorder pins the two inputs Raven builds its message ids from, the ids
+  // collide, and the turn ends in "Antwort fehlgeschlagen". Dropping the
+  // pinned clock was necessary and not sufficient; see the module header and
+  // the handoff. Act one carries the promise of the scene on its own: Raven
+  // writes, the human releases.
+  if (OHNE_TERMIN) {
+    await demo.hold(2500)
+    return
+  }
+
   await demo.hold(VOR_KLICK_MS)
   await demo.type(EINGABE, FRAGE_TERMIN)
   await ruhigKlicken(demo, KOMPOSER_SENDEN)
