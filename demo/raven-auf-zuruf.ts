@@ -7,7 +7,6 @@ import {
   RAVEN_LOCALE,
   RAVEN_STATE,
   RAVEN_URL,
-  STEINKAUZ_FIXED_TIME,
   VOR_KLICK_MS,
   inDieMitte,
   ruhigKlicken,
@@ -121,8 +120,28 @@ export const url = RAVEN_URL
 export const devices = ['desktop-wide', 'iphone']
 export const storageStatePath = RAVEN_STATE
 export const hideSelectors = RAVEN_HIDE_SELECTORS
-export const fixedTime = STEINKAUZ_FIXED_TIME
 export const locale = RAVEN_LOCALE
+
+// NO `fixedTime` HERE — this scene sends TWO turns, and the second one dies
+// under a pinned clock.
+//
+// `pinClockAndRandomness` (`src/recipes.ts`) does two things together: it
+// starts `Date` at a fixed instant AND replaces `Math.random` with a seeded
+// generator. Raven mints an assistant message id from exactly those two
+// (`ui/src/app/assistant/assistant-page-client.tsx`, `a-${Date.now()}-${…
+// Math.random…}`), so under a recording the second turn of a conversation can
+// mint the id the first one already used, and it fails with "Antwort
+// fehlgeschlagen".
+//
+// Measured, one variable at a time, on the recording host: mail turn then
+// appointment turn passes twice in a plain browser; the identical pair with
+// ONLY the recorder's seeded `Math.random` installed fails on the second turn,
+// every time. Three takes had died there before the A/B was run, and the first
+// two guesses — a thread limit, then a calendar conflict — were both wrong.
+//
+// Raven's id should not depend on either (flow.raven#7466). Until it does not,
+// a scene with more than one turn cannot pin the clock. Nothing is lost here:
+// the shot never leaves the chat, and no relative time is on screen.
 export const allowFramingOfApp = RAVEN_ALLOW_FRAMING
 
 /** The empty assistant, loaded before the camera rolls. */
