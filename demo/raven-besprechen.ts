@@ -5,6 +5,7 @@ import {
   ERSTE_ZEILE,
   KONTEXT_CHIP,
   RAVEN_ALLOW_FRAMING,
+  RAVEN_LOCALE,
   RAVEN_FIXED_TIME,
   RAVEN_HIDE_SELECTORS,
   RAVEN_STATE,
@@ -114,6 +115,7 @@ export const fixedTime = RAVEN_FIXED_TIME
  * `RAVEN_ALLOW_FRAMING` in `raven-common.ts`.
  */
 export const allowFramingOfApp = RAVEN_ALLOW_FRAMING
+export const locale = RAVEN_LOCALE
 
 /**
  * The list is loaded before the camera rolls, so the clip opens on it and not

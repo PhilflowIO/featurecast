@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import type { Demo, RecordPage } from '../src/record.js'
 import {
   RAVEN_ALLOW_FRAMING,
+  RAVEN_LOCALE,
   anmelden,
   ERSTE_ZEILE,
   RAVEN_FIXED_TIME,
@@ -88,6 +89,7 @@ export const fixedTime = RAVEN_FIXED_TIME
  * `RAVEN_ALLOW_FRAMING` in `raven-common.ts`.
  */
 export const allowFramingOfApp = RAVEN_ALLOW_FRAMING
+export const locale = RAVEN_LOCALE
 
 /**
  * The list is loaded before the camera rolls, so the clip opens on it and not

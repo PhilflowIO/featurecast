@@ -3,6 +3,7 @@ import {
   FILM_SCROLL_TEMPO,
   NACH_KLICK_MS,
   RAVEN_ALLOW_FRAMING,
+  RAVEN_LOCALE,
   RAVEN_HIDE_SELECTORS,
   RAVEN_STATE,
   RAVEN_URL,
@@ -69,6 +70,7 @@ export const storageStatePath = RAVEN_STATE
 export const hideSelectors = RAVEN_HIDE_SELECTORS
 export const fixedTime = STEINKAUZ_FIXED_TIME
 export const allowFramingOfApp = RAVEN_ALLOW_FRAMING
+export const locale = RAVEN_LOCALE
 
 /**
  * Opens the meeting with the sentence at 72 % of the height: on screen from

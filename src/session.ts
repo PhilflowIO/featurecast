@@ -22,6 +22,7 @@ import {
   wantsFakeMedia,
 } from './fake-media.js'
 import { framedGeometry, openFramedSurface } from './framed.js'
+import { localeLaunchEnvironment } from './locale.js'
 import {
   createRecorder,
   type Demo,
@@ -126,6 +127,12 @@ export type SessionRequest = {
    * run — a consent banner, a card that shows an internal address.
    */
   hideSelectors?: readonly string[]
+  /**
+   * The language the application is filmed in (`'de-DE'`), for the page
+   * (context locale) and for the browser process (its environment, which
+   * decides the UI and the spellcheck dictionary). See src/locale.ts.
+   */
+  locale?: string
   /** Directory that receives `frames/`, `timestamps.json`, `browser.json`. */
   outputDirectory: string
   /**
@@ -265,6 +272,7 @@ export function contextOptionsFor(
   captureArea: { height: number; width: number },
   storageStatePath?: string,
   fakeMedia = false,
+  locale?: string,
 ): BrowserContextOptions {
   // The saved session is the one option here that does not come from the
   // device: it says *who* is being filmed, not *on what*. It is passed
@@ -275,6 +283,7 @@ export function contextOptionsFor(
       ? {}
       : { storageState: storageStatePath }),
     ...(fakeMedia ? { permissions: [...FAKE_MEDIA_PERMISSIONS] } : {}),
+    ...(locale === undefined ? {} : { locale }),
   }
   if (device.capture.strategy === 'screencast') {
     return { ...device.device, ...session, viewport: captureArea }
@@ -329,7 +338,15 @@ export async function recordSession(
     ...fakeMediaLaunchArgs(request.fakeMedia),
   ]
   const { browser, provenance } = await launchChromium(
-    { args: launchArgs, headless: true },
+    {
+      args: launchArgs,
+      headless: true,
+      // The browser's own language — the page's is the context locale below.
+      // Only the environment reaches it on Linux (src/locale.ts).
+      ...(request.locale === undefined
+        ? {}
+        : { env: localeLaunchEnvironment(request.locale, process.env) }),
+    },
     resolveBrowserRequest(process.env),
   )
   // The screencast delivers CSS pixels and ignores `deviceScaleFactor`
@@ -348,6 +365,7 @@ export async function recordSession(
         captureArea,
         request.storageStatePath,
         wantsFakeMedia(request.fakeMedia),
+        request.locale,
       ),
     )
     try {
