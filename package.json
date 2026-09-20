@@ -39,6 +39,7 @@
     "featurecast": "tsx src/cli.ts",
     "format": "prettier --check .",
     "lint": "eslint .",
+    "montage": "tsx src/render/montage-cli.ts",
     "prepare": "simple-git-hooks",
     "render": "tsx src/render/cli.ts",
     "test": "vitest run --project portable",

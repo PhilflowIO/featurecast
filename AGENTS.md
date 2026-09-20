@@ -11,6 +11,7 @@ Use pnpm with Node 22 or later.
 - `pnpm install` installs dependencies.
 - `pnpm browsers:install` downloads Chromium after a clean install.
 - `pnpm demo:hello` launches a headless Playwright page and exits; it is the M0 smoke test.
+- `pnpm montage <a.mp4> <b.mp4> [...] --out <clip.mp4> --device monitor --device tablet --device phone` lays finished recordings into drawn device shells and renders one picture of the app on every device at once. Shells are drawn in `src/render/shell.ts` with the same dependency-free PNG writer the cursor sprites use; no mockup artwork is shipped.
 - `pnpm test` runs the portable Vitest tier — everything that does not record. It needs no GPU.
 - `pnpm test:gpu` runs the recording tier (`tests/*.gpu.test.ts`), which needs hardware GL; `tools/gpu-box/test.sh` runs it on the GPU host and writes the receipt `docs/evidence/gpu-tier/latest.json`, which belongs in the commit. Naming matters: `*.gpu.test.ts` reaches `recordSession`, `*.browser.test.ts` starts a browser without recording, and `tests/tiers.test.ts` fails if a file sits in the wrong one.
 - `pnpm typecheck` checks TypeScript without emitting files.
