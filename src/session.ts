@@ -138,6 +138,14 @@ export type SessionRequest = {
   /** Directory that receives `frames/`, `timestamps.json`, `browser.json`. */
   outputDirectory: string
   /**
+   * The wall clock the application is filmed on (`'Europe/Berlin'`).
+   *
+   * Context-level, like `locale`: every date the page formats is formatted
+   * there. Without it the page runs on the container's clock, which is UTC —
+   * see src/locale.ts.
+   */
+  timezone?: string
+  /**
    * Everything that has to happen before the camera rolls: signing in,
    * navigating to the screen the demo is about, dismissing a cookie banner.
    *
@@ -275,6 +283,7 @@ export function contextOptionsFor(
   storageStatePath?: string,
   fakeMedia = false,
   locale?: string,
+  timezone?: string,
 ): BrowserContextOptions {
   // The saved session is the one option here that does not come from the
   // device: it says *who* is being filmed, not *on what*. It is passed
@@ -286,6 +295,7 @@ export function contextOptionsFor(
       : { storageState: storageStatePath }),
     ...(fakeMedia ? { permissions: [...FAKE_MEDIA_PERMISSIONS] } : {}),
     ...(locale === undefined ? {} : { locale }),
+    ...(timezone === undefined ? {} : { timezoneId: timezone }),
   }
   if (device.capture.strategy === 'screencast') {
     return { ...device.device, ...session, viewport: captureArea }
@@ -368,6 +378,7 @@ export async function recordSession(
         request.storageStatePath,
         wantsFakeMedia(request.fakeMedia),
         request.locale,
+        request.timezone,
       ),
     )
     try {

@@ -23,7 +23,7 @@ import {
   requireAppUrl,
 } from './session.js'
 import { type FakeMedia, readFakeMedia } from './fake-media.js'
-import { readLocale } from './locale.js'
+import { readLocale, readTimezone } from './locale.js'
 import type { PrepareStep, RecordingScript } from './session.js'
 import { uploadFile, resolveUploadConfig } from './upload.js'
 
@@ -162,6 +162,16 @@ export type LoadedScript = {
    * origin has to be known before the first frame (src/framed.ts).
    */
   url?: string
+  /**
+   * `timezone`: the wall clock the application is filmed on, as an IANA name
+   * (`'Europe/Berlin'`).
+   *
+   * Context-level like `locale`, and its sibling: the language decides the
+   * words, this decides the numbers. Without it the page runs on the
+   * container's clock — UTC — and a scene that asks for an appointment at
+   * "10 Uhr" films it standing at 08:00 (src/locale.ts).
+   */
+  timezone?: string
 }
 
 export type ScriptLoader = (path: string) => Promise<LoadedScript>
@@ -399,6 +409,7 @@ export function readContextSettings(
   | 'hideSelectors'
   | 'locale'
   | 'storageStatePath'
+  | 'timezone'
 > {
   const settings: {
     allowFramingOfApp?: boolean
@@ -407,6 +418,7 @@ export function readContextSettings(
     hideSelectors?: readonly string[]
     locale?: string
     storageStatePath?: string
+    timezone?: string
   } = {}
 
   const storageStatePath = module_['storageStatePath']
@@ -474,6 +486,11 @@ export function readContextSettings(
   const locale = module_['locale']
   if (locale !== undefined) {
     settings.locale = readLocale(locale, path)
+  }
+
+  const timezone = module_['timezone']
+  if (timezone !== undefined) {
+    settings.timezone = readTimezone(timezone, path)
   }
 
   return settings
@@ -562,6 +579,7 @@ const DEFAULT_DEPENDENCIES: PipelineDependencies = {
       ...(script.storageStatePath === undefined
         ? {}
         : { storageStatePath: script.storageStatePath }),
+      ...(script.timezone === undefined ? {} : { timezone: script.timezone }),
       ...(script.url === undefined ? {} : { appUrl: script.url }),
     })
     return { capture, captureDirectory: session.captureDirectory }
