@@ -226,8 +226,13 @@ switching it off changes nothing any of them can see. The judder that was
 attributed to it belonged to the starved frame queue next door. Full analysis in
 [docs/CAPTURE-CADENCE.md](docs/CAPTURE-CADENCE.md).
 
-Nothing here has ever been measured against another product. This README
-makes no claim about how featurecast compares to any tool you may be using.
+**Measured against three other open-source recorders**, on one machine, one
+page, one container, with the same instruments applied to every output
+including ours: [docs/COMPARISON.md](docs/COMPARISON.md). The short version —
+none of the three can scroll a container sideways, all three write a container
+frame rate they do not deliver, and only featurecast re-renders without
+starting a browser. It does not flatter us everywhere: one of them captures at
+3840×2160 and encodes at eight times our bitrate.
 
 Status: pre-1.0, not published to npm, interfaces still move between
 milestones. [MILESTONES.md](MILESTONES.md) lists what is accepted and what is
@@ -241,6 +246,7 @@ not, each with a criterion you can run yourself.
 - **[docs/DEVICES.md](docs/DEVICES.md)** — the eleven device presets and how they resolve
 - **[PLAN.md](PLAN.md)** · **[MILESTONES.md](MILESTONES.md)** — architecture and acceptance criteria
 - **[docs/INTERNALS.md](docs/INTERNALS.md)** — how it works in full detail
+- **[docs/COMPARISON.md](docs/COMPARISON.md)** — measured against three other recorders, and where it does not flatter us
 - **[docs/YIELD-BENCH.md](docs/YIELD-BENCH.md)** — measure capture yield yourself
 - **[docs/CAPTURE-CADENCE.md](docs/CAPTURE-CADENCE.md)** · **[docs/SMOOTHNESS.md](docs/SMOOTHNESS.md)** · **[docs/M1-VERDICT.md](docs/M1-VERDICT.md)** · **[docs/M3-VERDICT.md](docs/M3-VERDICT.md)** · **[docs/M4-ACCEPTANCE.md](docs/M4-ACCEPTANCE.md)** — the measurement record
 
