@@ -275,6 +275,11 @@ export function createRecorder(
         locator: LocatorLike,
         deadlineAt: number,
         knownPeriodMs: number | null = null,
+        // What the script called this target. A refused take deletes its
+        // frames, so the exception is the only witness that will exist —
+        // and "a box at (293, 1819) is occluded" sends its reader looking
+        // through a whole scene for which element that was.
+        beschreibung = '(a locator)',
       ): Promise<{
         bbox: BoundingBox
         periodMs: number | null
@@ -310,6 +315,7 @@ export function createRecorder(
           locator,
           settled.bbox,
           viewport,
+          beschreibung,
         )
         return { bbox: settled.bbox, periodMs: settled.periodMs, point }
       }
@@ -403,7 +409,13 @@ export function createRecorder(
         // legitimately burn twice the budget the option advertises —
         // measured at 125s against a 60s setting.
         const deadlineAt = Date.now() + settleTimeoutMs
-        const before = await resolveVerifiedTarget(locator, deadlineAt)
+        const beschreibung = typeof target === 'string' ? target : '(a locator)'
+        const before = await resolveVerifiedTarget(
+          locator,
+          deadlineAt,
+          null,
+          beschreibung,
+        )
         const initialPoint = before.point
         await moveToPoint(
           initialPoint,
@@ -431,6 +443,7 @@ export function createRecorder(
           locator,
           deadlineAt,
           before.periodMs,
+          beschreibung,
         )
 
         // Whether to spend a second visible pointer curve is decided by a
@@ -2158,7 +2171,11 @@ function largestFreeRegionPoint(
  * `stepPx` unset means occlusion at the center with no viewport available
  * to search further.
  */
-function occlusionError(bbox: BoundingBox, stepPx?: number): Error {
+function occlusionError(
+  bbox: BoundingBox,
+  stepPx?: number,
+  beschreibung = '(a locator)',
+): Error {
   const detail =
     stepPx === undefined
       ? 'is occluded at its center and no viewport is available to search further'
@@ -2167,9 +2184,9 @@ function occlusionError(bbox: BoundingBox, stepPx?: number): Error {
         'overlay, a sticky header), or the only free area left is ' +
         `narrower than the ${String(stepPx)}px probe step`
   return new Error(
-    `Target bounding box (${String(bbox.x)}, ${String(bbox.y)}, ` +
-      `${String(bbox.width)}x${String(bbox.height)}) ${detail}. Never ` +
-      'logging an unverified interaction.',
+    `Target ${beschreibung} — bounding box (${String(bbox.x)}, ` +
+      `${String(bbox.y)}, ${String(bbox.width)}x${String(bbox.height)}) — ` +
+      `${detail}. Never logging an unverified interaction.`,
   )
 }
 
@@ -2186,6 +2203,7 @@ async function findVerifiedInteractionPoint(
   locator: LocatorLike,
   bbox: BoundingBox,
   viewport: ViewportSize | null,
+  beschreibung = '(a locator)',
 ): Promise<{ x: number; y: number }> {
   if (viewport === null) {
     const center = {
@@ -2193,7 +2211,7 @@ async function findVerifiedInteractionPoint(
       y: Math.round(bbox.y + bbox.height / 2),
     }
     if (await hitsTarget(locator, center)) return center
-    throw occlusionError(bbox)
+    throw occlusionError(bbox, undefined, beschreibung)
   }
 
   const rect = intersectionRect(bbox, viewport)
@@ -2207,7 +2225,7 @@ async function findVerifiedInteractionPoint(
   const grid = candidateGrid(rect, viewport)
   const hits = await hitTestPoints(locator, grid)
   const point = largestFreeRegionPoint(grid, hits)
-  if (point === null) throw occlusionError(bbox, GRID_STEP_PX)
+  if (point === null) throw occlusionError(bbox, GRID_STEP_PX, beschreibung)
   return { x: point.x, y: point.y }
 }
 

@@ -10,6 +10,7 @@ import {
   RAVEN_URL,
   VOR_KLICK_MS,
   inDieMitte,
+  jetztSichtbar,
   ruhigKlicken,
   vorbereiten,
   warteAuf,
@@ -143,14 +144,17 @@ const TERMIN_JA = '[data-testid="confirm-schedule-yes"]'
  * ambiguous, and an ambiguous locator has no geometry for the recorder to
  * point at, on either device.
  *
- * `exact=true` on "Tag" for the neighbouring reason: the header also carries
+ * The `s` suffix on "Tag" for the neighbouring reason: the header also carries
  * "Tag zurück" and "Tag vor", and a role name matches as a substring by
- * default, so the plain name would have matched three buttons.
+ * default, so the plain name would have matched three buttons. It is `"Tag"s`
+ * and not `[exact=true]` — the role engine accepts exactly nine attributes and
+ * rejects anything else outright, so the readable-looking spelling ends the
+ * take with an "Unknown attribute" from inside the page (measured, 2026-09-20).
  */
 const TERMINE_TAB = 'a[href="/calendar"] >> visible=true >> nth=0'
 const TERMINE_UEBERSCHRIFT = 'h1:has-text("Meine Termine")'
-const TAG_ANSICHT = 'role=button[name="Tag"][exact=true]'
-const EIN_TAG_VOR = 'role=button[name="Tag vor"][exact=true]'
+const TAG_ANSICHT = 'role=button[name="Tag"s]'
+const EIN_TAG_VOR = 'role=button[name="Tag vor"s]'
 const STEHENDER_TERMIN = `[data-testid="calendar-event"]:has-text("${TERMIN_TITEL}") >> nth=0`
 
 /**
@@ -368,7 +372,14 @@ async function warteAufVerschwunden(
 ): Promise<void> {
   const ende = Date.now() + fristMs
   for (;;) {
-    if ((await page.locator(selector).boundingBox()) === null) return
+    // `jetztSichtbar` and NOT a bare `boundingBox()`. A locator whose node has
+    // left the document does not answer `null`; it waits out Playwright's own
+    // 30 s and THROWS — so the poll that was meant to notice the gate card
+    // disappearing ended the take at 30 s with a Playwright stack, on the one
+    // outcome it was written to recognise. Measured on the desktop take of
+    // 2026-09-20: the appointment was written, the card was gone, and the
+    // recording was refused anyway.
+    if (!(await jetztSichtbar(page, selector))) return
     if (Date.now() > ende) {
       throw new Error(
         `Still on screen after ${String(fristMs)} ms: ${selector}. The ` +
