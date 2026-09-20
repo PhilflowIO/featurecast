@@ -24,9 +24,15 @@ import { recordSession } from '../src/session.js'
  * GL flags, so headless Chromium rasterized in SwiftShader on a machine with
  * a working GPU. Raven's landing page then scrolled at ~20 fps and at under
  * half its scripted pace, and no check noticed. Like every `*.browser.test`,
- * this one needs a machine with a GPU, or FEATURECAST_ALLOW_SOFTWARE_RENDERER=1
- * (and then the renderer assertion below is the one expected to fail).
+ * this one needs a machine with a GPU. Unlike the others it cannot borrow
+ * FEATURECAST_ALLOW_SOFTWARE_RENDERER=1 to run anyway: the renderer is its
+ * subject, so under that switch it would either fail or — worse — have to
+ * drop the assertion and report green without having proven anything. It
+ * skips itself there instead, and the guarantee is proven on the GPU host.
  */
+
+const SOFTWARE_RENDERER_ALLOWED =
+  process.env['FEATURECAST_ALLOW_SOFTWARE_RENDERER'] === '1'
 
 const directories: string[] = []
 let server: FixtureServer
@@ -48,7 +54,7 @@ afterEach(async () => {
 })
 
 describe('recording renderer', () => {
-  it(
+  it.skipIf(SOFTWARE_RENDERER_ALLOWED)(
     'launches with hardware GL and records the renderer it painted with',
     { timeout: 120_000 },
     async () => {
