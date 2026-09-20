@@ -12,7 +12,7 @@ import type { CursorKind, CursorLook } from './cursor.js'
  * the same input always yields the same bytes.
  */
 
-type Rgba = readonly [number, number, number, number]
+export type Rgba = readonly [number, number, number, number]
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
 
@@ -105,7 +105,7 @@ export class Canvas {
   }
 }
 
-type Point = { x: number; y: number }
+export type Point = { x: number; y: number }
 
 /** Samples per axis inside each pixel. Three is enough to hide the stair-steps. */
 const SUPERSAMPLE = 3
