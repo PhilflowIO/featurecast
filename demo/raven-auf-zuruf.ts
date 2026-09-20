@@ -10,6 +10,7 @@ import {
   RAVEN_URL,
   VOR_KLICK_MS,
   inDieMitte,
+  jetztSichtbar,
   ruhigKlicken,
   vorbereiten,
   warteAuf,
@@ -368,7 +369,14 @@ async function warteAufVerschwunden(
 ): Promise<void> {
   const ende = Date.now() + fristMs
   for (;;) {
-    if ((await page.locator(selector).boundingBox()) === null) return
+    // `jetztSichtbar` and NOT a bare `boundingBox()`. A locator whose node has
+    // left the document does not answer `null`; it waits out Playwright's own
+    // 30 s and THROWS — so the poll that was meant to notice the gate card
+    // disappearing ended the take at 30 s with a Playwright stack, on the one
+    // outcome it was written to recognise. Measured on the desktop take of
+    // 2026-09-20: the appointment was written, the card was gone, and the
+    // recording was refused anyway.
+    if (!(await jetztSichtbar(page, selector))) return
     if (Date.now() > ende) {
       throw new Error(
         `Still on screen after ${String(fristMs)} ms: ${selector}. The ` +
