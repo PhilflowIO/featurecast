@@ -75,3 +75,38 @@ export function localeLaunchEnvironment(
   environment['LANGUAGE'] = `${posix}:${language}`
   return environment
 }
+
+/**
+ * The wall clock a recording is filmed on (featurecast#197).
+ *
+ * The sibling of `locale`, and needed for the same reason. A German product
+ * filmed in a German browser is still filmed on the container's clock, and a
+ * container's clock is UTC — so an appointment a scene asks for at "10 Uhr"
+ * stands at 08:00 in the calendar it is filmed in, and the picture contradicts
+ * the words on it. Measured against staging on 2026-09-20: the same event read
+ * back as `08:00–09:00` in the grid with no `timezoneId`, and as `10:00–11:00`
+ * with `Europe/Berlin`.
+ *
+ * Only the page needs it — `Intl` and every date the application formats run
+ * there. The browser process does not format the application's dates, which is
+ * why this one has no environment half the way `locale` does.
+ */
+export function readTimezone(value: unknown, path = 'the script'): string {
+  const usage = "`export const timezone = 'Europe/Berlin'`"
+  if (typeof value !== 'string' || value === '') {
+    throw new Error(
+      `"${path}" exports \`timezone\`, which has to be an IANA time-zone name: ${usage}.`,
+    )
+  }
+  try {
+    // The one check that is the real thing: `Intl` rejects a name Chromium
+    // would also reject, and a hand-written list of zones goes stale.
+    new Intl.DateTimeFormat('en-US', { timeZone: value })
+  } catch {
+    throw new Error(
+      `"${path}" exports \`timezone\` "${value}", which is not an IANA ` +
+        `time-zone name: ${usage}.`,
+    )
+  }
+  return value
+}

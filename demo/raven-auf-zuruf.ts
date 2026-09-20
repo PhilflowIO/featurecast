@@ -6,6 +6,7 @@ import {
   RAVEN_HIDE_SELECTORS,
   RAVEN_LOCALE,
   RAVEN_STATE,
+  RAVEN_TIMEZONE,
   RAVEN_URL,
   VOR_KLICK_MS,
   inDieMitte,
@@ -197,6 +198,10 @@ export const devices = ['desktop-wide', 'iphone']
 export const storageStatePath = RAVEN_STATE
 export const hideSelectors = [...RAVEN_HIDE_SELECTORS, KALENDER_CHIPS]
 export const locale = RAVEN_LOCALE
+// The scene asks for an appointment at "10 Uhr" and then films the calendar it
+// landed in. On the container's own clock that calendar prints 08:00, and the
+// last shot of the scene would contradict the sentence that produced it.
+export const timezone = RAVEN_TIMEZONE
 
 // NO `fixedTime` HERE — this scene sends TWO turns, and the second one dies
 // under a pinned clock.

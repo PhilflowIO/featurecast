@@ -79,6 +79,19 @@ export const RAVEN_ALLOW_FRAMING = true
 export const RAVEN_LOCALE = 'de-DE'
 
 /**
+ * The wall clock Raven is filmed on.
+ *
+ * The sibling of `RAVEN_LOCALE`, and needed for the same class of reason: the
+ * language decides the words on screen, this decides the numbers. A recording
+ * runs in a container whose clock is UTC, so without it every time Raven
+ * prints is an hour or two off — and in a scene that ASKS for a time (M2 asks
+ * for "10 Uhr") the picture then contradicts the sentence that produced it.
+ * Measured against staging on 2026-09-20: the same appointment read back as
+ * `08:00–09:00` in the calendar grid without it and as `10:00–11:00` with it.
+ */
+export const RAVEN_TIMEZONE = 'Europe/Berlin'
+
+/**
  * A fixed clock, so two recordings show the same relative times ("3 days ago"
  * otherwise moves between two runs).
  */

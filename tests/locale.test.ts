@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { localeLaunchEnvironment, readLocale } from '../src/locale.js'
+import {
+  localeLaunchEnvironment,
+  readLocale,
+  readTimezone,
+} from '../src/locale.js'
 import { readContextSettings } from '../src/pipeline.js'
+import { contextOptionsFor } from '../src/session.js'
 
 describe('readLocale (featurecast#172)', () => {
   it('canonicalizes a tag with a region', () => {
@@ -48,5 +53,42 @@ describe('localeLaunchEnvironment', () => {
       LC_MESSAGES: 'en_US.UTF-8',
     })
     expect(environment).toEqual({ LANG: 'de_AT.UTF-8', LANGUAGE: 'de_AT:de' })
+  })
+})
+
+describe('readTimezone', () => {
+  it('accepts an IANA name', () => {
+    expect(readTimezone('Europe/Berlin')).toBe('Europe/Berlin')
+  })
+
+  it('names the export when the value is not a string', () => {
+    expect(() => readTimezone(2, 'demo/x.ts')).toThrow(/demo\/x\.ts.*timezone/s)
+  })
+
+  it('rejects a name the browser would also reject', () => {
+    expect(() => readTimezone('Europe/Atlantis')).toThrow(/not an IANA/)
+  })
+})
+
+describe('timezone reaches the recording context', () => {
+  it('is read off the script module like locale is', () => {
+    expect(
+      readContextSettings({ locale: 'de-DE', timezone: 'Europe/Berlin' }),
+    ).toMatchObject({ locale: 'de-DE', timezone: 'Europe/Berlin' })
+  })
+
+  it('becomes the context option Playwright understands', () => {
+    const options = contextOptionsFor(
+      {
+        capture: { strategy: 'screencast' },
+        device: {},
+      } as never,
+      { height: 800, width: 1200 },
+      undefined,
+      false,
+      'de-DE',
+      'Europe/Berlin',
+    )
+    expect(options.timezoneId).toBe('Europe/Berlin')
   })
 })
