@@ -43,23 +43,64 @@ import type { BrowserContext } from 'playwright'
 /**
  * The script every document of the context runs before its own scripts.
  *
- * Applied three times on purpose. An init script runs at document-start, when
- * a freshly navigated document may not have a root element yet — hence the
- * optional call. `DOMContentLoaded` catches that case. `readystatechange`
- * catches a document whose root was REPLACED after parsing, which is what
- * `Document.write` and Playwright's own `setContent` do.
+ * WHY IT IS A STRING AND NOT A FUNCTION — the defect this file was written to
+ * prevent, and shipped anyway. Scene M2 was recorded on 2026-09-19 with this
+ * lever installed and delivered with two squiggles in it: 52 of 1074 portrait
+ * frames, found by `tools/rote-welle/detect.py`. The lever was not weak, it
+ * never ran. A recording runs through `tsx`, whose esbuild keeps function
+ * names by rewriting `const aus = () => {}` into `const aus = __name(() => {},
+ * "aus")`. Playwright injects the payload by its source text, `__name` does
+ * not exist in the page, and the whole script dies on its first line with
+ * `ReferenceError: __name is not defined` — where nobody sees it, because an
+ * init script's exception is a page error and a recording does not read those.
+ * Measured against staging on 2026-09-20: with the function payload the root
+ * carried no attribute at all in three runs out of three; the same logic as a
+ * string carried `spellcheck="false"`.
  *
- * Exported so a test can install it without the whole recording chain, and so
- * the attribute name appears exactly once.
+ * `hideOverlay` and `pinClockAndRandomness` in `src/recipes.ts` are strings for
+ * exactly this reason and say so. This one was not, and that is the whole
+ * story of the squiggle that survived its own fix.
+ *
+ * WHY IT HOLDS THE ATTRIBUTE INSTEAD OF SETTING IT. Setting it at three known
+ * moments only works if nothing takes it off afterwards, and the filmed
+ * application is a hydrating React shell that owns `<html>`. A `MutationObserver`
+ * on the root's own attributes puts it back whatever removes it, for the life
+ * of the document. The eager call stays: the observer cannot watch a root that
+ * does not exist yet, which at document-start it does not.
+ *
+ * The restore counter is diagnosis, not decoration — it says whether a clean
+ * take was clean because nothing touched the attribute or because the observer
+ * kept winning. It is a window property and invisible on camera.
  */
-export const SPELLCHECK_OFF_SCRIPT = (): void => {
-  const aus = (): void => {
-    document.documentElement?.setAttribute('spellcheck', 'false')
-  }
-  aus()
-  document.addEventListener('DOMContentLoaded', aus)
-  document.addEventListener('readystatechange', aus)
-}
+export const SPELLCHECK_OFF_SCRIPT =
+  '(function () {' +
+  '  if (window.__featurecastSpellcheckRestored === undefined) {' +
+  '    window.__featurecastSpellcheckRestored = 0;' +
+  '  }' +
+  '  var aus = function () {' +
+  '    var wurzel = document.documentElement;' +
+  '    if (!wurzel) return;' +
+  '    if (wurzel.getAttribute("spellcheck") === "false") return;' +
+  '    wurzel.setAttribute("spellcheck", "false");' +
+  '    window.__featurecastSpellcheckRestored += 1;' +
+  '  };' +
+  '  var beobachten = function () {' +
+  '    var wurzel = document.documentElement;' +
+  '    if (!wurzel || wurzel.__featurecastBeobachtet) return;' +
+  '    wurzel.__featurecastBeobachtet = true;' +
+  '    new MutationObserver(aus).observe(wurzel, {' +
+  '      attributeFilter: ["spellcheck"]' +
+  '    });' +
+  '  };' +
+  '  var haltIt = function () { aus(); beobachten(); };' +
+  '  haltIt();' +
+  '  document.addEventListener("DOMContentLoaded", haltIt);' +
+  '  document.addEventListener("readystatechange", haltIt);' +
+  '  new MutationObserver(haltIt).observe(document, { childList: true });' +
+  '})()'
+
+/** The counter `SPELLCHECK_OFF_SCRIPT` keeps, for a probe or a test to read. */
+export const SPELLCHECK_RESTORE_COUNTER = '__featurecastSpellcheckRestored'
 
 /**
  * Installs it on `context`.
