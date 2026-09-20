@@ -71,8 +71,15 @@ export type DeviceDescriptor = {
 export type DeviceRegistry = Readonly<Record<string, DeviceDescriptor>>
 
 /**
- * Which mechanism produces frames. Two, because M3 measured four and kept
- * the two that work; docs/M3-VERDICT.md holds the numbers each was dropped on.
+ * Which mechanism produces frames. Two, because M3 measured five routes and
+ * kept the two that work. The three that were dropped, with the number each
+ * died on: screenshot capture (`Page.captureScreenshot` with `clip.scale`) is
+ * equally sharp but collapses to 8.8 frames/s the moment anything on the page
+ * moves, so it is not video; `Emulation.setDeviceMetricsOverride` with `scale`
+ * changes the layout height and nothing else, delivering 393x699 where
+ * 1080x1920 was asked for; and `--force-device-scale-factor` does make the
+ * pixel ratio real, but Chromium enforces a minimum window width, so a
+ * requested 393 comes back as 502.
  *
  * - `screencast` films the page directly (M1, src/capture.ts). Right whenever
  *   the layout width and the recorded width may be the same number, which is
@@ -227,7 +234,8 @@ type Preset = {
  * outside the finished frame, and 1920x1080 has none to give.
  *
  * 2560x1600 rather than a larger number, for three reasons. It is the only
- * desktop geometry with measurements behind it (docs/M1-VERDICT.md). It is
+ * desktop geometry with measurements behind it: M1 accepted a 1920x1080,
+ * constant-60fps, 62.78s recording downscaled from it. It is
  * exactly the 1.33x linear reserve PLAN.md names, over the widest output any
  * desktop preset carries (1920x1200). And it is a viewport a real web app
  * still lays out sensibly; height is what a taller capture would have to buy,

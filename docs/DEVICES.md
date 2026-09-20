@@ -76,8 +76,8 @@ frame is resampled instead of copied, 97 s against 36 s for the same
 100-second tour on the AI box. A run that does not want it says so:
 `reserve: 1` on the device, or `--reserve 1` on the command line. Until
 2026-09-18 the phone presets recorded exactly their output, because the larger
-area looked like it halved the frame rate; [M3-VERDICT.md](M3-VERDICT.md)
-records that measurement and why its explanation was wrong.
+area looked like it halved the frame rate; M3 measured that and found the
+explanation wrong.
 
 **A phone recording presents at 60 Hz, like desktop.** Until 2026-09-18 it did
 not: every phone video was 30 Hz content in a 60 fps file, behind a yield gate
@@ -233,7 +233,7 @@ two presets.
 presets carried a state of their own, `pending`, which aborted on use and named
 the milestone. M3 answered the question, so the state is gone — together with
 the two strategies that were measured and rejected. What was open now stands as
-a result in [M3-VERDICT.md](M3-VERDICT.md) and not as a dead branch in the code.
+a result and not as a dead branch in the code.
 
 **The pointer follows `hasTouch`.** The pointer column of the table is exactly
 the touch capability of the profile (arrow on the three desktop profiles, touch
