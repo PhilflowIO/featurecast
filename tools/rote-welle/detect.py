@@ -56,6 +56,16 @@ LUECKE = 9
 # happily call a squiggle (scene M3 films it on purpose).
 MAX_BREITE_ANTEIL = 0.35
 
+# How densely the box has to be filled with red before it counts.
+#
+# The bound that separates a squiggle from red LETTERING, which is the only
+# other thing in this product shaped like a wide thin red run: Raven's
+# "Verlassen" in the meeting bar reads 76x11 px and tripped every frame of
+# scene M3 before this. A squiggle is a continuous stroke and fills its own box;
+# a word is mostly the gaps between its letters. Measured on the three known
+# positives: 0.39, 0.39 and 0.34. Measured on "Verlassen": 0.15.
+MIN_FUELLUNG = 0.25
+
 
 def rote_maske(bild: np.ndarray) -> np.ndarray:
     """Near-saturated red: red clearly dominant, the other two channels low."""
@@ -85,6 +95,8 @@ def wellen(bild: np.ndarray) -> list[dict[str, int]]:
         # Counted on the raw mask, so a wide dilation cannot inflate it.
         flaeche = int(maske[y_schlitz, x_schlitz].sum())
         if flaeche < MIN_PIXEL:
+            continue
+        if flaeche < MIN_FUELLUNG * breite * hoehe:
             continue
         treffer.append(
             {
