@@ -26,6 +26,16 @@ import {
  *      meeting and the recipient; only the click on "Senden" sends it.
  *   2. "Put an appointment in the calendar." Raven fills in title, time and
  *      target calendar and stops again, on its own card, with "Bestätigen".
+ *   3. The appointment, standing in Raven's own calendar on the day it was
+ *      asked for. The scene's spoken line is about the calendar, so the clip
+ *      has to arrive there and not stop at the confirmation sentence.
+ *
+ * NO PROVIDER IS NAMED OR SHOWN. The connected calendar is Google's, because
+ * it is the only provider with a usable test account — there is none for
+ * Apple, and the Microsoft test directory withholds admin consent. The spoken
+ * line therefore names no provider, and the one surface that would have shown
+ * which one it is (the chip row of connected calendars) is hidden for this
+ * scene; see `KALENDER_CHIPS`.
  *
  * WHY NOTHING LEAVES THE HOUSE. The recipient is on `demo.raven.ceo`, which
  * does not exist in DNS at all — no MX, no A, not even an SOA — so no mail
@@ -92,8 +102,9 @@ const FRAGE_MAIL = `Schick die Zusammenfassung von "${MEETING_WORT}" an ${EMPFAE
  * "Di., 22. September". A relative day the viewer cannot check against a
  * calendar in their head cannot contradict itself.
  */
-const FRAGE_TERMIN =
-  'Leg mir morgen um 10 Uhr einen Termin "Nachkontrolle Absaugung" an'
+const TERMIN_TITEL = 'Nachkontrolle Absaugung'
+
+const FRAGE_TERMIN = `Leg mir morgen um 10 Uhr einen Termin "${TERMIN_TITEL}" an`
 
 /**
  * The composer's send button.
@@ -119,6 +130,42 @@ const TERMIN_KARTE = '[data-testid="confirm-schedule-card"]'
 const TERMIN_JA = '[data-testid="confirm-schedule-yes"]'
 
 /**
+ * The way to Raven's own calendar, and what stands there afterwards.
+ *
+ * The spoken line of this scene is "Der Termin steht — in dem Kalender, den
+ * du mitbringst", so the STANDING appointment has to be on screen; the
+ * confirmation sentence in the chat is the way there, not the arrival.
+ *
+ * `visible=true` on the tab is not decoration. The shell renders BOTH
+ * navigations into the document — the desktop row and the phone's bottom tab
+ * bar — and hides one of them in CSS. Without the filter the locator is
+ * ambiguous, and an ambiguous locator has no geometry for the recorder to
+ * point at, on either device.
+ *
+ * `exact=true` on "Tag" for the neighbouring reason: the header also carries
+ * "Tag zurück" and "Tag vor", and a role name matches as a substring by
+ * default, so the plain name would have matched three buttons.
+ */
+const TERMINE_TAB = 'a[href="/calendar"] >> visible=true >> nth=0'
+const TERMINE_UEBERSCHRIFT = 'h1:has-text("Meine Termine")'
+const TAG_ANSICHT = 'role=button[name="Tag"][exact=true]'
+const EIN_TAG_VOR = 'role=button[name="Tag vor"][exact=true]'
+const STEHENDER_TERMIN = `[data-testid="calendar-event"]:has-text("${TERMIN_TITEL}") >> nth=0`
+
+/**
+ * The calendar chip row, hidden for this scene only.
+ *
+ * Each chip carries a connected calendar's display name, and a Google primary
+ * calendar's display name IS the account's mail address — so the row would put
+ * the address of a shared test account into every frame of the last act. It is
+ * also the one place on the page where the provider becomes visible at all,
+ * and the spoken line deliberately names no provider (there is no Apple test
+ * account and no directory consent for Microsoft, so naming one on film would
+ * make the line a lie about what was shown).
+ */
+const KALENDER_CHIPS = '[data-testid="calendar-switcher"]'
+
+/**
  * How long a turn may take before the take is called off.
  *
  * Longer than the shared `ANTWORT_FRIST_MS`: both turns here run a routed
@@ -133,17 +180,22 @@ const LESEZEIT_MS = 3500
 /**
  * Film act one only — the mail Raven writes and the human releases.
  *
- * Default ON while flow.raven#7466 is open, because the second act cannot be
- * filmed today (see its own comment further down). Set
- * `RAVEN_M2_MIT_TERMIN=1` to film the whole scene once that is fixed; that is
- * the only step needed to get the appointment back.
+ * Default OFF since 2026-09-20: flow.raven#7466 is fixed and live on staging,
+ * so a second turn survives a recording again and the whole scene is filmable.
+ * The switch used to be the other way round (`RAVEN_M2_MIT_TERMIN=1` turned
+ * the appointment ON) while that defect was open; keeping a flag whose stated
+ * reason has expired is how a take quietly films less than it should, so the
+ * default follows the product and the name follows the default.
+ *
+ * Set `RAVEN_M2_OHNE_TERMIN=1` to film the mail alone — the only case that
+ * still needs it is a reshoot of the delivered act-one clip.
  */
-const OHNE_TERMIN = process.env.RAVEN_M2_MIT_TERMIN !== '1'
+const OHNE_TERMIN = process.env.RAVEN_M2_OHNE_TERMIN === '1'
 
 export const url = RAVEN_URL
 export const devices = ['desktop-wide', 'iphone']
 export const storageStatePath = RAVEN_STATE
-export const hideSelectors = RAVEN_HIDE_SELECTORS
+export const hideSelectors = [...RAVEN_HIDE_SELECTORS, KALENDER_CHIPS]
 export const locale = RAVEN_LOCALE
 
 // NO `fixedTime` HERE — this scene sends TWO turns, and the second one dies
@@ -196,18 +248,13 @@ export default async function aufZuruf(
 
   // ── Act two: the appointment, gated the same way ─────────────────────────
   //
-  // Switched OFF by default until flow.raven#7466 is fixed, and switched off
-  // by a value rather than by deleting the act, so the scene becomes whole
-  // again by removing an environment variable rather than by someone
-  // reconstructing this code from a handoff.
-  //
-  // Why it is off: the appointment is the SECOND agent turn of the
-  // conversation, and a second turn does not survive a recording today — the
-  // recorder pins the two inputs Raven builds its message ids from, the ids
-  // collide, and the turn ends in "Antwort fehlgeschlagen". Dropping the
-  // pinned clock was necessary and not sufficient; see the module header and
-  // the handoff. Act one carries the promise of the scene on its own: Raven
-  // writes, the human releases.
+  // This act was unfilmable until 2026-09-20. The appointment is the SECOND
+  // agent turn of the conversation, and a recording pins the clock and seeds
+  // the generator Raven minted its message ids from, so from the second turn
+  // on every id was the one the first turn already used, React collapsed two
+  // messages onto one node and the turn died with "Antwort fehlgeschlagen".
+  // Three takes died there. flow.raven#7466 moved the id to
+  // `crypto.randomUUID()`, which hangs on neither source.
   if (OHNE_TERMIN) {
     await demo.hold(2500)
     return
@@ -237,10 +284,43 @@ export default async function aufZuruf(
 
   await ruhigKlicken(demo, TERMIN_JA)
   // The gate disappears when the write has run; what follows it is Raven's
-  // confirmation. Waiting for the card to be gone is the honest end of the
-  // scene — waiting for a phrase would pin the model's wording.
+  // confirmation. Waiting for the card to be gone is the honest signal that
+  // the write happened — waiting for a phrase would pin the model's wording.
   await warteAufVerschwunden(page, TERMIN_KARTE, 90_000)
-  await demo.hold(4000)
+  await demo.hold(2500)
+
+  // ── Act three: the appointment, standing ─────────────────────────────────
+  //
+  // The scene's line is about the calendar, not about the chat, so it ends in
+  // the calendar. Day view on purpose: the week grid puts one appointment in a
+  // 7-column field where it is a coloured sliver, and the phone does not render
+  // the week at all. Day view is the same shot on both devices — and because
+  // the request said "morgen", one step forward is the whole navigation.
+  await ruhigKlicken(demo, TERMINE_TAB)
+  await warteAuf(page, TERMINE_UEBERSCHRIFT, 30_000)
+  await demo.hold(1200)
+
+  await ruhigKlicken(demo, TAG_ANSICHT)
+  await demo.hold(800)
+  await ruhigKlicken(demo, EIN_TAG_VOR)
+
+  // If it is not there, the take has to say so rather than film an empty day:
+  // a calendar that answers slowly and one that never received the write look
+  // identical for the first few seconds.
+  try {
+    await warteAuf(page, STEHENDER_TERMIN, 60_000)
+  } catch (fehler) {
+    throw new Error(
+      `${fehler instanceof Error ? fehler.message : String(fehler)} — the ` +
+        `appointment "${TERMIN_TITEL}" was confirmed in the chat but does ` +
+        'not stand in the calendar on the following day. Either the write ' +
+        'went to a different calendar than the one that is read back, or it ' +
+        'landed on a different day than the one this scene steps to.',
+    )
+  }
+  await inDieMitte(page, demo, STEHENDER_TERMIN, { tempo: FILM_SCROLL_TEMPO })
+  await demo.point(STEHENDER_TERMIN)
+  await demo.hold(5000)
 }
 
 /**
