@@ -2,6 +2,7 @@ import type { Frame } from 'playwright'
 
 import type { Demo, RecordPage } from '../src/record.js'
 import {
+  ANTWORT_OHNE_NUMMER,
   EINGABE,
   FILM_SCROLL_TEMPO,
   RAVEN_ALLOW_FRAMING,
@@ -90,8 +91,29 @@ const NUR_ZUSAMMENFASSUNGEN = 'In keinem Transkript'
 /** The hero of the empty assistant: the first frame of the clip. */
 const HERO = 'h1:has-text("Was möchtest du wissen?")'
 
-/** Reading time once the whole answer stands. */
-const LESEZEIT_MS = 7000
+/**
+ * How long the answer's FIRST lines stand before the camera travels to the
+ * three dated conversations. Enough to read into it, not a standstill.
+ */
+const ANLESEN_MS = 2500
+
+/**
+ * The scene's load-bearing window: the three dated conversations together and
+ * motionless in frame. A whole spoken line of the film rests on it, so it is
+ * the one hold in this script that is a requirement and not a taste.
+ *
+ * Six seconds and not five: the delivery is cut from this, and a cut that has
+ * to land exactly on both edges of its only usable window has no room to
+ * breathe.
+ */
+const LESEFENSTER_MS = 6000
+
+/**
+ * The tail. Deliberately short — the previous take ended on 15.9 s (desktop)
+ * and 18.2 s (phone) of one still frame, which is footage the cut has to throw
+ * away by hand.
+ */
+const AUSKLANG_MS = 2500
 
 export const url = RAVEN_URL
 export const devices = ['desktop-wide', 'iphone']
@@ -166,14 +188,96 @@ export default async function erinnertSich(
   }
 
   // The answer arrived stuck to its own bottom edge. Bring its FIRST line up
-  // so the clip shows the reading begin, then travel down through it at the
-  // film's pace.
+  // so the clip shows the reading begin.
   await anfangZeigen(page, demo, antwort(0))
-  await demo.hold(LESEZEIT_MS)
-  await demo.scroll(0, await restHoehe(page, antwort(0)), {
-    speedPxPerSecond: FILM_SCROLL_TEMPO,
-  })
-  await demo.hold(LESEZEIT_MS)
+  await demo.hold(ANLESEN_MS)
+
+  // Then place the three dated conversations in the middle and STOP there.
+  // This is the shot the film's spoken line is written against, so the take
+  // reports whether it really got it instead of leaving it to be discovered in
+  // the edit — the previous take held it for 1.3 s and nobody knew until then.
+  await fensterZeigen(page, demo)
+  const fenster = await datumsFenster(page)
+  console.log(`M1-LESEFENSTER ${JSON.stringify(fenster)}`)
+  await demo.hold(LESEFENSTER_MS)
+
+  // Only then down through whatever is still below — the block naming the
+  // conversations it did not read. A travel shorter than 60 px is skipped so
+  // the clip does not twitch for show.
+  const rest = await restHoehe(page, antwort(0))
+  if (rest > 60) {
+    await demo.scroll(0, rest, { speedPxPerSecond: FILM_SCROLL_TEMPO })
+  }
+  await demo.hold(AUSKLANG_MS)
+}
+
+/**
+ * Where the three dated conversations stand right now, and whether they stand
+ * there TOGETHER.
+ *
+ * Measured per date and not on the answer node as a whole: the answer also
+ * carries the block naming the conversations it did not read, and that block
+ * may hang below the lower edge without costing this scene anything. What may
+ * not hang below the edge is one of the three.
+ */
+async function datumsFenster(page: RecordPage): Promise<{
+  alleImBild: boolean
+  hoehe: number
+  imBild: number
+  oben: number
+  unten: number
+  viewport: number
+}> {
+  const viewport = page.viewportSize()?.height ?? 0
+  let oben = Number.POSITIVE_INFINITY
+  let unten = Number.NEGATIVE_INFINITY
+  let imBild = 0
+  for (const datum of GESPRAECHE) {
+    const box = await page
+      .locator(`${ANTWORT_OHNE_NUMMER} >> text=${datum} >> nth=0`)
+      .boundingBox()
+    if (box === null) continue
+    oben = Math.min(oben, box.y)
+    unten = Math.max(unten, box.y + box.height)
+    if (box.y >= 0 && box.y + box.height <= viewport) imBild += 1
+  }
+  if (!Number.isFinite(oben)) {
+    return {
+      alleImBild: false,
+      hoehe: 0,
+      imBild: 0,
+      oben: 0,
+      unten: 0,
+      viewport,
+    }
+  }
+  return {
+    alleImBild: imBild === GESPRAECHE.length,
+    hoehe: Math.round(unten - oben),
+    imBild,
+    oben: Math.round(oben),
+    unten: Math.round(unten),
+    viewport,
+  }
+}
+
+/**
+ * Scrolls so the three dates sit in the middle of the frame.
+ *
+ * If they are taller than the frame there is nothing to centre and the scroll
+ * is skipped: moving would only trade one date off the top for another off the
+ * bottom. `datumsFenster` then reports `alleImBild: false`, which is the
+ * honest answer — the layout does not give this shot on that device.
+ */
+async function fensterZeigen(page: RecordPage, demo: Demo): Promise<void> {
+  const vorher = await datumsFenster(page)
+  if (vorher.viewport === 0 || vorher.hoehe === 0) return
+  if (vorher.hoehe > vorher.viewport * 0.9) return
+  const abstand = Math.round(
+    vorher.oben + vorher.hoehe / 2 - vorher.viewport * 0.5,
+  )
+  if (Math.abs(abstand) <= 60) return
+  await demo.scroll(0, abstand, { speedPxPerSecond: FILM_SCROLL_TEMPO })
 }
 
 /** The answer as text, for the gate above. */

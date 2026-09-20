@@ -113,6 +113,35 @@ const AUFNAHME_FRIST_MS = 90_000
 /** How long the running recording is held, so the notice can be read. */
 const LAUFZEIT_MS = 9000
 
+/** The establishing shot: the room, before anything happens in it. */
+const TOTALE_MS = 5000
+
+/** The shared screen, standing still long enough to be seen for what it is. */
+const ZEIGEN_MS = 5000
+
+/**
+ * The label in the corner of the shared tile.
+ *
+ * It read "<Name>'s screen" in English until flow.raven#7468 — one string, in
+ * our own file, carried in from LiveKit's body along with the tile (#5081).
+ * A take that still shows it is a take with an English word in a German
+ * product film, and that is exactly the defect this re-shoot exists to remove,
+ * so it ends the take rather than being noticed in the edit.
+ */
+async function pruefeBeschriftung(page: RecordPage): Promise<void> {
+  const text = await page.evaluate<string>(() => {
+    const kachel = document.querySelector('[data-lk-source="screen_share"]')
+    return kachel?.textContent ?? ''
+  })
+  if (/'s screen/i.test(text) || !text.includes('Bildschirm')) {
+    throw new Error(
+      `The shared tile is not labelled in German: ${JSON.stringify(text)}. ` +
+        `Expected "<Name> · Bildschirm" (flow.raven#7468). Filming this ` +
+        `would put an English string into a German product film.`,
+    )
+  }
+}
+
 function pflicht(name: string): string {
   const wert = process.env[name]
   if (wert === undefined || wert === '') {
@@ -200,13 +229,17 @@ export default async function videoraum(
   page: RecordPage,
   demo: Demo,
 ): Promise<void> {
-  await demo.hold(2000)
+  // The room as a wide shot, before anything happens in it. Five seconds and
+  // not two: this is the establishing shot of the scene and the cut needs a
+  // stretch it can sit on, not a beat it has to stretch.
+  await demo.hold(TOTALE_MS)
 
   // The protocol goes on the shared screen first, so the recording that starts
   // next has something to record and the room has something to look at.
   await ruhigKlicken(demo, TEILEN)
   await warteAuf(page, GETEILTE_KACHEL, 45_000)
-  await demo.hold(3500)
+  await pruefeBeschriftung(page)
+  await demo.hold(ZEIGEN_MS)
 
   await ruhigKlicken(demo, AUFNEHMEN)
   await warteAuf(page, VIDEO_UND_TON, 10_000)
