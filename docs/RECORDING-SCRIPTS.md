@@ -445,7 +445,7 @@ future and holds its first keyframe — a list that fades its rows in from
 `opacity: 0` is filmed empty while the DOM is full. And the fake frame loop
 starves the measurement the wrapper uses before every interaction to check
 whether the target's geometry stands still (`observeFrames` in
-`src/record.ts`). `tests/fixed-time.browser.test.ts` guards both.
+`src/record.ts`). `tests/fixed-time.gpu.test.ts` guards both.
 
 `record()`'s own seed (`seed`) covers something different: the randomness of
 the pointer movement and of the typing delays. Same `seed`, same track. It

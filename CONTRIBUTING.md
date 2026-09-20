@@ -42,6 +42,27 @@ pnpm test
 A pre-commit hook runs the type check and lints staged files. Do not bypass it
 with `--no-verify`; if it fails, fix the cause.
 
+### The two test tiers
+
+`pnpm test` runs the portable tier: everything that does not record. It passes
+on any machine, including a CI runner with no GPU.
+
+The tests named `*.gpu.test.ts` record, and a recording proves nothing on a
+software GL renderer — it runs at about 17 frames a second while every
+frame-count and duration check still passes. They run on a machine with a
+graphics card:
+
+```bash
+pnpm test:gpu            # here, if this machine has a GPU
+tools/gpu-box/test.sh    # or on the GPU host, and bring the receipt back
+```
+
+The second form writes `docs/evidence/gpu-tier/latest.json`. **Commit it.**
+`pnpm test` reads that receipt and fails whenever `src/` or a recording test
+has changed since the recording tier last ran — which is what keeps the split
+from buying a green check instead of a guarantee. If it tells you the receipt
+is stale, the remedy is a run on the GPU host, not an edit to the test.
+
 The `tools/smoothness/` directory is a standalone Python tool with its own
 dependency manifest, deliberately not part of the shipped package:
 

@@ -1,3 +1,10 @@
 pnpm-lock.yaml
 artifacts/
 auth/
+
+# The recording container (tools/gpu-box) unpacks Chromium and keeps its
+# package store inside the working directory. Neither is ours to format, and
+# without these two lines the checks pass here and fail in there.
+.box-browsers/
+.pnpm-store/
+.playwright-mcp/

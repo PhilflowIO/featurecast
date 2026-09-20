@@ -26,3 +26,6 @@ playwright/.auth/
 
 # Browsers a GPU-host recording installs into its checkout (tools/gpu-box).
 .box-browsers/
+
+# The recording container keeps its package store inside the working copy.
+.pnpm-store/

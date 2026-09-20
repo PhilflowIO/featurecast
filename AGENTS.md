@@ -11,7 +11,8 @@ Use pnpm with Node 22 or later.
 - `pnpm install` installs dependencies.
 - `pnpm browsers:install` downloads Chromium after a clean install.
 - `pnpm demo:hello` launches a headless Playwright page and exits; it is the M0 smoke test.
-- `pnpm test` runs the Vitest suite.
+- `pnpm test` runs the portable Vitest tier — everything that does not record. It needs no GPU.
+- `pnpm test:gpu` runs the recording tier (`tests/*.gpu.test.ts`), which needs hardware GL; `tools/gpu-box/test.sh` runs it on the GPU host and writes the receipt `docs/evidence/gpu-tier/latest.json`, which belongs in the commit. Naming matters: `*.gpu.test.ts` reaches `recordSession`, `*.browser.test.ts` starts a browser without recording, and `tests/tiers.test.ts` fails if a file sits in the wrong one.
 - `pnpm typecheck` checks TypeScript without emitting files.
 - `pnpm lint` runs ESLint, and `pnpm format` verifies Prettier formatting.
 
