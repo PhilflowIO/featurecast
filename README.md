@@ -1,98 +1,113 @@
 # featurecast
 
-**Turn your Playwright script into a product demo video.** Nothing is burned into the recording — cursor, zoom and framing are rendered afterwards, from a log.
+**Turn your Playwright script into a product demo video — filmed on twelve
+devices, each in its own layout, and re-cut without ever reopening the
+browser.**
 
-One browser run produces two things: clean raw footage and an event log of where the pointer went, what was clicked and which element it hit. Everything you can see in the finished video is decided after that. Changing the look is a re-render of seconds, not another browser run.
+One browser run produces clean footage and a log of where the pointer went,
+what was clicked and which element it hit. Everything visible in the finished
+video is decided after that, from the log: cursor, camera, pace, aspect ratio.
+Changing any of it is a re-render of seconds, not another visit to the
+application.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
 
-## One recording, every look
-
-![The same take rendered three ways: no pointer, the default pointer, a bigger pointer](docs/media/one-take-every-look.webp)
-
-Three versions of one browser run. The application behind them is the same
-pixels in all three, at the same instant — only the pointer is different,
-because the pointer is not in the recording. It is drawn afterwards from the
-log of where it went.
-
-That is what makes "can we have a bigger cursor" a re-render of a few seconds
-instead of another visit to the application. And the motion cannot drift while
-you try things, because nothing was recorded again.
-
-```bash
-pnpm compare plain/16-9.mp4 default/16-9.mp4 big/16-9.mp4 --out looks.mp4 \
-  --label "no pointer" --label "the default pointer" --label "a bigger pointer"
-```
-
----
-
-## Landing page, phone and social post
+## Every device, filmed as that device
 
 ![One script, three devices: desktop, tablet and phone, each in its own shape](docs/media/every-device-native.webp)
 
-Three videos out of one script. The wide one for the landing page, the tall
-one for the phone, the one in between for a tablet or a post — and each was
-filmed on that device, not cut out of the wide one afterwards.
-
-That is the difference a viewer notices without knowing why. On the phone
-video the application _is_ the phone version: bigger type, one column, a
-fingertip instead of a mouse pointer. A crop out of a desktop take gives you a
-desktop screen squeezed into a phone-shaped hole.
+The phone video is not a crop out of the wide one. The browser is told it is a
+phone before anything is filmed, so the application serves its phone layout —
+bigger type, one column, a fingertip instead of a mouse pointer — and that is
+what the camera sees.
 
 ```bash
 pnpm featurecast run demo/fixture-tour.ts --devices desktop,tablet,iphone
 ```
 
-Twelve devices are ready to name, and every phone and tablet Playwright knows
-works too — [docs/DEVICES.md](docs/DEVICES.md) lists them. If you do want all
-three shapes out of a single take anyway, `--all-formats` still delivers them.
+|                          | A screen recording                | featurecast                                                  |
+| ------------------------ | --------------------------------- | ------------------------------------------------------------ |
+| How a phone shot is made | crop or shrink a desktop take     | the browser renders the phone layout                         |
+| Portrait sharpness       | upscaled to fill 1080×1920        | native pixels, delivered at the size the capture can pay for |
+| Touch                    | a mouse pointer on a phone screen | `page.touchscreen`, drawn as a fingertip                     |
+| Device list              | whatever your display is          | twelve presets, plus every phone and tablet Playwright knows |
 
-One of the twelve is `desktop-4k`, and it comes with two conditions worth
-reading before you reach for it.
+Twelve presets are ready to name and the rest of Playwright's registry works
+too — [docs/DEVICES.md](docs/DEVICES.md) lists them. One take also yields
+several shapes: `--all-formats` delivers 16:9, 9:16 and 1:1 without a second
+browser run.
+
+**A format is only delivered at a size the capture can pay for.** A 2560×1600
+desktop capture does not contain a sharp 1080×1920 portrait frame — the largest
+9:16 rectangle in it is 900×1600. featurecast delivers 900×1600 at full
+sharpness and says so, instead of upscaling.
 
 **4K is a preset, not a promise about frame rate.** `desktop-4k` records and
 delivers 3840×2160 at 98.6 % yield, but the browser stops presenting sixty
 frames a second at that size: the median gap between presented frames is
 20.52 ms against 16.76 ms at 2560×1600. So: 4K, yes. 4K at 60, no.
 
-**At 4K the camera holds still.** The output is the whole capture area, so
-there is no reserve to crop into and every push-in clamps to 1.00×. For a
-large picture _and_ a moving camera, give the standard `desktop` preset
-`reserve: 2`: it records 3840×2160 for its 1920×1080 delivery, a 2× reserve
-instead of the usual 1.33×.
+---
 
-<!--
-  Two further comparisons and a full product video exist as full-resolution
-  60 fps MP4 and are deliberately not committed: GitHub renders an .mp4 from
-  the repository tree as a link rather than a player, and what each one
-  demonstrates (sharpness, frame yield) is exactly what a 128-colour GIF
-  destroys. They are uploaded once through GitHub's attachment lane and their
-  URLs pasted in here. See issue #103 for the sources.
--->
+## Measured against other recorders
+
+Twenty open-source recorders were read for what their source can do; three
+could run at all. All three filmed the same page on the same machine in the
+same container, and every output — including ours — was then read with the same
+instruments. Full method, evidence and the places it does not flatter us:
+[docs/COMPARISON.md](docs/COMPARISON.md).
+
+|                                       | Those three                   | featurecast                  |
+| ------------------------------------- | ----------------------------- | ---------------------------- |
+| Frames that carry a new picture       | 12–33 per second              | **37.5 per second**          |
+| Frame rate written into the container | 30–60, none of them delivered | 60, also not fully delivered |
+| Scroll a container sideways           | none of them can              | yes                          |
+| Portrait                              | none, or upscaled 1.78×       | native crop                  |
+| Aspect ratios from one take           | one, one, two                 | **three**                    |
+| Changing the look                     | starts a browser              | **starts no browser at all** |
+
+The point of the first row is not the ranking. A file can say sixty frames a
+second while every other frame repeats its predecessor, and `ffprobe` will
+still say sixty. The instrument that reads the picture instead of the header
+ships with the repository — [tools/cadence/](tools/cadence/README.md) — and is
+calibrated against five clips with a known answer.
 
 ---
 
-## The camera goes where you clicked
+## One take, every look
+
+![The same take rendered three ways: no pointer, the default pointer, a bigger pointer](docs/media/one-take-every-look.webp)
+
+Three versions of one browser run. The application behind them is the same
+pixels at the same instant; only the pointer differs, because the pointer was
+never recorded.
+
+| Decision                      | In a screen recording        | In featurecast                       |
+| ----------------------------- | ---------------------------- | ------------------------------------ |
+| Cursor shape, size, ripple    | captured pixels              | drawn at render time, from the log   |
+| Which element the zoom frames | captured pixels              | the logged bounding box of the click |
+| Aspect ratio                  | fixed at capture             | 16:9, 9:16 and 1:1 from one take     |
+| Idle passages                 | cut by hand                  | compressed from frame timestamps     |
+| Changing any of the above     | record the interaction again | re-run the renderer                  |
 
 ![The frame pushes in on the button the pointer is about to press, then pulls back out](docs/media/camera-follows-click.webp)
 
-Nobody framed this by hand. The video pushes in on the button that was
-pressed and pulls back out again, because the recording knows which element
-the click hit. Want it tighter, or calmer? That is a re-render, not another
-take:
+Nobody framed that by hand. The camera moves in by cropping into the original
+picture, never by blowing it up, so it goes only as close as the recording
+stays sharp — and says so when you ask for more.
 
 ```bash
 pnpm render artifacts/tour/desktop dist/tour --zoom 2.2 --padding 90
 ```
 
-It moves in by cropping into the original picture, never by blowing it up, so
-it only goes as close as the recording stays sharp — and it tells you when you
-have asked for more than that. A phone is filmed at 1.5× the size it is
-delivered, so the camera can move in up to 1.5× there too, at the full 60
-frames a second; `--reserve 1` films it at exactly its delivery size when disk
-and time matter more than the camera.
+Scrolling is the other thing that gives a demo video away. A wheel moves a
+page in lumps, one jump per notch, and at sixty frames a second a viewer sees
+every one of them. featurecast covers the same distance in eased steps, never
+more than 30 px between two frames.
+
+![Wheel packets against eased steps, side by side, on a slice of a table](docs/media/scroll-steps.webp)
 
 ---
 
@@ -146,48 +161,13 @@ export default async function featureXy(page: RecordPage, demo: Demo) {
 Signed-in sessions, cookie banners and frozen clocks are covered in
 [docs/RECORDING-SCRIPTS.md](docs/RECORDING-SCRIPTS.md).
 
----
+Three finished recordings become one picture of the app on every device at
+once — the shot a product page opens with:
 
-## Where the decisions live
-
-The split between what the browser burns in and what stays adjustable is the
-whole idea:
-
-| Decision                      | In a screen recording        | In featurecast                       |
-| ----------------------------- | ---------------------------- | ------------------------------------ |
-| Cursor shape, size, ripple    | captured pixels              | drawn at render time, from the log   |
-| Which element the zoom frames | captured pixels              | the logged bounding box of the click |
-| Aspect ratio                  | fixed at capture             | 16:9, 9:16 and 1:1 from one take     |
-| Idle passages                 | cut by hand                  | compressed from frame timestamps     |
-| Changing any of the above     | record the interaction again | re-run the renderer                  |
-
-Two consequences worth naming, because they are unusual:
-
-**A format is only delivered at a size the capture can pay for.** A 2560×1600
-desktop capture does not contain a sharp 1080×1920 portrait frame — the
-largest 9:16 rectangle in it is 900×1600. featurecast delivers 900×1600 at
-full sharpness and says so, instead of upscaling.
-
-**Same decisions, same video, byte for byte.** Cropping, scaling and cursor
-drawing happen frame by frame in our own code rather than in ffmpeg's filter
-graph, because a time-driven command channel was not reproducible: six
-identical runs produced four different videos.
-
----
-
-## Scrolling that does not look cheap
-
-A wheel moves a page in lumps — one jump per notch — and at 60 frames a second
-a viewer sees every one of them. That judder is the first thing that gives a
-demo video away. featurecast covers the same distance in eased steps instead,
-so the picture never leaps between two frames.
-
-The same 700 px of sideways travel, in the same time, through the same three
-columns of the same table. Left: whole 38.9 px wheel packets, the procedure
-this tool used to have. Right: eased steps, never more than 30 px between two
-frames. Nothing else differs — same script, same page, same browser.
-
-![Wheel packets against eased steps, side by side, on a slice of a table](docs/media/scroll-steps.webp)
+```bash
+pnpm montage desktop.mp4 tablet.mp4 phone.mp4 --out shot.mp4 \
+  --device monitor --device tablet --device phone --still shot.png
+```
 
 ---
 
@@ -199,7 +179,7 @@ reached the file.
 | Browser                                         | Yield                                   |
 | ----------------------------------------------- | --------------------------------------- |
 | **The one `pnpm browsers:install` gives you**   | **98.8 %** (338 of 342, three of three) |
-| Chromium 153, the bundle before Playwright 1.64 | **84-88 %**, and it fails the 95 % gate |
+| Chromium 153, the bundle before Playwright 1.64 | **84–88 %**, and it fails the 95 % gate |
 
 Measured on the benchmark machine, 2026-09-17, at 2560×1600 with the same tour
 and three repeats per arm.
@@ -211,28 +191,18 @@ compile. `CHROME_BIN` still points a run at any other Chromium; one older than
 
 **What changed, and why the number moves so much.** Chromium stops handing out
 screencast frames once too many are unacknowledged, and its default bound of
-three is too low for a 2560×1600 capture: the same run scores 82-90 % at three
+three is too low for a 2560×1600 capture: the same run scores 82–90 % at three
 and 98.8 % at twelve. Playwright's screencast wrapper cannot pass that bound at
 all, so featurecast drives the recording over the browser protocol directly.
 This used to require a self-built Chromium; since Chromium 154 it no longer
-does.
+does. There is no second reason to build your own browser either: switching
+off Chromium's `AnimatedContentSampler`, once blamed for judder in sideways
+scrolling, changes nothing three instruments can see over nine runs
+([docs/CAPTURE-CADENCE.md](docs/CAPTURE-CADENCE.md)).
 
-**There is no longer a second reason to build your own browser.** The patched
-build also switched off Chromium's `AnimatedContentSampler`, which locks onto
-one damage region during an animation and was blamed for a visible judder in
-sideways scrolling. Measured against three instruments — capture yield, frame
-cadence, and smoothness of the finished video — at both queue depths, nine runs:
-switching it off changes nothing any of them can see. The judder that was
-attributed to it belonged to the starved frame queue next door. Full analysis in
-[docs/CAPTURE-CADENCE.md](docs/CAPTURE-CADENCE.md).
-
-**Measured against three other open-source recorders**, on one machine, one
-page, one container, with the same instruments applied to every output
-including ours: [docs/COMPARISON.md](docs/COMPARISON.md). The short version —
-none of the three can scroll a container sideways, all three write a container
-frame rate they do not deliver, and only featurecast re-renders without
-starting a browser. It does not flatter us everywhere: one of them captures at
-3840×2160 and encodes at eight times our bitrate.
+**Yield is not cadence.** 98.8 % of presented frames reach the file, and 37.4 %
+of the frames in the finished video still repeat their predecessor — the
+capture's own timeline is the open problem, not the transport.
 
 Status: pre-1.0, not published to npm, interfaces still move between
 milestones. [MILESTONES.md](MILESTONES.md) lists what is accepted and what is
@@ -243,11 +213,11 @@ not, each with a criterion you can run yourself.
 ## Documentation
 
 - **[docs/RECORDING-SCRIPTS.md](docs/RECORDING-SCRIPTS.md)** — turn an existing Playwright script into a recording
-- **[docs/DEVICES.md](docs/DEVICES.md)** — the eleven device presets and how they resolve
-- **[PLAN.md](PLAN.md)** · **[MILESTONES.md](MILESTONES.md)** — architecture and acceptance criteria
-- **[docs/INTERNALS.md](docs/INTERNALS.md)** — how it works in full detail
+- **[docs/DEVICES.md](docs/DEVICES.md)** — the twelve device presets and how they resolve
 - **[docs/COMPARISON.md](docs/COMPARISON.md)** — measured against three other recorders, and where it does not flatter us
-- **[docs/YIELD-BENCH.md](docs/YIELD-BENCH.md)** — measure capture yield yourself
+- **[docs/INTERNALS.md](docs/INTERNALS.md)** — how it works in full detail
+- **[docs/YIELD-BENCH.md](docs/YIELD-BENCH.md)** · **[tools/cadence/](tools/cadence/README.md)** · **[tools/smoothness/](tools/smoothness/README.md)** — measure it yourself
+- **[PLAN.md](PLAN.md)** · **[MILESTONES.md](MILESTONES.md)** — architecture and acceptance criteria
 - **[docs/CAPTURE-CADENCE.md](docs/CAPTURE-CADENCE.md)** · **[docs/SMOOTHNESS.md](docs/SMOOTHNESS.md)** · **[docs/M1-VERDICT.md](docs/M1-VERDICT.md)** · **[docs/M3-VERDICT.md](docs/M3-VERDICT.md)** · **[docs/M4-ACCEPTANCE.md](docs/M4-ACCEPTANCE.md)** — the measurement record
 
 ---
