@@ -44,15 +44,20 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
 
       # The hosted runner has no GPU, so Chromium rasterizes in SwiftShader
-      # and the recorder's hardware-GL guard (featurecast#156) refuses to
-      # record at all. This check proves correctness, not frame rate, so the
-      # guard is opted out of here — explicitly, per run. The one test whose
-      # subject *is* the renderer skips itself under this switch rather than
-      # passing without having proven anything; it runs on the GPU host.
+      # and a recording would run at ~17fps while every frame-count and
+      # duration check still passed. The switch that waves that through is
+      # deliberately NOT set here: the tests that record live in their own
+      # tier (`*.gpu.test.ts`) and run on a GPU host instead. What this job
+      # runs is the portable tier — and that tier contains the two checks
+      # that keep the split honest: `tests/tiers.test.ts` (nothing that
+      # records may sit here, and this switch may not be set) and
+      # `tests/gpu-receipt.test.ts` (the recording tier has actually run
+      # against the current source). A recording change that skips the GPU
+      # host therefore turns this job red, on a runner with no GPU at all.
       - name: Tests
-        run: env -u CHROME_BIN FEATURECAST_ALLOW_SOFTWARE_RENDERER=1 pnpm test
+        run: env -u CHROME_BIN pnpm test
       - name: Browser smoke test
-        run: env -u CHROME_BIN FEATURECAST_ALLOW_SOFTWARE_RENDERER=1 pnpm demo:hello
+        run: env -u CHROME_BIN pnpm demo:hello
 
   # The smoothness instrument is a separate program with its own toolchain,
   # and it is checked in its own job so that a red product check does not

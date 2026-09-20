@@ -41,7 +41,9 @@
     "lint": "eslint .",
     "prepare": "simple-git-hooks",
     "render": "tsx src/render/cli.ts",
-    "test": "vitest run",
+    "test": "vitest run --project portable",
+    "test:all": "vitest run",
+    "test:gpu": "vitest run --project gpu",
     "typecheck": "tsc --noEmit",
     "yield-bench": "tsx demo/yield-bench.ts"
   },
