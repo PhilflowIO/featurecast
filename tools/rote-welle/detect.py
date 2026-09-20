@@ -34,10 +34,27 @@ from scipy import ndimage
 # A squiggle sits between these bounds, measured on the known-positive take
 # (artifacts/raven-auf-zuruf, 2026-09-19): 186x11 px on the phone, narrower on
 # the desktop. The upper height bound keeps Raven's own red recording ring out.
-MIN_BREITE = 18
+MIN_BREITE = 24
 MAX_HOEHE = 22
 MIN_SEITENVERHAELTNIS = 3.0
-MIN_PIXEL = 40
+MIN_PIXEL = 30
+
+# How far apart two red marks may sit and still be one squiggle.
+#
+# This is the whole difference between a detector that works and one that
+# reports zero on a take that carries the defect. At phone scale the wave is a
+# continuous stroke; at desktop scale the same wave is drawn as 2x2 dots six
+# pixels apart, and connected-component labelling splits it into two dozen
+# specks that every size filter then throws away. Measured on the old M1
+# desktop take (2560x1600): 23 marks from x=1270 to x=1338, none of them
+# touching. Closing the gaps along x first makes it one run of 68 px.
+LUECKE = 9
+
+# A squiggle sits under a word, never across half the screen. The bound keeps
+# Raven's own recording notice out: that ring's top edge is a red line four
+# pixels tall and nearly the full frame wide, which every other rule here would
+# happily call a squiggle (scene M3 films it on purpose).
+MAX_BREITE_ANTEIL = 0.35
 
 
 def rote_maske(bild: np.ndarray) -> np.ndarray:
@@ -52,18 +69,21 @@ def wellen(bild: np.ndarray) -> list[dict[str, int]]:
     maske = rote_maske(bild)
     if not maske.any():
         return []
-    markiert, anzahl = ndimage.label(maske)
+    geschlossen = ndimage.binary_dilation(
+        maske, structure=np.ones((1, LUECKE), dtype=bool)
+    )
+    markiert, anzahl = ndimage.label(geschlossen)
     treffer: list[dict[str, int]] = []
+    breite_grenze = bild.shape[1] * MAX_BREITE_ANTEIL
     for y_schlitz, x_schlitz in ndimage.find_objects(markiert):
         hoehe = y_schlitz.stop - y_schlitz.start
         breite = x_schlitz.stop - x_schlitz.start
-        if hoehe > MAX_HOEHE or breite < MIN_BREITE:
+        if hoehe > MAX_HOEHE or breite < MIN_BREITE or breite > breite_grenze:
             continue
         if breite < MIN_SEITENVERHAELTNIS * hoehe:
             continue
-        flaeche = int(
-            maske[y_schlitz, x_schlitz].sum()
-        )
+        # Counted on the raw mask, so a wide dilation cannot inflate it.
+        flaeche = int(maske[y_schlitz, x_schlitz].sum())
         if flaeche < MIN_PIXEL:
             continue
         treffer.append(
