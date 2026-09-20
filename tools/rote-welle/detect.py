@@ -98,6 +98,13 @@ def wellen(bild: np.ndarray) -> list[dict[str, int]]:
             continue
         if flaeche < MIN_FUELLUNG * breite * hoehe:
             continue
+        # A squiggle sits under a word inside the page and never bleeds off the
+        # picture. What does is Raven's recording notice: the camera pushes in,
+        # its red banner and ring get cut by the frame, and the remainder is a
+        # red bar 296x16 px at y=0 that satisfies every other rule here. Nine
+        # frames of scene M3 matched on exactly that.
+        if y_schlitz.start <= 0 or y_schlitz.stop >= bild.shape[0]:
+            continue
         treffer.append(
             {
                 "breite": int(breite),
