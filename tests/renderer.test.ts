@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   assertHardwareRenderer,
@@ -33,12 +33,32 @@ describe('detectRenderer', () => {
   })
 })
 
+/**
+ * What the guard does is a property of the function, not of the machine the
+ * suite happens to run on: on a GPU-less runner the whole run sets
+ * FEATURECAST_ALLOW_SOFTWARE_RENDERER=1, and every case below that expects a
+ * throw would then silently stop testing anything. So the switch is owned
+ * here — cleared before each case, set by the one case whose subject it is,
+ * and the ambient value restored afterwards.
+ */
 describe('assertHardwareRenderer', () => {
   const originalEnvironmentValue =
     process.env['FEATURECAST_ALLOW_SOFTWARE_RENDERER']
 
-  it('throws on software rendering by default', () => {
+  beforeEach(() => {
     delete process.env['FEATURECAST_ALLOW_SOFTWARE_RENDERER']
+  })
+
+  afterAll(() => {
+    if (originalEnvironmentValue === undefined) {
+      delete process.env['FEATURECAST_ALLOW_SOFTWARE_RENDERER']
+    } else {
+      process.env['FEATURECAST_ALLOW_SOFTWARE_RENDERER'] =
+        originalEnvironmentValue
+    }
+  })
+
+  it('throws on software rendering by default', () => {
     expect(() =>
       assertHardwareRenderer({
         launchArgs: HARDWARE_GL_LAUNCH_ARGS,
@@ -46,12 +66,6 @@ describe('assertHardwareRenderer', () => {
         softwareRendering: true,
       }),
     ).toThrow('software GL renderer')
-    if (originalEnvironmentValue === undefined) {
-      delete process.env['FEATURECAST_ALLOW_SOFTWARE_RENDERER']
-    } else {
-      process.env['FEATURECAST_ALLOW_SOFTWARE_RENDERER'] =
-        originalEnvironmentValue
-    }
   })
 
   it('allows software rendering when explicitly opted in', () => {
@@ -63,12 +77,6 @@ describe('assertHardwareRenderer', () => {
         softwareRendering: true,
       }),
     ).not.toThrow()
-    if (originalEnvironmentValue === undefined) {
-      delete process.env['FEATURECAST_ALLOW_SOFTWARE_RENDERER']
-    } else {
-      process.env['FEATURECAST_ALLOW_SOFTWARE_RENDERER'] =
-        originalEnvironmentValue
-    }
   })
 
   it('never throws for hardware rendering', () => {
