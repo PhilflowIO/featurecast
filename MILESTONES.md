@@ -61,9 +61,7 @@ capture works under WebKit or whether the iPhone profiles have to be driven
 under Chromium.
 
 **Measured and decided on 2026-09-15:** the frame route wins; five routes were
-checked, four rejected, each with its number. The reasoning, the rejected
-routes and what the route costs are in
-[docs/M3-VERDICT.md](docs/M3-VERDICT.md). What remains open is WebKit alone —
+checked, four rejected, each with its number. What remains open is WebKit alone —
 the measurements were made under Chromium with the iPhone profile.
 
 **Acceptance:** a 1080×1920 portrait video of a real mobile interface, watched

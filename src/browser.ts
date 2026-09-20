@@ -26,7 +26,7 @@ import type { RendererInfo } from './renderer.js'
  * `CHROME_BIN` pointing at a patched Chromium build, nothing read it, and
  * Playwright silently launched its bundled browser instead. From the outside
  * the run looked patched; the "18 % capture loss" it appeared to prove does
- * not exist on the patched build (ticket 23, docs/JOURNEY.md). A set-but-ignored
+ * not exist on the patched build (ticket 23). A set-but-ignored
  * variable is invisible, so three rules hold here:
  *
  * 1. `CHROME_BIN` (or an explicit path) is honoured, and a value that does

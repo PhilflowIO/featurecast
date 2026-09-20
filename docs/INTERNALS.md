@@ -555,7 +555,7 @@ only field that tells apart two builds mounted at the same location that
 report the same version line — exactly the case in the measurement rig, where
 each arm mounts its build at `/crbuild` (ticket 36). Background: three days of
 measurements were attributed to the wrong browser because a `CHROME_BIN` that
-had been set was silently ignored (ticket 23, [JOURNEY.md](JOURNEY.md)).
+had been set was silently ignored (ticket 23).
 
 Frame capture and disk writing are decoupled: `onFrame` only enqueues
 synchronously, a separate writer writes in the background, so that a slow

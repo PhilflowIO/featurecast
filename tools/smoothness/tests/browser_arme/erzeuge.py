@@ -9,8 +9,8 @@ Nur der Browser variiert:
   cUNP    selbst gebaut 153.0.8010.12, ungepatcht
   cPAT    selbst gebaut 153.0.8010.12, beide Patches (Ticket 17)
 
-Die Zuordnung Lauf -> Browser stammt aus dem Lauf selbst und ist in Ticket 23 und
-docs/JOURNEY.md belegt (Aufnahme-Ausbeute 84,4 / 79,1 / 98,2 %).
+Die Zuordnung Lauf -> Browser stammt aus dem Lauf selbst und ist in Ticket 23
+belegt (Aufnahme-Ausbeute 84,4 / 79,1 / 98,2 %).
 
 Was hier passiert: das fertige `output.mp4` wird mit DIESEM Werkzeug
 vermessen (derselbe Weg wie die CLI), und gespeichert werden die gemessenen

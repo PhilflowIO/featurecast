@@ -94,8 +94,7 @@ touch ripple replaces the arrow. The `demo` wrapper decides this automatically
 from the device profile — the same script runs desktop and mobile, with no
 branch in the script.
 
-**The unsolved part — solved since 2026-09-15, see
-[docs/M3-VERDICT.md](docs/M3-VERDICT.md):** the capture delivers CSS pixels and
+**The unsolved part — solved since 2026-09-15:** the capture delivers CSS pixels and
 ignores the device pixel ratio (measured — a requested pixel ratio of 2 still
 came out as 1280×800). An iPhone 15 Pro is 393 CSS pixels wide. An untreated
 capture would therefore be 393 pixels wide and useless for social video. Three
@@ -154,8 +153,7 @@ frames of which only 121 of 173 differed at all.
 1920 in the render — all three desktop presets, without exception
 ([docs/DEVICES.md](docs/DEVICES.md)). On mobile this explicitly does **not**
 apply: there the capture area is the output area, because doubling the area
-halves the frame rate (measured,
-[docs/M3-VERDICT.md](docs/M3-VERDICT.md)). It is the only route to sharp text,
+halves the frame rate (measured). It is the only route to sharp text,
 because the capture ignores the device pixel ratio. The margin beyond that is
 not a side effect but the precondition for M4: several output formats from
 **the same** raw material without a second browser run, and a zoom spring that

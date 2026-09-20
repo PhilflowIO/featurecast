@@ -218,7 +218,7 @@ not, each with a criterion you can run yourself.
 - **[docs/INTERNALS.md](docs/INTERNALS.md)** — how it works in full detail
 - **[docs/YIELD-BENCH.md](docs/YIELD-BENCH.md)** · **[tools/cadence/](tools/cadence/README.md)** · **[tools/smoothness/](tools/smoothness/README.md)** — measure it yourself
 - **[PLAN.md](PLAN.md)** · **[MILESTONES.md](MILESTONES.md)** — architecture and acceptance criteria
-- **[docs/CAPTURE-CADENCE.md](docs/CAPTURE-CADENCE.md)** · **[docs/SMOOTHNESS.md](docs/SMOOTHNESS.md)** · **[docs/M1-VERDICT.md](docs/M1-VERDICT.md)** · **[docs/M3-VERDICT.md](docs/M3-VERDICT.md)** · **[docs/M4-ACCEPTANCE.md](docs/M4-ACCEPTANCE.md)** — the measurement record
+- **[docs/CAPTURE-CADENCE.md](docs/CAPTURE-CADENCE.md)** · **[docs/SMOOTHNESS.md](docs/SMOOTHNESS.md)** — the measurement record
 
 ---
 
