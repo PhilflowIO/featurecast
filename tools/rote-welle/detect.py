@@ -66,6 +66,21 @@ MAX_BREITE_ANTEIL = 0.35
 # positives: 0.39, 0.39 and 0.34. Measured on "Verlassen": 0.15.
 MIN_FUELLUNG = 0.25
 
+# And the bound on the other side, which separates a squiggle from a red PLATE.
+#
+# A squiggle is a STROKE: it goes up and down inside its box, so most of that
+# box is background. Raven's calendar draws the current time as a filled red
+# chip with the hour in white on it ("14:00", 48x11 px) — a solid block, not a
+# stroke, and every other rule here happily called it a wave: 113 of 2593
+# frames of the M2 desktop take on 2026-09-20, all at the same coordinates,
+# every one of them the chip.
+#
+# Measured, the three known positives fill 0.39, 0.39 and 0.34 of their box;
+# the chip fills 0.69. The bound sits between them and is a property of the
+# SHAPE, not of this one widget: nothing drawn as a stroke can fill two thirds
+# of its own bounding box.
+MAX_FUELLUNG = 0.55
+
 
 def rote_maske(bild: np.ndarray) -> np.ndarray:
     """Near-saturated red: red clearly dominant, the other two channels low."""
@@ -97,6 +112,8 @@ def wellen(bild: np.ndarray) -> list[dict[str, int]]:
         if flaeche < MIN_PIXEL:
             continue
         if flaeche < MIN_FUELLUNG * breite * hoehe:
+            continue
+        if flaeche > MAX_FUELLUNG * breite * hoehe:
             continue
         # A squiggle sits under a word inside the page and never bleeds off the
         # picture. What does is Raven's recording notice: the camera pushes in,

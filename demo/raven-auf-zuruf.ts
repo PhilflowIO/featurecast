@@ -144,14 +144,17 @@ const TERMIN_JA = '[data-testid="confirm-schedule-yes"]'
  * ambiguous, and an ambiguous locator has no geometry for the recorder to
  * point at, on either device.
  *
- * `exact=true` on "Tag" for the neighbouring reason: the header also carries
+ * The `s` suffix on "Tag" for the neighbouring reason: the header also carries
  * "Tag zurück" and "Tag vor", and a role name matches as a substring by
- * default, so the plain name would have matched three buttons.
+ * default, so the plain name would have matched three buttons. It is `"Tag"s`
+ * and not `[exact=true]` — the role engine accepts exactly nine attributes and
+ * rejects anything else outright, so the readable-looking spelling ends the
+ * take with an "Unknown attribute" from inside the page (measured, 2026-09-20).
  */
 const TERMINE_TAB = 'a[href="/calendar"] >> visible=true >> nth=0'
 const TERMINE_UEBERSCHRIFT = 'h1:has-text("Meine Termine")'
-const TAG_ANSICHT = 'role=button[name="Tag"][exact=true]'
-const EIN_TAG_VOR = 'role=button[name="Tag vor"][exact=true]'
+const TAG_ANSICHT = 'role=button[name="Tag"s]'
+const EIN_TAG_VOR = 'role=button[name="Tag vor"s]'
 const STEHENDER_TERMIN = `[data-testid="calendar-event"]:has-text("${TERMIN_TITEL}") >> nth=0`
 
 /**
