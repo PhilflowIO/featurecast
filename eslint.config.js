@@ -21,7 +21,10 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['**/*.ts'],
+    // `.mjs` alongside `.ts`: the standalone check tools under tools/ are
+    // plain Node with no dependencies and no build step, which is the point
+    // of them — a stranger can run one with node and ffmpeg alone.
+    files: ['**/*.ts', '**/*.mjs'],
     languageOptions: {
       globals: globals.node,
     },
