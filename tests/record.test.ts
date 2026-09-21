@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  SETTLE_STARVED_MARKER,
   createRecorder,
   planSwipes,
   serializeEvent,
@@ -50,6 +51,7 @@ async function simulateObservedFrames(
   boundingBox: () => Promise<FakeBoundingBox | null>,
   windowMs: number,
   minFrames: number,
+  tickMs = SIMULATED_FRAME_INTERVAL_MS,
 ) {
   const frames: {
     bottom: number
@@ -72,15 +74,13 @@ async function simulateObservedFrames(
       bottom: raw.y + raw.height,
     })
     if (virtualMs >= windowMs && frames.length >= minFrames) return frames
-    virtualMs += SIMULATED_FRAME_INTERVAL_MS
+    virtualMs += tickMs
     // Real time still has to pass, because the settle loop's own budget is
     // a wall clock — but the frame timestamps above are virtual, so the
     // sampled series is the same on a loaded machine as on an idle one.
     // A unit test asserting on the settled box should fail because the
     // criterion is wrong, never because the machine was busy.
-    await new Promise((resolve) =>
-      setTimeout(resolve, SIMULATED_FRAME_INTERVAL_MS),
-    )
+    await new Promise((resolve) => setTimeout(resolve, tickMs))
   }
 }
 
@@ -96,7 +96,10 @@ async function simulateObservedFrames(
  * non-animated element returns for real, correctly sending callers to the
  * geometric fallback.
  */
-function hittableLocator(boundingBox: ReturnType<typeof vi.fn>) {
+function hittableLocator(
+  boundingBox: ReturnType<typeof vi.fn>,
+  tickMs = SIMULATED_FRAME_INTERVAL_MS,
+) {
   return {
     boundingBox,
     evaluate: vi
@@ -115,6 +118,7 @@ function hittableLocator(boundingBox: ReturnType<typeof vi.fn>) {
               boundingBox as () => Promise<FakeBoundingBox | null>,
               arg.windowMs,
               arg.minFrames,
+              tickMs,
             )
           }
           return Promise.resolve(arg.points.map(() => true))
@@ -774,6 +778,67 @@ describe('record', () => {
         async (_page, demo) => demo.click('#never-settles'),
       ),
     ).rejects.toThrow(/settleTimeoutMs.*50ms/)
+  })
+
+  /**
+   * A target that never settles, sampled at `tickMs` per rendering tick.
+   * The box moves one pixel per read in both cases below, so the page is
+   * the constant and the browser's paint rate is the variable.
+   */
+  function neverSettlingPage(tickMs: number) {
+    const page = fakePage()
+    let call = 0
+    page.locator.mockReturnValue(
+      hittableLocator(
+        vi.fn().mockImplementation(() => {
+          call += 1
+          return Promise.resolve({
+            height: 20,
+            width: 60,
+            x: 40,
+            y: 100 + call,
+          })
+        }),
+        tickMs,
+      ),
+    )
+    return page
+  }
+
+  /**
+   * The pair that keeps the settle diagnosis honest: same page, two paint
+   * rates, two different verdicts — and neither verdict may be reachable
+   * from the other's conditions.
+   *
+   * Starved to one tick every 60ms, an 80ms observation comes back with
+   * three frames. Three cannot be split into halves that mean anything, so
+   * the old code's drift comparison returned Infinity and the recorder
+   * reported a target "still moving to a new position" — a claim about the
+   * page derived from an observation that saw nothing. That message cost
+   * two investigations into a layout bug that did not exist, on a bench box
+   * whose real problem was that it is also the permanent toolchain host.
+   */
+  it('blames the machine, not the page, when the browser cannot paint fast enough', async () => {
+    const output = await temporaryDirectory()
+
+    await expect(
+      createRecorder(runtimeFor(neverSettlingPage(60)))(
+        { out: output, settleTimeoutMs: 50 },
+        async (_page, demo) => demo.click('#never-settles'),
+      ),
+    ).rejects.toThrow(new RegExp(SETTLE_STARVED_MARKER))
+  })
+
+  it('does not blame the machine when the observation was thick enough to see the travel', async () => {
+    const output = await temporaryDirectory()
+
+    await expect(
+      createRecorder(
+        runtimeFor(neverSettlingPage(SIMULATED_FRAME_INTERVAL_MS)),
+      )({ out: output, settleTimeoutMs: 50 }, async (_page, demo) =>
+        demo.click('#never-settles'),
+      ),
+    ).rejects.toThrow(/still moving to a new position/)
   })
 
   it('types every code point exactly once, even across a surrogate pair', async () => {
