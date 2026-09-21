@@ -32,6 +32,7 @@
   },
   "scripts": {
     "browsers:install": "playwright install chromium",
+    "check:receipt": "vitest run --project portable tests/gpu-receipt.test.ts",
     "compare": "tsx src/compare.ts",
     "demo:hello": "tsx demo/hello.ts",
     "demo:m1-capture": "tsx demo/m1-capture.ts",
@@ -49,7 +50,8 @@
     "yield-bench": "tsx demo/yield-bench.ts"
   },
   "simple-git-hooks": {
-    "pre-commit": "pnpm exec lint-staged && pnpm typecheck"
+    "pre-commit": "pnpm exec lint-staged && pnpm typecheck",
+    "pre-push": "pnpm check:receipt"
   },
   "lint-staged": {
     "*": "prettier --check --ignore-unknown",

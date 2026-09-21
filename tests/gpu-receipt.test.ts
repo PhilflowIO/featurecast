@@ -28,6 +28,28 @@ const RENEW =
   '  tools/gpu-box/test.sh\n' +
   'The receipt is docs/evidence/gpu-tier/latest.json.'
 
+/**
+ * Why this case also runs on `git push`, not only in the public check.
+ *
+ * `main` was once red here while no pull request had ever been red. The
+ * explanation is not subtle once the receipt is seen for what it is: a
+ * single file that every change inside the fingerprint must rewrite. Two
+ * branches that both move the recording path therefore always collide on
+ * it, and the forge refuses that merge; a merge that goes through cleanly
+ * carries exactly one side's receipt together with that side's source.
+ *
+ * Which leaves one way for `main` to end up stale — a branch that moved a
+ * fingerprinted file without renewing, merged without anyone running this.
+ * That branch is red the instant this case runs. It was not run, because
+ * the only runner is on a mirror, and the mirror had been standing still
+ * since midday.
+ *
+ * So the check moved to where it cannot be skipped by an outage: the push
+ * itself. It costs well under a second and needs no GPU — it reads two
+ * files and hashes a dozen.
+ */
+const PUSH_HOOK = 'pnpm check:receipt'
+
 describe('recording-tier receipt', () => {
   it('matches the source it vouches for', async () => {
     let receipt: GpuReceipt
@@ -55,8 +77,33 @@ describe('recording-tier receipt', () => {
       receipt.inputsDigest,
       'The recorder or a recording test has changed since the recording ' +
         `tier last ran (receipt written ${receipt.generatedAt} on ` +
-        `${receipt.host}, GPU ${receipt.gpu}). ${RENEW}`,
+        `${receipt.host}, GPU ${receipt.gpu}). If you are reading this on ` +
+        '`main` and no pull request was ever red, then nothing ran this ' +
+        'check before the merge — which is what the pre-push hook is for. ' +
+        `${RENEW}`,
     ).toBe(await computeInputsDigest())
+  })
+})
+
+describe('when the receipt is checked', () => {
+  it('runs on every push, so a stalled mirror cannot postpone it to after the merge', async () => {
+    const manifest = JSON.parse(
+      await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as {
+      scripts: Record<string, string>
+      'simple-git-hooks': Record<string, string>
+    }
+
+    expect(
+      manifest['simple-git-hooks']['pre-push'] ?? '(no pre-push hook)',
+      'Without this hook the only thing that checks the receipt is a job on ' +
+        'the GitHub mirror, and `main` has already been red for a merge no ' +
+        'pull request could have caught.',
+    ).toContain(PUSH_HOOK)
+    expect(
+      manifest.scripts['check:receipt'] ?? '(no check:receipt script)',
+      'The hook names this script; it has to exist and it has to run this file.',
+    ).toContain('tests/gpu-receipt.test.ts')
   })
 })
 
