@@ -1180,6 +1180,21 @@ const STABLE_EPSILON_PX = 0.5
  * for a still target. */
 const MIN_FRAMES_PER_OBSERVATION = 3
 /**
+ * Fewest frames an observation must contain before anything can be said
+ * about *how* the target is moving. `halvesDriftPx` splits the series in
+ * two and compares the halves, so three frames give it a half of one: it
+ * returns `Infinity`, which every caller downstream reads as "the halves
+ * disagree", which reads as "the target is travelling somewhere". A chunk
+ * that thin is not evidence of travel, it is the absence of evidence.
+ *
+ * Four is not a tuned number, it is what the halves comparison needs. What
+ * it costs is set by the window: at a display's own rate an 80ms chunk
+ * comes back with five or six frames, and it takes a rendering tick slower
+ * than about 27ms — every second frame dropped — to fall below four. A
+ * browser that far behind has not told us anything about the page.
+ */
+const MIN_FRAMES_FOR_MOTION_SHAPE = 4
+/**
  * How long the dwell measurement integrates over, before being rounded up
  * to a whole number of the animation's own periods. A pure constant on
  * purpose: the measurement window must be a function of the *animation*
@@ -1748,7 +1763,63 @@ function measurementPeriods(periodMs: number): number {
   return Math.max(1, Math.ceil(MIN_MEASUREMENT_MS / periodMs))
 }
 
-function settleTimeoutError(timeoutMs: number, detail: string): Error {
+/**
+ * What a timed-out settle actually saw. Only the first two are statements
+ * about the target; `starved` is a statement about the machine, and the
+ * whole point of naming it separately is that a run which could never take
+ * a measurement must not be reported as a run that watched something move.
+ * Reading that report cost two investigations into a layout bug that did
+ * not exist.
+ */
+export type SettleFailureKind = 'bounded-aperiodic' | 'starved' | 'travelling'
+
+/**
+ * The fixed phrase a starved settle failure carries, so that a caller — a
+ * test harness, a CI step — can tell "we could not measure" from "the
+ * measurement disagreed" without matching on prose that may be reworded.
+ */
+export const SETTLE_STARVED_MARKER =
+  'the page could not be sampled fast enough to tell what the target is doing'
+
+export function diagnoseSettleFailure(frames: Frame[]): SettleFailureKind {
+  if (frames.length < MIN_FRAMES_FOR_MOTION_SHAPE) return 'starved'
+  return halvesDriftPx(frames) < STABLE_EPSILON_PX
+    ? 'bounded-aperiodic'
+    : 'travelling'
+}
+
+/** Mean gap between rendering ticks in an observation; `null` below two. */
+function meanTickMs(frames: Frame[]): number | null {
+  if (frames.length < 2) return null
+  const span = frames[frames.length - 1]!.t - frames[0]!.t
+  return span / (frames.length - 1)
+}
+
+function settleTimeoutError(timeoutMs: number, frames: Frame[]): Error {
+  const kind = diagnoseSettleFailure(frames)
+  if (kind === 'starved') {
+    const tick = meanTickMs(frames)
+    return new Error(
+      `${SETTLE_STARVED_MARKER}: its last ${String(STABLE_WINDOW_MS)}ms ` +
+        `observation came back with ${String(frames.length)} frames` +
+        (tick === null
+          ? ''
+          : ` (about ${String(Math.round(tick))}ms between rendering ticks, ` +
+            'where a browser painting at its display rate returns one every ' +
+            '16ms or so)') +
+        '. That is too few to tell a bounded animation from a target moving ' +
+        'somewhere, so nothing is claimed about either: this host had no CPU ' +
+        'headroom left for the browser to paint. Raising ' +
+        'RecordOptions.settleTimeoutMs will not help — free the machine up ' +
+        'and run again.',
+    )
+  }
+  const detail =
+    kind === 'bounded-aperiodic'
+      ? 'the target keeps moving within a bounded range but no repeating ' +
+        'period could be measured, so there is no window whose average ' +
+        'would be reproducible'
+      : 'the target is still moving to a new position'
   return new Error(
     `Target geometry did not settle within settleTimeoutMs (${String(timeoutMs)}ms): ` +
       `${detail}. Increase RecordOptions.settleTimeoutMs if the page keeps ` +
@@ -1810,14 +1881,7 @@ async function resolveSettledGeometry(
     }
 
     if (Date.now() >= deadlineAt) {
-      throw settleTimeoutError(
-        timeoutMs,
-        halvesDriftPx(lastObservation) < STABLE_EPSILON_PX
-          ? 'the target keeps moving within a bounded range but no repeating ' +
-              'period could be measured, so there is no window whose average ' +
-              'would be reproducible'
-          : 'the target is still moving to a new position',
-      )
+      throw settleTimeoutError(timeoutMs, lastObservation)
     }
   }
 }
