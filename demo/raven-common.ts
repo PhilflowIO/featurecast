@@ -437,6 +437,33 @@ export async function inDieMitte(
   }
 }
 
+/**
+ * Brings `selector` into the picture if it is not already comfortably in it.
+ *
+ * `inDieMitte` with a guard in front: it places a target that is off screen or
+ * close to an edge, and leaves one that already stands well inside alone, so a
+ * desktop layout that shows the whole dialog at once does not scroll for show.
+ * Without it the phone take of the share scene aborted on the first thing the
+ * dialog put below the fold — measured: the readout at y=3697 in a 2880 px
+ * picture.
+ *
+ * Shared rather than copied: `raven-teilen.ts` and `raven-versenden.ts` both
+ * film a dialog that is one screen on a desktop and three on a phone, and the
+ * two must not drift apart on where an element counts as "in the picture".
+ */
+export async function imBild(
+  page: RecordPage,
+  demo: Demo,
+  selector: string,
+): Promise<void> {
+  const box = await page.locator(selector).boundingBox()
+  const hoehe = page.viewportSize()?.height
+  if (box === null || hoehe === undefined) return
+  const rand = hoehe * 0.15
+  if (box.y >= rand && box.y + box.height <= hoehe - rand) return
+  await inDieMitte(page, demo, selector, { tempo: FILM_SCROLL_TEMPO })
+}
+
 /** The marker of a turn that did not produce an answer. */
 export const FEHLSCHLAG =
   '[data-testid="assistant-message-failed"], ' +
