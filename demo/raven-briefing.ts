@@ -140,6 +140,16 @@ const NAHAUFNAHME =
   `and ancestor-or-self::li[(strong | p/strong)[contains(., "${PERSON}")]]]` +
   ' >> nth=0'
 
+/**
+ * The message list, the panel every chat scroll of this scene happens in.
+ *
+ * Named because on the phone the composer floats over the lower part of it:
+ * a swipe that starts on the composer scrolls nothing, and the final take of
+ * 2026-09-22 was refused with the card's yes still under the composer. The
+ * recorder swipes only on the part of this list a finger can touch.
+ */
+const NACHRICHTEN = '[data-testid="assistant-messages-scroll"]'
+
 /** The appointment gate: Raven's filled-in card, waiting for a yes. */
 const TERMIN_KARTE = '[data-testid="confirm-schedule-card"]'
 const TERMIN_JA = '[data-testid="confirm-schedule-yes"]'
@@ -243,7 +253,10 @@ export default async function briefing(
   }
   // Calmly, at the film's pace: the scroll passes the earlier topics on the
   // way, and that pass is itself the proof that Raven read five meetings.
-  await inDieMitte(page, demo, NAHAUFNAHME, { tempo: FILM_SCROLL_TEMPO })
+  await inDieMitte(page, demo, NAHAUFNAHME, {
+    innerhalb: NACHRICHTEN,
+    tempo: FILM_SCROLL_TEMPO,
+  })
   await demo.point(NAHAUFNAHME)
   await demo.hold(LESEZEIT_MS)
 
@@ -261,16 +274,22 @@ export default async function briefing(
         `last said: ${await letzteAntwort(page)}`,
     )
   }
-  await inDieMitte(page, demo, TERMIN_KARTE, { tempo: FILM_SCROLL_TEMPO })
+  await inDieMitte(page, demo, TERMIN_KARTE, {
+    innerhalb: NACHRICHTEN,
+    tempo: FILM_SCROLL_TEMPO,
+  })
   await demo.point(TERMIN_KARTE)
   await demo.hold(LESEZEIT_MS)
 
   // The button, not the card, has to be free before the click. On the phone
   // the card is taller than the space above the composer, so a card centred
-  // at 45 % leaves its yes under the composer overlay — the rehearsal take of
-  // 2026-09-22 was refused there, "occluded at every probe point". On the
-  // desktop the button is already inside the mark and nothing moves.
-  await inDieMitte(page, demo, TERMIN_JA, { tempo: FILM_SCROLL_TEMPO })
+  // at 45 % can leave its yes under the composer — two takes of 2026-09-22
+  // were refused there, "occluded", with the composer's textarea on top. On
+  // the desktop the button is already inside the mark and nothing moves.
+  await inDieMitte(page, demo, TERMIN_JA, {
+    innerhalb: NACHRICHTEN,
+    tempo: FILM_SCROLL_TEMPO,
+  })
   try {
     await ruhigKlicken(demo, TERMIN_JA)
   } catch (fehler) {
