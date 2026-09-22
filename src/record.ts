@@ -698,7 +698,7 @@ export function createRecorder(
           const area =
             options?.within === undefined
               ? undefined
-              : await visibleArea(
+              : await touchableArea(
                   resolveLocator(options.within),
                   page.viewportSize() ?? DEFAULT_VIEWPORT,
                   typeof options.within === 'string'
@@ -966,29 +966,49 @@ export const SWIPE_EDGE_INSET_PX = 80
 export type SwipeArea = { height: number; width: number; x: number; y: number }
 
 /**
- * The part of `locator`'s box that is inside the viewport — the only part a
- * finger can touch or a pointer can rest on. Throws rather than falling back
- * to the picture's centre: a `within` that names nothing on screen is a
- * script error, and the silent fallback is exactly the failure `within`
- * exists to end.
+ * The part of `locator` a finger can actually touch: inside the viewport and
+ * not under anything else. The visible box is not enough — a phone chat's
+ * composer floats over the lower part of its own message list, and a swipe
+ * that lands on the composer scrolls nothing (measured on Raven's assistant,
+ * 2026-09-22: the gate card stayed under the composer and the take was
+ * refused). The same probe grid and flood fill that find a free point on a
+ * click target find the largest free region here; its bounding rectangle is
+ * where the swipe is planned.
+ *
+ * Throws rather than falling back to the picture's centre: a `within` that
+ * names nothing touchable is a script error, and the silent fallback is
+ * exactly the failure `within` exists to end.
  */
-async function visibleArea(
+async function touchableArea(
   locator: LocatorLike,
   viewport: ViewportSize,
   beschreibung: string,
 ): Promise<SwipeArea> {
   const box = await locator.boundingBox()
-  if (box !== null) {
-    const x = Math.max(0, box.x)
-    const y = Math.max(0, box.y)
-    const right = Math.min(viewport.width, box.x + box.width)
-    const bottom = Math.min(viewport.height, box.y + box.height)
-    if (right > x && bottom > y) {
-      return { height: bottom - y, width: right - x, x, y }
+  if (
+    box !== null &&
+    box.x < viewport.width &&
+    box.y < viewport.height &&
+    box.x + box.width > 0 &&
+    box.y + box.height > 0
+  ) {
+    const grid = candidateGrid(intersectionRect(box, viewport), viewport)
+    const region = largestFreeRegion(grid, await hitTestPoints(locator, grid))
+    if (region.length > 0) {
+      const xs = region.map((point) => point.x)
+      const ys = region.map((point) => point.y)
+      const x = Math.min(...xs)
+      const y = Math.min(...ys)
+      return {
+        height: Math.max(...ys) - y,
+        width: Math.max(...xs) - x,
+        x,
+        y,
+      }
     }
   }
   throw new Error(
-    `Cannot scroll within ${beschreibung}: it has no visible area on screen`,
+    `Cannot scroll within ${beschreibung}: no part of it can be touched on screen`,
   )
 }
 
@@ -2244,6 +2264,34 @@ function largestFreeRegionPoint(
   points: GridPoint[],
   hits: boolean[],
 ): GridPoint | null {
+  const bestRegion = largestFreeRegion(points, hits)
+  if (bestRegion.length === 0) return null
+
+  const centroid = {
+    x: bestRegion.reduce((sum, point) => sum + point.x, 0) / bestRegion.length,
+    y: bestRegion.reduce((sum, point) => sum + point.y, 0) / bestRegion.length,
+  }
+  let closest = bestRegion[0]!
+  let closestDistance = Infinity
+  for (const candidate of bestRegion) {
+    const distance = Math.hypot(
+      candidate.x - centroid.x,
+      candidate.y - centroid.y,
+    )
+    if (distance < closestDistance) {
+      closestDistance = distance
+      closest = candidate
+    }
+  }
+  return closest
+}
+
+/**
+ * The largest contiguous (4-connected) region of hit-testable grid cells —
+ * the flood fill behind `largestFreeRegionPoint`, and on its own the part of
+ * a scroll panel a finger can actually touch (`touchableArea`).
+ */
+function largestFreeRegion(points: GridPoint[], hits: boolean[]): GridPoint[] {
   const key = (row: number, col: number): string =>
     `${String(row)}:${String(col)}`
   const hitAt = new Map<string, GridPoint>()
@@ -2280,25 +2328,7 @@ function largestFreeRegionPoint(
     }
     if (region.length > bestRegion.length) bestRegion = region
   }
-  if (bestRegion.length === 0) return null
-
-  const centroid = {
-    x: bestRegion.reduce((sum, point) => sum + point.x, 0) / bestRegion.length,
-    y: bestRegion.reduce((sum, point) => sum + point.y, 0) / bestRegion.length,
-  }
-  let closest = bestRegion[0]!
-  let closestDistance = Infinity
-  for (const candidate of bestRegion) {
-    const distance = Math.hypot(
-      candidate.x - centroid.x,
-      candidate.y - centroid.y,
-    )
-    if (distance < closestDistance) {
-      closestDistance = distance
-      closest = candidate
-    }
-  }
-  return closest
+  return bestRegion
 }
 
 /**
