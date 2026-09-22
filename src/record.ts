@@ -136,6 +136,19 @@ export type ScrollOptions = {
    * scroll; the eased 60Hz cadence and the per-step cap apply either way.
    */
   speedPxPerSecond?: number
+  /**
+   * The element the gesture happens over. Without it a swipe is centred in
+   * the picture and a wheel turns wherever the pointer last rested, which is
+   * right for a page that scrolls as a whole and wrong for one whose scroll
+   * lives in a panel: a phone calendar keeps its hours in a grid that fills
+   * only the lower half of the screen, and a centred upward swipe starts
+   * above that grid, on a header that does not scroll — the page stays put
+   * and nothing says why (measured on Raven's day view, 2026-09-22, at three
+   * speeds). With `within`, the swipe legs are planned inside the element's
+   * visible box and the pointer travels there before the wheel turns, the
+   * way a person moves the mouse over the list they mean to scroll.
+   */
+  within?: Target
 }
 
 export type Demo = {
@@ -495,7 +508,18 @@ export function createRecorder(
         deltaX: number,
         deltaY: number,
         speedPxPerSecond: number,
+        area: SwipeArea | undefined,
       ): Promise<number> => {
+        if (area !== undefined) {
+          interactionIndex += 1
+          await moveToPoint(
+            {
+              x: Math.round(area.x + area.width / 2),
+              y: Math.round(area.y + area.height / 2),
+            },
+            deriveMotionSeed(seed, interactionIndex, PRIMARY_MOVE_ROLE),
+          )
+        }
         const positions = computeScrollPositions(
           deltaX,
           deltaY,
@@ -526,9 +550,10 @@ export function createRecorder(
         deltaX: number,
         deltaY: number,
         speedPxPerSecond: number,
+        area: SwipeArea | undefined,
       ): Promise<number> => {
         const viewport = page.viewportSize() ?? DEFAULT_VIEWPORT
-        const legs = planSwipes(deltaX, deltaY, viewport)
+        const legs = planSwipes(deltaX, deltaY, viewport, area)
         let samples = 0
         for (const leg of legs) {
           interactionIndex += 1
@@ -670,10 +695,20 @@ export function createRecorder(
           if (!Number.isFinite(speedPxPerSecond) || speedPxPerSecond <= 0) {
             throw new Error('Scroll speed must be a positive finite number')
           }
+          const area =
+            options?.within === undefined
+              ? undefined
+              : await visibleArea(
+                  resolveLocator(options.within),
+                  page.viewportSize() ?? DEFAULT_VIEWPORT,
+                  typeof options.within === 'string'
+                    ? options.within
+                    : '(a locator)',
+                )
           log({ type: 'scroll', tick, deltaX, deltaY })
           const sampleCount = page.hasTouch
-            ? await performSwipe(deltaX, deltaY, speedPxPerSecond)
-            : await performWheel(deltaX, deltaY, speedPxPerSecond)
+            ? await performSwipe(deltaX, deltaY, speedPxPerSecond, area)
+            : await performWheel(deltaX, deltaY, speedPxPerSecond, area)
           // Dispatching the last wheel event is not the same as the page
           // having arrived: Chromium animates the scroll and keeps painting
           // after the input stops. Waiting for that tail here is what makes
@@ -927,6 +962,36 @@ export const MAX_SCROLL_STEP_PX = 30
 export const SWIPE_TRAVEL_FRACTION = 0.6
 export const SWIPE_EDGE_INSET_PX = 80
 
+/** A rectangle in picture pixels that a gesture has to stay inside. */
+export type SwipeArea = { height: number; width: number; x: number; y: number }
+
+/**
+ * The part of `locator`'s box that is inside the viewport — the only part a
+ * finger can touch or a pointer can rest on. Throws rather than falling back
+ * to the picture's centre: a `within` that names nothing on screen is a
+ * script error, and the silent fallback is exactly the failure `within`
+ * exists to end.
+ */
+async function visibleArea(
+  locator: LocatorLike,
+  viewport: ViewportSize,
+  beschreibung: string,
+): Promise<SwipeArea> {
+  const box = await locator.boundingBox()
+  if (box !== null) {
+    const x = Math.max(0, box.x)
+    const y = Math.max(0, box.y)
+    const right = Math.min(viewport.width, box.x + box.width)
+    const bottom = Math.min(viewport.height, box.y + box.height)
+    if (right > x && bottom > y) {
+      return { height: bottom - y, width: right - x, x, y }
+    }
+  }
+  throw new Error(
+    `Cannot scroll within ${beschreibung}: it has no visible area on screen`,
+  )
+}
+
 export type SwipeLeg = {
   /** Where the finger touches down, in picture pixels. */
   from: { x: number; y: number }
@@ -938,7 +1003,8 @@ export type SwipeLeg = {
  * Splits a scroll into the swipes that perform it.
  *
  * The finger moves *against* the scroll: a page that scrolls down by 700 is a
- * finger pushing 700 upwards. Each leg is centred in the viewport, so the
+ * finger pushing 700 upwards. Each leg is centred in the viewport — or in
+ * `area`, when the scroll lives in a panel (`ScrollOptions.within`) — so the
  * whole path is on screen and the gesture is legible even at the edges of the
  * travel — a swipe whose ending leaves the picture reads as a glitch.
  */
@@ -946,9 +1012,15 @@ export function planSwipes(
   deltaX: number,
   deltaY: number,
   viewport: ViewportSize,
+  area?: SwipeArea,
 ): SwipeLeg[] {
-  const usableX = Math.max(1, viewport.width - 2 * SWIPE_EDGE_INSET_PX)
-  const usableY = Math.max(1, viewport.height - 2 * SWIPE_EDGE_INSET_PX)
+  // Inside an `area` the inset shrinks with a small panel, so a 400px grid
+  // still leaves the finger most of its height instead of 240px of rim.
+  const region = area ?? { ...viewport, x: 0, y: 0 }
+  const insetX = Math.min(SWIPE_EDGE_INSET_PX, region.width / 4)
+  const insetY = Math.min(SWIPE_EDGE_INSET_PX, region.height / 4)
+  const usableX = Math.max(1, region.width - 2 * insetX)
+  const usableY = Math.max(1, region.height - 2 * insetY)
   const reachX = usableX * SWIPE_TRAVEL_FRACTION
   const reachY = usableY * SWIPE_TRAVEL_FRACTION
   const legCount = Math.max(
@@ -957,7 +1029,10 @@ export function planSwipes(
     Math.ceil(Math.abs(deltaY) / reachY),
   )
   const legScroll = { x: deltaX / legCount, y: deltaY / legCount }
-  const centre = { x: viewport.width / 2, y: viewport.height / 2 }
+  const centre = {
+    x: region.x + region.width / 2,
+    y: region.y + region.height / 2,
+  }
   const from = {
     x: centre.x + legScroll.x / 2,
     y: centre.y + legScroll.y / 2,
