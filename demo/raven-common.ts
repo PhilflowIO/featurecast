@@ -412,11 +412,18 @@ export async function inDieMitte(
   {
     anteil = 0.45,
     tempo,
+    innerhalb,
   }: {
     /** Where the target's centre should land, as a share of the height. */
     anteil?: number
     /** Scroll pace in px/s; the recorder's own default when absent. */
     tempo?: number
+    /**
+     * The panel the scroll lives in, when it is not the page (the recorder's
+     * `ScrollOptions.within`). A calendar's hours scroll inside a grid, and a
+     * gesture made anywhere else moves nothing.
+     */
+    innerhalb?: string
   } = {},
 ): Promise<void> {
   for (let durchgang = 0; durchgang < 3; durchgang += 1) {
@@ -427,14 +434,40 @@ export async function inDieMitte(
     }
     const abstand = Math.round(box.y + box.height / 2 - hoehe * anteil)
     if (Math.abs(abstand) <= 60) return
-    await demo.scroll(
-      0,
-      abstand,
-      tempo === undefined ? undefined : { speedPxPerSecond: tempo },
-    )
+    await demo.scroll(0, abstand, {
+      ...(tempo === undefined ? {} : { speedPxPerSecond: tempo }),
+      ...(innerhalb === undefined ? {} : { within: innerhalb }),
+    })
     const danach = await page.locator(selector).boundingBox()
     if (danach !== null && Math.abs(danach.y - box.y) < 1) return
   }
+}
+
+/**
+ * Brings `selector` into the picture if it is not already comfortably in it.
+ *
+ * `inDieMitte` with a guard in front: it places a target that is off screen or
+ * close to an edge, and leaves one that already stands well inside alone, so a
+ * desktop layout that shows the whole dialog at once does not scroll for show.
+ * Without it the phone take of the share scene aborted on the first thing the
+ * dialog put below the fold — measured: the readout at y=3697 in a 2880 px
+ * picture.
+ *
+ * Shared rather than copied: `raven-teilen.ts` and `raven-versenden.ts` both
+ * film a dialog that is one screen on a desktop and three on a phone, and the
+ * two must not drift apart on where an element counts as "in the picture".
+ */
+export async function imBild(
+  page: RecordPage,
+  demo: Demo,
+  selector: string,
+): Promise<void> {
+  const box = await page.locator(selector).boundingBox()
+  const hoehe = page.viewportSize()?.height
+  if (box === null || hoehe === undefined) return
+  const rand = hoehe * 0.15
+  if (box.y >= rand && box.y + box.height <= hoehe - rand) return
+  await inDieMitte(page, demo, selector, { tempo: FILM_SCROLL_TEMPO })
 }
 
 /** The marker of a turn that did not produce an answer. */
@@ -472,6 +505,69 @@ export async function warteAufAntwort(
     if (Date.now() > ende) {
       throw new Error(
         `No answer within ${String(ANTWORT_FRIST_MS)} ms: ${antwort(nummer)}`,
+      )
+    }
+    await new Promise((fertig) => setTimeout(fertig, 250))
+  }
+}
+
+/**
+ * The tail of the conversation, for a failure message.
+ *
+ * Read from the page rather than from a locator, because at the moment this
+ * runs the interesting node may be a refusal, an error banner or nothing at
+ * all — and a selector written for one of those three cannot report the other
+ * two. Trimmed, and it carries no field values.
+ */
+export async function letzteAntwort(page: RecordPage): Promise<string> {
+  try {
+    return await page.evaluate(() => {
+      const nodes = Array.from(
+        document.querySelectorAll('[data-testid="assistant-message"]'),
+      )
+      const letzte = nodes[nodes.length - 1]
+      const text = ((letzte?.textContent ?? document.body.innerText) || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+      return `"${text.slice(-320)}"`
+    })
+  } catch {
+    return '(the page would not answer)'
+  }
+}
+
+/**
+ * Waits until `selector` has no geometry any more.
+ *
+ * Shared by `raven-auf-zuruf.ts` and `raven-briefing.ts`: both end an
+ * appointment turn on the gate card going away, and a fix to this poll (see
+ * below) has to reach both.
+ *
+ * `warteAuf` answers "is it there yet"; the end of this scene needs the other
+ * direction. A gate card that is still on screen means the write has not run,
+ * and a clip that ends on an unanswered gate shows the opposite of the
+ * promise the scene is about.
+ */
+export async function warteAufVerschwunden(
+  page: RecordPage,
+  selector: string,
+  fristMs: number,
+): Promise<void> {
+  const ende = Date.now() + fristMs
+  for (;;) {
+    // `jetztSichtbar` and NOT a bare `boundingBox()`. A locator whose node has
+    // left the document does not answer `null`; it waits out Playwright's own
+    // 30 s and THROWS — so the poll that was meant to notice the gate card
+    // disappearing ended the take at 30 s with a Playwright stack, on the one
+    // outcome it was written to recognise. Measured on the desktop take of
+    // 2026-09-20: the appointment was written, the card was gone, and the
+    // recording was refused anyway.
+    if (!(await jetztSichtbar(page, selector))) return
+    if (Date.now() > ende) {
+      throw new Error(
+        `Still on screen after ${String(fristMs)} ms: ${selector}. The ` +
+          'appointment gate was confirmed but nothing was written — most ' +
+          'likely no calendar is connected on the recording account.',
       )
     }
     await new Promise((fertig) => setTimeout(fertig, 250))

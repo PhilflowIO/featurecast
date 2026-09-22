@@ -1,5 +1,6 @@
-import type { Frame } from 'playwright'
+import { chromium, type Browser, type Frame } from 'playwright'
 
+import { BUNDLE_CHANNEL } from '../src/browser.js'
 import type { Demo, RecordPage } from '../src/record.js'
 import {
   NACH_KLICK_MS,
@@ -254,4 +255,127 @@ export default async function videoraum(
   await ruhigKlicken(demo, STOPPEN)
   await warteAuf(page, LAEUFT_NICHT, 30_000)
   await demo.hold(NACH_KLICK_MS + 2500)
+}
+
+// ── Two more people in the room ─────────────────────────────────────────────
+//
+// Used by `raven-videoraum-quer-zu-zweit.ts` and by nothing else. It lives
+// here rather than there because the room, the join and the pre-join
+// hydration trap are this scene's knowledge, and a second copy of them would
+// drift away from the first one.
+//
+// WHY TWO AND NOT ONE. The count in the top bar comes from
+// `useRemoteParticipants()` (`roster-panel.tsx:82,184-186` in `flow.raven`),
+// which counts everybody EXCEPT the person looking at it. With one guest the
+// header reads "Teilnehmer 1" — the host does not count herself. Two guests
+// make it read 2, which is the number the film's claim needs: the recording
+// notice is shown "für alle", and a room of one contradicts that.
+//
+// THE RECORDER ITSELF DOES NOT SHOW UP. `recording-manager` joins with
+// `hidden: true` and records per-track egress (`recording-manager/src/index.ts`
+// in `flow.raven`), so starting the recording does not change the number.
+
+/** Two plain German names, and no faces. See the module header. */
+const GAESTE = ['Jonas Feddersen', 'Nadia Oberländer'] as const
+
+/** The pre-join name field. Matched by placeholder; the class has moved once. */
+const GAST_NAME = 'input.lk-username-input, input[placeholder*="Name" i]'
+
+/** How long a guest may take to be in the room. */
+const GAST_FRIST_MS = 120_000
+
+let gastBrowser: Browser | undefined
+
+/**
+ * Mints one invite per guest through the host's own session and joins them.
+ *
+ * Minted rather than re-using the room's single `guestUrl`: the token store
+ * binds a token to the first identity that uses it
+ * (`api/app/db/room_tokens.py` in `flow.raven`), and whether a second browser
+ * may share one is not settled in the source. One invite per guest is the path
+ * the repository's own multi-party tool took, so it is the one taken here.
+ *
+ * Called from `prepare`, so the guests are in the room before the camera
+ * rolls and the first frame is a full room rather than one filling up.
+ */
+export async function gaesteBeitreten(app: Frame): Promise<void> {
+  const raum = pflicht('RAVEN_ROOM_NAME')
+  const links: string[] = []
+  for (let i = 0; i < GAESTE.length; i += 1) {
+    // A string payload: `evaluate` passes no arguments, and a compiled
+    // function would carry tsx's `__name` into the page.
+    const body = JSON.stringify(JSON.stringify({ roomName: raum }))
+    const antwort = await app.evaluate<{ guestUrl?: string }>(
+      `fetch('/api/meet/create-invite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: ${body} }).then(function (r) { return r.json() })` as unknown as () => Promise<{
+        guestUrl?: string
+      }>,
+    )
+    if (antwort.guestUrl === undefined) {
+      throw new Error(
+        `No invite for guest ${String(i + 1)}: the host session could not ` +
+          'mint one. RAVEN_ROOM_NAME has to be the TENANT-PREFIXED room name ' +
+          'of the room RAVEN_ROOM_LINK points at.',
+      )
+    }
+    links.push(antwort.guestUrl)
+  }
+
+  gastBrowser = await chromium.launch({
+    args: [
+      // No camera and no microphone is published, but the pre-join screen asks
+      // for both before the toggles are read. A fake device answers without a
+      // permission prompt; a real one does not exist in a container.
+      '--use-fake-ui-for-media-stream',
+      '--use-fake-device-for-media-stream',
+    ],
+    channel: BUNDLE_CHANNEL,
+    headless: true,
+  })
+  for (const [i, gast] of GAESTE.entries()) {
+    const link = links[i]
+    if (link === undefined) throw new Error(`No invite for ${gast}.`)
+    const kontext = await gastBrowser.newContext({
+      locale: RAVEN_LOCALE,
+      // Signed OUT, deliberately: a guest is a guest. The invite token is the
+      // whole credential.
+      storageState: { cookies: [], origins: [] },
+      viewport: { height: 800, width: 1280 },
+    })
+    const seite = await kontext.newPage()
+    await seite.goto(`${RAVEN_URL}${link}`)
+
+    const beitreten = seite.getByRole('button', { name: 'Raum beitreten' })
+    await beitreten.waitFor({ state: 'visible', timeout: GAST_FRIST_MS })
+    for (const quelle of [KAMERA, MIKROFON]) {
+      const knopf = seite.locator(quelle).first()
+      await knopf.waitFor({ state: 'visible', timeout: 20_000 })
+      if ((await knopf.getAttribute('aria-pressed')) === 'true')
+        await knopf.click()
+    }
+    const name = seite.locator(GAST_NAME).first()
+    // The same hydration proof the host's own join needs: a fill before
+    // hydration is reset to '' and the button stays disabled.
+    for (let versuch = 0; versuch < 20; versuch += 1) {
+      await name.fill('')
+      await name.fill(gast)
+      await seite.waitForTimeout(500)
+      if ((await name.inputValue()) === gast && (await beitreten.isEnabled())) {
+        break
+      }
+    }
+    await beitreten.click()
+    await seite
+      .locator(IM_RAUM)
+      .waitFor({ state: 'visible', timeout: GAST_FRIST_MS })
+  }
+
+  // Their tiles arrive a moment after the connection; let the grid settle
+  // before the establishing shot is filmed.
+  await app.waitForTimeout(4000)
+}
+
+/** Closes the guests' browser. Called after the take, never during it. */
+export async function gaesteVerlassen(): Promise<void> {
+  await gastBrowser?.close()
+  gastBrowser = undefined
 }

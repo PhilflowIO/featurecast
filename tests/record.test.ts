@@ -301,6 +301,87 @@ describe('scrolling on a device with a finger', () => {
     expect(page.mouse.wheel).toHaveBeenCalled()
     expect(page.touchscreen.down).not.toHaveBeenCalled()
   })
+
+  it('brings the pointer over the named panel before the wheel turns', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage({ height: 1920, width: 1080 })
+    page.locatorValue.boundingBox.mockResolvedValue({
+      height: 800,
+      width: 1000,
+      x: 40,
+      y: 1000,
+    })
+    const record = createRecorder(runtimeFor(page))
+
+    await record({ out: output, seed: 7 }, async (_page, demo) => {
+      await demo.scroll(0, -300, { within: '.grid' })
+    })
+
+    const lastMove = page.mouse.move.mock.calls.at(-1)
+    expect(lastMove?.[0]).toBe(540)
+    expect(lastMove?.[1]).toBe(1400)
+    expect(page.mouse.wheel).toHaveBeenCalled()
+  })
+
+  it('swipes only where the panel is not covered', async () => {
+    // A phone chat: the message list fills the screen, the composer floats
+    // over its lower half. A finger on the composer scrolls nothing.
+    const output = await temporaryDirectory()
+    const page = fakePage({ height: 1920, width: 1080 })
+    page.hasTouch = true
+    page.locatorValue.boundingBox.mockResolvedValue({
+      height: 1920,
+      width: 1080,
+      x: 0,
+      y: 0,
+    })
+    page.locatorValue.evaluate.mockImplementation(
+      (_pageFunction: unknown, arg: unknown) => {
+        if (
+          typeof arg === 'object' &&
+          arg !== null &&
+          'points' in arg &&
+          Array.isArray(arg.points)
+        ) {
+          return Promise.resolve(
+            (arg.points as { y: number }[]).map((point) => point.y < 1000),
+          )
+        }
+        return Promise.resolve([])
+      },
+    )
+    const record = createRecorder(runtimeFor(page))
+
+    await record({ out: output, seed: 7 }, async (_page, demo) => {
+      await demo.scroll(0, -300, { within: '.messages' })
+    })
+
+    const touched = [
+      ...page.touchscreen.down.mock.calls,
+      ...page.touchscreen.move.mock.calls,
+    ].map((call) => call[1] as number)
+    expect(touched.length).toBeGreaterThan(0)
+    for (const y of touched) expect(y).toBeLessThan(1000)
+  })
+
+  it('refuses a panel that is not on screen instead of scrolling elsewhere', async () => {
+    const output = await temporaryDirectory()
+    const page = fakePage({ height: 1920, width: 1080 })
+    page.locatorValue.boundingBox.mockResolvedValue({
+      height: 400,
+      width: 1000,
+      x: 40,
+      y: 2400,
+    })
+    const record = createRecorder(runtimeFor(page))
+
+    await expect(
+      record({ out: output, seed: 7 }, async (_page, demo) => {
+        await demo.scroll(0, 300, { within: '.grid' })
+      }),
+    ).rejects.toThrow('can be touched')
+    expect(page.mouse.wheel).not.toHaveBeenCalled()
+  })
 })
 
 describe('planSwipes', () => {
@@ -328,6 +409,22 @@ describe('planSwipes', () => {
       const endY = leg.from.y - leg.scroll.y
       expect(leg.from.y).toBeLessThanOrEqual(viewport.height)
       expect(endY).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('keeps the finger inside a panel that is named', () => {
+    // A phone calendar: the hours scroll in a grid over the lower half of the
+    // picture. A centred upward swipe would start on the header above it.
+    const grid = { height: 800, width: 1080, x: 0, y: 1120 }
+    const legs = planSwipes(0, -600, viewport, grid)
+    const total = legs.reduce((sum, leg) => sum + leg.scroll.y, 0)
+    expect(total).toBeCloseTo(-600, 9)
+    for (const leg of legs) {
+      const endY = leg.from.y - leg.scroll.y
+      for (const y of [leg.from.y, endY]) {
+        expect(y).toBeGreaterThanOrEqual(grid.y)
+        expect(y).toBeLessThanOrEqual(grid.y + grid.height)
+      }
     }
   })
 
