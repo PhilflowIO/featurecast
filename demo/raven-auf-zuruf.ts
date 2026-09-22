@@ -10,10 +10,11 @@ import {
   RAVEN_URL,
   VOR_KLICK_MS,
   inDieMitte,
-  jetztSichtbar,
+  letzteAntwort,
   ruhigKlicken,
   vorbereiten,
   warteAuf,
+  warteAufVerschwunden,
 } from './raven-common.js'
 
 /**
@@ -330,63 +331,4 @@ export default async function aufZuruf(
   await inDieMitte(page, demo, STEHENDER_TERMIN, { tempo: FILM_SCROLL_TEMPO })
   await demo.point(STEHENDER_TERMIN)
   await demo.hold(5000)
-}
-
-/**
- * The tail of the conversation, for a failure message.
- *
- * Read from the page rather than from a locator, because at the moment this
- * runs the interesting node may be a refusal, an error banner or nothing at
- * all — and a selector written for one of those three cannot report the other
- * two. Trimmed, and it carries no field values.
- */
-async function letzteAntwort(page: RecordPage): Promise<string> {
-  try {
-    return await page.evaluate(() => {
-      const nodes = Array.from(
-        document.querySelectorAll('[data-testid="assistant-message"]'),
-      )
-      const letzte = nodes[nodes.length - 1]
-      const text = ((letzte?.textContent ?? document.body.innerText) || '')
-        .replace(/\s+/g, ' ')
-        .trim()
-      return `"${text.slice(-320)}"`
-    })
-  } catch {
-    return '(the page would not answer)'
-  }
-}
-
-/**
- * Waits until `selector` has no geometry any more.
- *
- * `warteAuf` answers "is it there yet"; the end of this scene needs the other
- * direction. A gate card that is still on screen means the write has not run,
- * and a clip that ends on an unanswered gate shows the opposite of the
- * promise the scene is about.
- */
-async function warteAufVerschwunden(
-  page: RecordPage,
-  selector: string,
-  fristMs: number,
-): Promise<void> {
-  const ende = Date.now() + fristMs
-  for (;;) {
-    // `jetztSichtbar` and NOT a bare `boundingBox()`. A locator whose node has
-    // left the document does not answer `null`; it waits out Playwright's own
-    // 30 s and THROWS — so the poll that was meant to notice the gate card
-    // disappearing ended the take at 30 s with a Playwright stack, on the one
-    // outcome it was written to recognise. Measured on the desktop take of
-    // 2026-09-20: the appointment was written, the card was gone, and the
-    // recording was refused anyway.
-    if (!(await jetztSichtbar(page, selector))) return
-    if (Date.now() > ende) {
-      throw new Error(
-        `Still on screen after ${String(fristMs)} ms: ${selector}. The ` +
-          'appointment gate was confirmed but nothing was written — most ' +
-          'likely no calendar is connected on the recording account.',
-      )
-    }
-    await new Promise((fertig) => setTimeout(fertig, 250))
-  }
 }
