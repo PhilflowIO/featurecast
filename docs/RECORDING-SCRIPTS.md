@@ -239,13 +239,28 @@ session path, the areas to hide, the fixed clock, the visibility poller and the
 sign-in step — lives once in [`demo/raven-common.ts`](../demo/raven-common.ts),
 so a selector added to the hide list reaches every recording at once.
 
-| Switch      | Meaning                                                                   |
-| ----------- | ------------------------------------------------------------------------- |
-| `--devices` | comma-separated list of presets and Playwright names. Required.           |
-| `--out`     | root folder; one subfolder per device. Default `artifacts/<script-name>`. |
-| `--upload`  | uploads every finished video and prints the URL.                          |
-| `--encoder` | `x264` (default), `nvenc-h264`, `nvenc-hevc`.                             |
-| `--seed`    | seed for movement and typing delay. Default `1`.                          |
+Two scripts are not product films but instruments:
+[`demo/raven-einstellungen-bewegung.ts`](../demo/raven-einstellungen-bewegung.ts)
+films the arrival on each settings page with the pointer clicking at once, and
+[`demo/raven-einstellungen-bewegung-hover.ts`](../demo/raven-einstellungen-bewegung-hover.ts)
+the same walk with a 600 ms rest on each entry, which is what gives the hover
+prefetch its head start. They share one body (`aufnahme({ hoverMs })`) but stay
+two files, because the output directory is named after the file — a single
+script with a switch would overwrite its own recording.
+
+**A rerun overwrites the last recording.** Without `--out`, every run of a
+script writes to the same `artifacts/<script-name>`, and the recording a new
+one should be compared against is gone. For anything that is compared over
+time — a before and an after — name the run:
+`--out artifacts/<script-name>-<datum>`.
+
+| Switch      | Meaning                                                                                                |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
+| `--devices` | comma-separated list of presets and Playwright names. Required.                                        |
+| `--out`     | root folder; one subfolder per device. Default `artifacts/<script-name>`, overwritten on the next run. |
+| `--upload`  | uploads every finished video and prints the URL.                                                       |
+| `--encoder` | `x264` (default), `nvenc-h264`, `nvenc-hevc`.                                                          |
+| `--seed`    | seed for movement and typing delay. Default `1`.                                                       |
 
 The credentials for `--upload` come exclusively from the environment
 (`.env.example` names the variables). If one is missing, the run aborts
